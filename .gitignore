@@ -1,0 +1,41 @@
+# env / secrets
+.env
+
+# DB / runtime data
+data/json/*
+!data/json/.gitkeep
+data/input/*
+!data/input/.gitkeep
+!data/input/nas/
+!data/input/web/
+data/input/nas/*
+!data/input/nas/.gitkeep
+data/input/web/*
+!data/input/web/.gitkeep
+data/ioc/*
+!data/ioc/.gitkeep
+
+# 手元で読み込んだ生ログ・変換済みJSONダンプ、NAS診断バンドル一式（誤コミット防止）
+/*.json
+System_log-*/
+
+# GeoIP mmdb (ライセンス物なのでコミットしない)
+geoip/*.mmdb
+backend/geoip/*.mmdb
+
+# nginx Basic認証パスワードファイル（作成した場合）
+nginx/.htpasswd
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# node
+node_modules/
+dist/
+
+# editor / os
+.DS_Store
+*.log

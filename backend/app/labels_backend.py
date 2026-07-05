@@ -1,0 +1,23 @@
+"""source_type の日本語表示（frontend/src/labels.ts と対応）。CSV/マッピング出力等で使用。"""
+ST_LABEL: dict[str, str] = {
+    "web_access": "Webアクセス",
+    "web_error": "Webエラー",
+    "google_workspace_audit": "Google Workspace監査",
+    "router": "ルーター",
+    "nas": "NAS",
+    "auth": "認証ログ",
+    "application": "アプリケーション",
+    "system": "システム",
+    "mail": "メール",
+    "windows_event": "Windowsイベント",
+    "linux": "Linux",
+    "security": "セキュリティ",
+    "dns": "DNS",
+    "dhcp": "DHCP",
+    "firewall": "ファイアウォール",
+    "smb": "SMB",
+    "asset": "資産管理",
+    "m365_audit": "Microsoft 365監査",
+    "entra_signin": "Entraサインイン",
+    "unknown": "Unknown",
+}

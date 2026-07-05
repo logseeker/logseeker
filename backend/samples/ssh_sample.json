@@ -1,0 +1,50 @@
+[
+  {
+    "EventReceivedTime": "2026-06-24T10:15:00+09:00",
+    "SourceModuleName": "in_secure",
+    "Hostname": "web01",
+    "SyslogFacility": "AUTHPRIV",
+    "SyslogSeverity": "INFO",
+    "SourceName": "sshd",
+    "Message": "Accepted publickey for alice from 203.0.113.5 port 52344 ssh2"
+  },
+  {
+    "EventReceivedTime": "2026-06-24T10:16:12+09:00",
+    "SourceModuleName": "in_secure",
+    "Hostname": "web01",
+    "SyslogFacility": "AUTHPRIV",
+    "SyslogSeverity": "INFO",
+    "SourceName": "sshd",
+    "Message": "Failed password for invalid user admin from 198.51.100.23 port 40112 ssh2"
+  },
+  {
+    "EventReceivedTime": "2026-06-24T10:16:13+09:00",
+    "Hostname": "web01",
+    "SourceName": "sshd",
+    "Message": "Failed password for invalid user admin from 198.51.100.23 port 40114 ssh2"
+  },
+  {
+    "EventReceivedTime": "2026-06-24T10:16:14+09:00",
+    "Hostname": "web01",
+    "SourceName": "sshd",
+    "Message": "Failed password for root from 198.51.100.23 port 40120 ssh2"
+  },
+  {
+    "EventReceivedTime": "2026-06-24T10:16:20+09:00",
+    "Hostname": "web01",
+    "SourceName": "sshd",
+    "Message": "Invalid user test from 192.0.2.44 port 51002"
+  },
+  {
+    "EventReceivedTime": "2026-06-24T10:18:00+09:00",
+    "Hostname": "db01",
+    "SourceName": "sshd",
+    "Message": "Accepted password for bob from 192.168.10.20 port 60122 ssh2"
+  },
+  {
+    "EventReceivedTime": "2026-06-24T10:20:05+09:00",
+    "Hostname": "web01",
+    "SourceName": "sshd",
+    "Message": "Connection closed by 192.0.2.44 port 50001 [preauth]"
+  }
+]

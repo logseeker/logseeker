@@ -1,0 +1,6 @@
+/* Tabler(@tabler/core) がレイアウト/コンポーネントを提供。ここは微調整のみ。 */
+.navbar-vertical .navbar-brand { font-size: 1.1rem; font-weight: 600; }
+.cursor-pointer { cursor: pointer; }
+/* offcanvas を React 制御で開くため最前面に */
+.offcanvas.show { z-index: 1045; }
+.offcanvas-backdrop.show { z-index: 1040; }

@@ -1,0 +1,2 @@
+# ここに MaxMind GeoLite2-Country.mmdb を置くと国判定が有効になります。
+# 無くても country=null で動作します（後から差し込み可）。
