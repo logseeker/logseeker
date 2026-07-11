@@ -198,9 +198,14 @@ sudo systemctl enable --now logseeker-backend
 sudo systemctl status logseeker-backend
 ```
 
+<details>
+<summary>複数ワーカー構成にする場合の注意（該当者のみ）</summary>
+
 > **スケール時の注意**: 複数ワーカー（gunicorn等）にすると TCP ingestポートのbindが競合します。
 > ワーカーを増やす場合は、TCP受信だけを別systemdサービスに分離してください
 > （`ExecStart=/opt/logseeker/venv/bin/python -c "from app.tcp_ingest import _serve; _serve(516)"`）。
+
+</details>
 
 <details>
 <summary>誤って <code>loghub</code> の名前で作ってしまった場合の削除手順</summary>
