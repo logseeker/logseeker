@@ -9,11 +9,10 @@
 
 | コンポーネント | 推奨 | 状態（2026-06） | メモ |
 |---|---|---|---|
-| **Node.js** | **24 LTS（最新パッチ）** | 24=Active LTS / 22=Maintenance / **20=EOL(2026-04-30)** / 26=Current(非LTS) | 本プロジェクトでは**フロントのビルド時のみ**使用（本番はnginx/LiteSpeedが静的配信＝Node常駐なし）。`npm run dev`(vite dev server)は開発専用、本番公開しない。|
+| **Node.js** | **24 LTS（最新パッチ）** | 24=Active LTS / 22=Maintenance / **20=EOL(2026-04-30)** / 26=Current(非LTS) | 本プロジェクトでは**フロントのビルド時のみ**使用（本番はnginx/Apacheが静的配信＝Node常駐なし）。`npm run dev`(vite dev server)は開発専用、本番公開しない。|
 | **PostgreSQL** | 16.x（最新マイナー） | サポート中（17も可） | 定期 `dnf update` / イメージ再pullでパッチ適用。|
 | **Python** | 3.12.x（最新パッチ） | サポート中 | `python:3.12-slim` は再ビルドで base 更新。|
-| **OpenLiteSpeed** | 最新安定 | — | `dnf update openlitespeed` を定期実行。|
-| **pgAdmin 4** | 最新 | — | venv の `pip install -U pgadmin4`。|
+| **pgAdmin 4**（[INSTALL-pgadmin.md](../INSTALL-pgadmin.md)使用時のみ） | 最新 | — | `dnf update pgadmin4-web` を定期実行。|
 
 > **Node は 22 を使わない（24 LTS にする）**。本リポジトリは Docker を `node:24-bookworm-slim`、VPS手順を `setup_24.x` に更新済み。
 
@@ -28,7 +27,7 @@
 - **HTTP Response Queue Poisoning**（CVE-2026-48931）
 
 **本プロジェクトへの影響度**：これらは Node が HTTP/TLS サーバ・クライアントとして動く前提の脆弱性。
-本番は **nginx/LiteSpeed が前段**で Node は配信に出ない（静的ビルドのみ）ため**実害リスクは低**。
+本番は **nginx/Apache が前段**で Node は配信に出ない（静的ビルドのみ）ため**実害リスクは低**。
 ただし **ビルド環境の Node も 24 の最新パッチに保つ**こと。**`npm run dev`(vite dev server) を本番公開しない**（開発専用、外部公開は静的ビルド経由）。
 
 ---
@@ -69,7 +68,7 @@ npm outdated              # 更新候補
 
 ## 5. OS / systemd ハードニング（ネイティブ構築）
 
-- **公開ポート最小化**：本番公開は nginx/LiteSpeed の 80/443 のみ。backend(8000)・PostgreSQL(5432) は
+- **公開ポート最小化**：本番公開は nginx/Apache の 80/443 のみ。backend(8000)・PostgreSQL(5432) は
   `127.0.0.1` バインドに留め、firewalldでも開放しない（[INSTALL.md](../INSTALL.md) §6参照）。
 - **秘密情報は `.env` / systemd `EnvironmentFile`** で渡し、リポジトリやDocumentRootに置かない。
   `.env` は配布物に含めない（`.gitignore` 済み）。パーミッションも `chmod 600` を推奨。

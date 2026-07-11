@@ -1,15 +1,16 @@
-# INSTALL.md — オンプレ・ネイティブインストール手順（Docker不使用・pgAdminなし）
+# INSTALL-pgadmin.md — オンプレ・ネイティブインストール手順（Docker不使用・pgAdminあり／Apache一本化）
 
-このリポジトリは Docker を同梱していません。PostgreSQL / Python(FastAPI) / Node.js(ビルドのみ) を
-直接インストールし、`systemd` でbackendを常駐、`nginx`（または Caddy）でTLS終端とリバースプロキシを行う構成です。
+[INSTALL.md](INSTALL.md) との違いは1点だけです: リバースプロキシに **nginxではなくApache（httpd）を使います**。
+
+理由は、pgAdmin公式パッケージ（`pgadmin4-web`）がApache（mod_wsgi）を前提にしているためです。
+nginxのままpgAdminを追加すると、nginx（アプリ公開用）とApache（pgAdmin用）という
+2つのWebサーバーを同居させることになり無駄が多いので、pgAdminを使う場合は最初からApache一本化を
+おすすめします。PostgreSQL・backendのセットアップ内容は [INSTALL.md](INSTALL.md) と共通です。
 
 > **対象OS**: RHEL系（AlmaLinux 8/9/10, RHEL, Rocky Linux）を主対象にしています。
 > パッケージ管理は `dnf`、ファイアウォールは `firewalld` を前提にしたコマンド例です。
-> Debian/Ubuntu系の場合は `apt` / `ufw` に読み替えてください（パッケージ名はおおむね同じか近い名前です）。
 >
-> **pgAdmin（DB管理画面）を使いたい場合はこの手順ではなく [INSTALL-pgadmin.md](INSTALL-pgadmin.md) を使ってください。**
-> pgAdminの公式パッケージはApacheを前提にしているため、nginxと二重にWebサーバーを持たないよう
-> pgAdminを使う場合はApache一本化の別手順に分けています。詳細は [INSTALL-pgadmin.md](INSTALL-pgadmin.md) 冒頭を参照。
+> **pgAdminが不要な場合は、より軽量な [INSTALL.md](INSTALL.md)（nginx版）を使ってください。**
 
 ---
 
@@ -20,12 +21,12 @@
 - [2. PostgreSQL のインストールと初期化](#2-postgresql-のインストールと初期化)
 - [3. backend（Python + FastAPI）の venv セットアップ](#3-backendpython--fastapiの-venv-セットアップ)
 - [4. frontend のビルドと静的ファイルの配置](#4-frontend-のビルドと静的ファイルの配置)
-- [5. nginx でのリバースプロキシ設定（443でTLS終端）](#5-nginx-でのリバースプロキシ設定443でtls終端)
-- [6. TCP ingest リスナー用のポート開放（firewalld）](#6-tcp-ingest-リスナー用のポート開放firewalld)
-  - [6.1 複数NIC・プライベートスイッチ環境でeth1のみに絞る場合](#61-複数nicプライベートスイッチ環境でeth1ローカル側のみに絞る場合)
-- [7. `.env` の設定箇所と主要な環境変数](#7-env-の設定箇所と主要な環境変数)
-- [8. 起動順序・動作確認](#8-起動順序動作確認)
-- [9. 補足](#9-補足)
+- [5. Apache でのリバースプロキシ設定（443でTLS終端）](#5-apache-でのリバースプロキシ設定443でtls終端)
+- [6. pgAdmin 4 のインストール](#6-pgadmin-4-のインストール)
+- [7. TCP ingest リスナー用のポート開放（firewalld）](#7-tcp-ingest-リスナー用のポート開放firewalld)
+- [8. `.env` の設定箇所と主要な環境変数](#8-env-の設定箇所と主要な環境変数)
+- [9. 起動順序・動作確認](#9-起動順序動作確認)
+- [10. 補足](#10-補足)
 
 ---
 
@@ -35,12 +36,15 @@
 |---|---|---|
 | PostgreSQL 16 | DB | `127.0.0.1:5432`（外部公開しない） |
 | backend（Python + Uvicorn、systemdサービス） | API・REST ingest・TCP ingest | `127.0.0.1:8000` + TCP `516` |
-| frontend（Node.jsでビルドのみ） | 画面（静的ファイル） | nginxが配信 |
-| nginx（または Caddy） | TLS終端・リバースプロキシ・静的配信 | `80`/`443` |
+| frontend（Node.jsでビルドのみ） | 画面（静的ファイル） | Apacheが配信 |
+| Apache（httpd） | TLS終端・リバースプロキシ・静的配信・pgAdmin(mod_wsgi) | `80`/`443` |
+| pgAdmin 4（Webモード） | DB管理画面 | Apacheの`/pgadmin4`配下（同じ80/443を共用） |
 
 ポート方針:
-- **公開**: 80/443（nginx）。外部の送信元機器から直接ログを送る場合のみ TCP ingestポート（既定516）も公開。
+- **公開**: 80/443（Apache。アプリ本体とpgAdminを同じドメイン・同じTLS証明書で配信）。
+  外部の送信元機器から直接ログを送る場合のみ TCP ingestポート（既定516）も公開。
 - **非公開**: backend(8000)・PostgreSQL(5432) は `127.0.0.1` バインドのみ。firewalldで開放しない。
+- pgAdminを外部（インターネット全体）に公開したくない場合は §6 末尾のアクセス制限も参照。
 
 ---
 
@@ -52,7 +56,8 @@
 | PostgreSQL 16 | DB | PGDG 公式 yum リポジトリ |
 | Python 3.12 | backend 実行 | AlmaLinux AppStream（`python3.12`） |
 | Node.js 24 LTS | frontend ビルド専用（本番は常駐しない） | NodeSource または AppStream |
-| nginx（または Caddy） | リバースプロキシ / TLS終端 / 静的配信 | AppStream または公式リポジトリ |
+| Apache（httpd）+ mod_ssl | リバースプロキシ / TLS終端 / 静的配信 / pgAdmin(mod_wsgi) | AppStream |
+| pgAdmin 4（Webモード） | DB管理画面 | pgAdmin 公式 yum リポジトリ |
 | GeoLite2-Country.mmdb | GeoIP（任意） | MaxMind（手動配置。[docs/geoip.md](docs/geoip.md)） |
 
 ```bash
@@ -80,8 +85,8 @@ sudo dnf -qy module disable postgresql
 # Node.js 24 LTS（ビルド専用途。NodeSource推奨）
 curl -fsSL https://rpm.nodesource.com/setup_24.x | sudo bash -
 
-# nginx
-sudo dnf -y install nginx
+# Apache（httpd）+ TLSモジュール
+sudo dnf -y install httpd mod_ssl
 ```
 
 ---
@@ -112,8 +117,7 @@ host    logseeker    logseeker    192.168.1.0/24     scram-sha-256
 
 LAN内の別ホストから接続を許可する場合は、`postgresql.conf` の `listen_addresses` も
 `listen_addresses = '*'`（または自ホストのLAN側IPを明示）に変更し、firewalldで5432を
-そのLANセグメントに限定して開放する必要があります（例: `sudo firewall-cmd --permanent --zone=internal --add-port=5432/tcp`。
-`--zone`はLAN側インターフェースが所属するゾーンに合わせる）。§0の方針どおり、backendと同一ホストで完結する
+そのLANセグメントに限定して開放する必要があります。§0の方針どおり、backendと同一ホストで完結する
 構成であればこの追加設定は不要です。
 
 変更後: `sudo systemctl restart postgresql-16`
@@ -151,7 +155,7 @@ python3.12 -m venv /opt/logseeker/venv
 
 ```bash
 cp /opt/logseeker/.env.example /opt/logseeker/backend/.env
-# 値を編集（DATABASE_URL・LICENSE_SECRET 等。主要な環境変数は §7 参照）
+# 値を編集（DATABASE_URL・LICENSE_SECRET 等。主要な環境変数は §8 参照）
 ```
 
 ### systemd unit（`/etc/systemd/system/logseeker-backend.service`）
@@ -196,15 +200,15 @@ sudo systemctl status logseeker-backend
 > sudo userdel loghub 2>/dev/null || true
 > sudo rm -rf /opt/loghub
 > sudo rm -rf /var/www/loghub
-> sudo rm -f /etc/nginx/conf.d/loghub.conf   # nginx使用時
+> sudo rm -f /etc/httpd/conf.d/loghub.conf   # Apache使用時
 > ```
 
 ---
 
 ## 4. frontend のビルドと静的ファイルの配置
 
-本番は開発サーバ（`npm run dev`）ではなく、ビルド済み静的ファイルをnginxが配信します。
-nginxが `/api` `/ingest` を中継するので **`VITE_API_BASE` は空**（同一オリジン）でビルドします。
+本番は開発サーバ（`npm run dev`）ではなく、ビルド済み静的ファイルをApacheが配信します。
+Apacheが `/api` `/ingest` を中継するので **`VITE_API_BASE` は空**（同一オリジン）でビルドします。
 
 ```bash
 cd /opt/logseeker/frontend
@@ -213,113 +217,149 @@ VITE_API_BASE="" npm run build      # 生成: /opt/logseeker/frontend/dist
 
 sudo mkdir -p /var/www/logseeker
 sudo cp -r dist/* /var/www/logseeker/
-sudo chown -R nginx:nginx /var/www/logseeker   # SELinux Enforcing環境の権限に合わせる
+sudo chown -R apache:apache /var/www/logseeker   # SELinux Enforcing環境の権限に合わせる
+sudo chcon -R -t httpd_sys_content_t /var/www/logseeker   # SELinuxラベル（restorecon代替）
 ```
 
 コード更新時は `npm run build` をやり直して `/var/www/logseeker` へ再配置してください。
 
 ---
 
-## 5. nginx でのリバースプロキシ設定（443でTLS終端）
+## 5. Apache でのリバースプロキシ設定（443でTLS終端）
 
-`/etc/nginx/conf.d/logseeker.conf`:
+`mod_proxy` / `mod_proxy_http` はhttpdパッケージに標準同梱で、既定で有効になっています
+（`/etc/httpd/conf.modules.d/00-proxy.conf` を参照）。
 
-```nginx
+`/etc/httpd/conf.d/logseeker.conf`:
+
+```apache
 # 80番はHTTPS化前の暫定 or ACME challenge用。TLS設定後は443へリダイレクトに変更する。
-server {
-    listen 80;
-    server_name your-domain.example.com;
+<VirtualHost *:80>
+    ServerName your-domain.example.com
 
-    # Let's Encrypt の HTTP-01 challenge 用（certbot --nginx 使用時は自動追記される）
-    location /.well-known/acme-challenge/ {
-        root /var/www/certbot;
-    }
+    RewriteEngine On
+    RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/
+    RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+</VirtualHost>
 
-    location / {
-        return 301 https://$host$request_uri;
-    }
-}
+<VirtualHost *:443>
+    ServerName your-domain.example.com
 
-server {
-    listen 443 ssl http2;
-    server_name your-domain.example.com;
+    SSLEngine on
+    SSLCertificateFile      /etc/letsencrypt/live/your-domain.example.com/fullchain.pem
+    SSLCertificateKeyFile   /etc/letsencrypt/live/your-domain.example.com/privkey.pem
 
-    ssl_certificate     /etc/letsencrypt/live/your-domain.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/your-domain.example.com/privkey.pem;
+    # /ingest のリクエストサイズ上限（backend側のMAX_INGEST_BYTESと合わせる。既定50MB）
+    LimitRequestBody 52428800
 
-    client_max_body_size 50m;
+    ProxyPreserveHost On
 
     # ingest（機器/連携からの送信）→ backend。認証は INGEST_TOKEN(Bearer) で行う。
-    location /ingest {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 120s;
-    }
+    ProxyPass        /ingest http://127.0.0.1:8000/ingest
+    ProxyPassReverse /ingest http://127.0.0.1:8000/ingest
 
     # API / health → backend 直結
-    location ~ ^/(api|health) {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 120s;
-    }
+    ProxyPass        /api http://127.0.0.1:8000/api
+    ProxyPassReverse /api http://127.0.0.1:8000/api
+    ProxyPass        /health http://127.0.0.1:8000/health
+    ProxyPassReverse /health http://127.0.0.1:8000/health
 
     # それ以外 → フロントエンド静的ビルド（SPA。存在しないパスは index.html にフォールバック）
-    root /var/www/logseeker;
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-}
+    DocumentRoot /var/www/logseeker
+    <Directory /var/www/logseeker>
+        Options -Indexes
+        AllowOverride None
+        Require all granted
+        FallbackResource /index.html
+    </Directory>
+</VirtualHost>
 ```
 
 証明書取得（certbot、AlmaLinux/RHEL系の例）:
 ```bash
-sudo dnf -y install certbot python3-certbot-nginx
-sudo certbot --nginx -d your-domain.example.com
+sudo dnf -y install certbot python3-certbot-apache
+sudo certbot --apache -d your-domain.example.com
 ```
 
 設定確認・反映:
 ```bash
-sudo nginx -t
-sudo systemctl enable --now nginx
-sudo systemctl reload nginx
+sudo apachectl configtest
+sudo systemctl enable --now httpd
+sudo systemctl reload httpd
 ```
 
-### 代替: Caddy を使う場合
-
-Caddy は自動でLet's EncryptのTLS証明書を取得・更新するため、設定がより簡潔です。
-`/etc/caddy/Caddyfile`:
-
-```caddyfile
-your-domain.example.com {
-    handle /ingest* {
-        reverse_proxy 127.0.0.1:8000
-    }
-    handle /api* {
-        reverse_proxy 127.0.0.1:8000
-    }
-    handle /health {
-        reverse_proxy 127.0.0.1:8000
-    }
-    handle {
-        root * /var/www/logseeker
-        try_files {path} /index.html
-        file_server
-    }
-}
-```
-```bash
-sudo systemctl reload caddy
-```
+SELinux（Enforcing前提）: Apacheからbackend(127.0.0.1:8000)へのプロキシ接続を許可する場合、
+`sudo setsebool -P httpd_can_network_connect 1` が必要になることがあります。
 
 ---
 
-## 6. TCP ingest リスナー用のポート開放（firewalld）
+## 6. pgAdmin 4 のインストール
+
+PostgreSQLの中身をブラウザから直接確認するための管理画面です。Apache一本化構成では、公式パッケージが
+Apacheと自動で統合されるため、nginx構成（[INSTALL.md](INSTALL.md)）のような専用ポートやリバースプロキシの
+追加設定は不要です。
+
+```bash
+# pgAdmin公式リポジトリ（リポジトリRPMのファイル名・バージョンは変わることがあるため、
+# 実行前に https://www.pgadmin.org/download/pgadmin-4-rpm/ で最新のURLを確認してください）
+sudo dnf -y install https://ftp.postgresql.org/pub/pgadmin/pgadmin4/yum/pgadmin4-redhat-repo-2-1.noarch.rpm
+
+# Webモード（ブラウザから使う）。mod_wsgi等の依存パッケージも自動で入ります
+sudo dnf -y install pgadmin4-web
+
+# 初期セットアップ（対話式。ログイン用のメールアドレス・パスワードをここで設定する）
+sudo /usr/pgadmin4/bin/setup-web.sh
+
+sudo systemctl restart httpd
+```
+
+`setup-web.sh` は `/etc/httpd/conf.d/pgadmin4.conf` を生成し、`/pgadmin4` というパスで動くように
+Apacheへ組み込みます。§5のVirtualHostが既に稼働していれば、そのまま
+`https://your-domain.example.com/pgadmin4` でアクセスできるようになります
+（もし表示されない場合は `/etc/httpd/conf.d/pgadmin4.conf` の内容を確認し、必要なら§5の
+`<VirtualHost *:443>` ブロック内に `WSGIScriptAlias` 等の記述を移動してください）。
+
+### ログイン方法
+
+pgAdminには関係する認証情報が3種類あるので混同しないよう注意してください。
+
+| 用途 | 値 |
+|---|---|
+| pgAdmin自体へのログイン | 上記`setup-web.sh`で設定した**メールアドレス**とパスワード |
+| Linuxのシステムユーザー | この節では使いません（httpdがサービスとして動くだけ） |
+| PostgreSQLへの接続（pgAdmin画面内で入力） | §2で作成したDBユーザー・パスワード |
+
+1. ブラウザで `https://your-domain.example.com/pgadmin4` を開く。
+2. `setup-web.sh` で設定したメールアドレス・パスワードでログイン。
+3. ログイン後、左メニューの「Servers」を右クリック→「Register」→「Server...」で接続先を登録:
+   - General タブ → Name: 任意の名前（例: `logseeker-db`）
+   - Connection タブ → Host: `127.0.0.1` / Port: `5432` / Username: `logseeker`（§2で作成したユーザー） /
+     Password: §2で設定したパスワード
+
+### アクセス制限（pgAdminを外部に公開したくない場合）
+
+`/pgadmin4` はアプリ本体と同じドメイン・ポートに乗るため、そのままだとインターネット全体から
+ログイン画面が見えてしまいます。外部公開したくない場合は、`<VirtualHost *:443>` の中に
+`/pgadmin4` 専用のアクセス制限を追加してください。
+
+送信元IPを絞る場合の例（`/etc/httpd/conf.d/logseeker.conf` の `<VirtualHost *:443>` 内に追記）:
+```apache
+<Location /pgadmin4>
+    Require ip <自分のグローバルIP>
+</Location>
+```
+
+または、そもそも公開せず必要な時だけSSHポートフォワード
+（`ssh -L 8443:127.0.0.1:443 user@server`）で手元から
+`https://127.0.0.1:8443/pgadmin4`（`Host`ヘッダの検証があるため`curl -k --resolve`等が必要になる場合あり）
+にアクセスする運用がより安全です。
+
+§7.1のようにプライベートスイッチ／LANでbackendを分離している構成であれば、pgAdmin用のVirtualHostを
+別途 `Listen <eth1のIP>:8443` のように分離し、firewalldの`internal`ゾーンにのみ開放する方法もあります。
+
+---
+
+## 7. TCP ingest リスナー用のポート開放（firewalld）
 
 外部の送信元（NXLog等）からTCP NDJSONで直接受信する場合のみ、TCP ingestポート（既定516）を開放します。
 REST `/ingest` のみで運用する場合はこの手順は不要です。
@@ -328,10 +368,10 @@ REST `/ingest` のみで運用する場合はこの手順は不要です。
 > - NXLog等の送信元がこのサーバー**自身（127.0.0.1）からPOSTするだけ**の構成であれば、516は
 >   外部公開する必要が無い。`--add-port=516/tcp` は実行せず、閉じたままにする。
 > - サーバーの外にある送信元（社内NW/他ホストのNXLog等）から直接TCPで送る構成の場合のみ、
->   516を開放し、可能であれば`--add-rich-rule`等で送信元IPを限定する（§6.1も参照）。
+>   516を開放し、可能であれば`--add-rich-rule`等で送信元IPを限定する（§7.1も参照）。
 
 ```bash
-# 公開: 80/443（nginx）。TCP ingestは外部送信元がある場合のみ。
+# 公開: 80/443（Apache）。TCP ingestは外部送信元がある場合のみ。
 sudo firewall-cmd --permanent --add-service=http --add-service=https
 sudo firewall-cmd --permanent --add-port=516/tcp
 sudo firewall-cmd --reload
@@ -342,10 +382,7 @@ sudo firewall-cmd --reload
 送信元IPを限定したい場合は `firewall-cmd --permanent --zone=<zone> --add-rich-rule=...` で絞り込むか、
 リッチルール/ipsetで許可リストを運用してください。
 
-SELinux（Enforcing前提）: nginxからbackend(127.0.0.1:8000)へのプロキシ接続を許可する場合、
-`sudo setsebool -P httpd_can_network_connect 1` が必要になることがあります。
-
-### 6.1 複数NIC・プライベートスイッチ環境でeth1（ローカル側）のみに絞る場合
+### 7.1 複数NIC・プライベートスイッチ環境でeth1（ローカル側）のみに絞る場合
 
 さくらのVPS「スイッチ」など、L2の専用線でサーバー間を直結できるプロバイダの機能を使う場合の手順です
 （例: `eth0`=グローバルIP、`eth1`=スイッチ経由のローカルIP。両ホストがスイッチに接続済みで、
@@ -378,11 +415,6 @@ sudo firewall-cmd --reload
 送信サーバー側は、ログ転送設定（NXLog等）の宛先を**受信サーバーのeth1側IP**（グローバルIPではなく）
 に向けます。スイッチ内は同一L2セグメントなのでゲートウェイ指定は不要です。
 
-```
-# 例: NXLogやsyslog転送設定の宛先
-192.168.100.20:516   # ← 受信サーバーのeth1側IP
-```
-
 注意点:
 - eth1側に**デフォルトゲートウェイを設定しない**でください（両NICにデフォルトルートがあると経路が
   不安定になるため、デフォルトゲートウェイはeth0側だけに残す）。
@@ -391,7 +423,7 @@ sudo firewall-cmd --reload
 
 ---
 
-## 7. `.env` の設定箇所と主要な環境変数
+## 8. `.env` の設定箇所と主要な環境変数
 
 `.env.example` をコピーして `/opt/logseeker/backend/.env` に配置し、値を編集します（§3参照）。
 systemd unitの `EnvironmentFile=` がこのファイルを読み込みます。
@@ -417,14 +449,15 @@ systemd unitの `EnvironmentFile=` がこのファイルを読み込みます。
 
 ---
 
-## 8. 起動順序・動作確認
+## 9. 起動順序・動作確認
 
 ```bash
-sudo systemctl enable --now postgresql-16 logseeker-backend nginx   # (Caddy利用時は nginx の代わりに caddy)
+sudo systemctl enable --now postgresql-16 logseeker-backend httpd
 
 curl -s http://127.0.0.1:8000/health              # backend単体
-curl -s "https://your-domain.example.com/api/dashboard/summary"   # nginx経由でAPI
+curl -s "https://your-domain.example.com/api/dashboard/summary"   # Apache経由でAPI
 # 画面: https://your-domain.example.com/
+# pgAdmin: https://your-domain.example.com/pgadmin4
 ```
 
 取り込みの確認（REST / TCP）:
@@ -446,14 +479,13 @@ printf '%s\n' '{"source":"web01","source_type":"web_access","vhost":"example.com
 
 ---
 
-## 9. 補足
+## 10. 補足
 
 - **入力は JSON のみ**（REST `/ingest` ＋ TCP NDJSON）。送信側（NXLog等）がJSON化して送る前提。画面からのファイルアップロードは無し。
 - 運用更新: コード更新 → backendは `pip install -r requirements.txt` 後 `sudo systemctl restart logseeker-backend`、
   frontendは `npm run build` し直して `/var/www/logseeker` に再配置。
-- バックアップ対象: PostgreSQL（`pg_dump`）、`JSON_STORE_DIR` 配下、`.env`、nginx/Caddy設定。
+- バックアップ対象: PostgreSQL（`pg_dump`）、`JSON_STORE_DIR` 配下、`.env`、Apache設定（`/etc/httpd/conf.d/`）。
+  pgAdminの設定（登録済みサーバー一覧等）は既定で `/var/lib/pgadmin` 配下。
 - 公開前に必ず [docs/security.md](docs/security.md) のチェックリストを確認してください
-  （認証必須化・`INGEST_TOKEN`・`LICENSE_SECRET`変更・ポート閉塞・TLS等）。
-- **pgAdmin（DB管理画面）が必要になった場合**、この手順のnginxはそのままに追加する方法は用意していません
-  （nginxとpgAdmin付属のApacheが二重稼働するため）。[INSTALL-pgadmin.md](INSTALL-pgadmin.md) の
-  Apache一本化手順に切り替えてください（PostgreSQL/backendのセットアップ内容は共通です）。
+  （認証必須化・`INGEST_TOKEN`・`LICENSE_SECRET`変更・ポート閉塞・TLS等）。pgAdminも管理画面なので、
+  §6の「アクセス制限」を必ず設定してください。
