@@ -93,8 +93,10 @@ SQL
 > **本番では強力なパスワードに変更すること**。上記の `'logseeker'` はユーザー名と同じ弱いサンプル値。
 > 例: `openssl rand -base64 24` で生成した値に置き換え、後述の `.env` の `DATABASE_URL` にも同じ値を反映する。
 
-`/var/lib/pgsql/16/data/pg_hba.conf` でローカル接続を許可（password/scram）。例:
+`/var/lib/pgsql/16/data/pg_hba.conf` でローカル接続を許可（password/scram）。各列の意味（1列目の
+`host`は接続方式を表す固定キーワード。書き換えるのは2列目=データベース名・3列目=ユーザー名）:
 ```
+# host    <データベース名>    <ユーザー名>    <許可するアドレス/CIDR>    <認証方式>
 host    logseeker    logseeker    127.0.0.1/32       scram-sha-256
 # 任意: backendを別ホスト（同一LAN内）で動かす場合のみ追加。CIDRは自環境のLANセグメントに置き換える
 host    logseeker    logseeker    192.168.1.0/24     scram-sha-256

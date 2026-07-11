@@ -83,8 +83,10 @@ GRANT ALL PRIVILEGES ON DATABASE logseeker TO logseeker;
 SQL
 ```
 
-`/var/lib/pgsql/16/data/pg_hba.conf` にローカル接続の許可を追加（例）:
+`/var/lib/pgsql/16/data/pg_hba.conf` にローカル接続の許可を追加（例）。各列の意味（1列目の`host`は
+接続方式を表す固定キーワード。書き換えるのは2列目=データベース名・3列目=ユーザー名）:
 ```
+# host    <データベース名>    <ユーザー名>    <許可するアドレス/CIDR>    <認証方式>
 host    logseeker    logseeker    127.0.0.1/32       scram-sha-256
 # 任意: backendを別ホスト（同一LAN内）で動かす場合のみ追加。CIDRは自環境のLANセグメントに置き換える
 host    logseeker    logseeker    192.168.1.0/24     scram-sha-256
