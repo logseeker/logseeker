@@ -620,22 +620,17 @@ def save_silence_settings(body: SilenceSettings, db: Session = Depends(get_db), 
 
 @router.get("/license")
 def get_license(db: Session = Depends(get_db)):
-    from .license import (CATEGORY_TIER, CONNECTOR_TYPES, TIERS, current_license, days_left,
-                          is_allowed, retention_days)
+    """Tier一覧・カテゴリ別可否は撤廃済み（全ログ種別・APIオプションは常に利用可）。
+    データ保持期間の情報のみ返す。"""
+    from .license import current_license, days_left, retention_days
     lic = current_license(db, force=True)
-    cats = list(CATEGORY_TIER.keys()) + sorted(CONNECTOR_TYPES)
     ret = retention_days(lic)
     return {
-        "licensee": lic.licensee, "tier": lic.tier, "api_enabled": lic.api_enabled,
+        "licensee": lic.licensee,
         "source": lic.source,  # applied / default
         "expires_at": (datetime.fromtimestamp(lic.expires_at).isoformat() if lic.expires_at else None),
         "days_left": days_left(lic),
         "retention_days": ret, "retention_unlimited": ret < 0,
-        "tiers": [{"tier": k, "name": v["name"], "desc": v["desc"]} for k, v in TIERS.items()],
-        "categories": [
-            {"source_type": c, "tier": CATEGORY_TIER.get(c), "connector": c in CONNECTOR_TYPES,
-             "allowed": is_allowed(c, lic)} for c in cats
-        ],
     }
 
 
@@ -865,7 +860,7 @@ def admin_overview(db: Session = Depends(get_db)):
         "by_channel": [{"channel": ch, "count": c, "last_received": lr.isoformat() if lr else None}
                        for ch, c, lr in by_channel],
         "license": {
-            "licensee": lic.licensee, "tier": lic.tier, "api_enabled": lic.api_enabled,
+            "licensee": lic.licensee,
             "source": lic.source, "days_left": days_left(lic),
         },
         "ingest": {"tcp_port": settings.TCP_INGEST_PORT, "auth_enabled": settings.auth_enabled},

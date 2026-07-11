@@ -8,28 +8,28 @@
 > 他のシステムに保存されたログには一切触れません（セルフホスト前提・自己完結）。
 
 ## 既定値
-- **全ライセンス共通で 90日**（Tierに関係なく同じ）。
+- **既定は 90日**（ログ種別・APIオプションに関係なく共通）。
 - 90日を過ぎた受信データは自動的にDBから削除されます。
 
 ## 延長する場合（拡張ライセンス）
-Tier（機能の解放範囲）とは**独立**した「保持期間の上書き」を、ライセンスキーに含めて発行できます。
+「保持期間の上書き」を、ライセンスキーに含めて発行できます（ログ種別・APIオプションは無償で全開放済みのため、
+保持期間の延長がライセンスキーの唯一の用途です）。
 
 ```sh
 # backendのvenvを有効化した状態、または venv/bin/python で直接実行
 # 1年保持
 ../venv/bin/python -m app.tools.issue_license \
-  --tier 4 --api --name "顧客名" --days 365 --retention-days 365
+  --name "顧客名" --days 365 --retention-days 365
 
 # 3年保持
 ../venv/bin/python -m app.tools.issue_license \
-  --tier 4 --api --name "顧客名" --days 365 --retention-days 1095
+  --name "顧客名" --days 365 --retention-days 1095
 
 # 無制限（自動削除しない）
 ../venv/bin/python -m app.tools.issue_license \
-  --tier 4 --api --name "顧客名" --days 365 --retention-days -1
+  --name "顧客名" --days 365 --retention-days -1
 ```
 
-- 拡張ライセンスも `--tier` `--api` を必ず指定する（キーは「今の状態をまるごと再発行」する仕組みのため）。
 - 発行したキーは「ライセンス」画面から適用（DBが正）。
 - 現在の設定は「ライセンス」画面・「システム状態」画面で確認できます。
 

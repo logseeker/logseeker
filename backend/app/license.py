@@ -1,5 +1,8 @@
-"""ライセンス制御。tier(1-4)＋APIオプションで「取り込める/使えるログ種別＝機能」を制御。
-ライセンスキーは HMAC 署名付き（オフライン検証可）。発行は tools/issue_license。"""
+"""ライセンス制御。Tier/APIオプションによるログ種別の機能制限は撤廃済み
+（is_allowed/blocked_source_types は常に無制限を返す）。tier/api_enabled のフィールド・
+DBカラムは将来の有償Tier復活に備えて残しており、実際の判定には使わない。現在の実質的な
+制御対象はデータ保持期間のみ。ライセンスキーは HMAC 署名付き（オフライン検証可）。
+発行は tools/issue_license。"""
 import base64
 import hashlib
 import hmac
@@ -71,18 +74,15 @@ def is_connector(source_type: str | None) -> bool:
 
 
 def is_allowed(source_type: str | None, lic: Lic) -> bool:
-    if is_connector(source_type):
-        return lic.api_enabled
-    return required_tier(source_type) <= lic.tier
+    """Tier/APIオプションによる機能制限は撤廃済み。常に許可する
+    （骨格は将来の有償Tier復活に備えて残す）。"""
+    return True
 
 
 def blocked_source_types(lic: Lic) -> set[str]:
-    """このライセンスで『使えない』source_type 集合（画面/検索から除外する）。
-    受信は拒否しない（送られたものは保存する）。表示・選択のみ制限。"""
-    blocked = {st for st, t in CATEGORY_TIER.items() if t > lic.tier}
-    if not lic.api_enabled:
-        blocked |= CONNECTOR_TYPES
-    return blocked
+    """Tier/APIオプションによる機能制限は撤廃済み。常に空集合（何もブロックしない）を返す
+    （骨格は将来の有償Tier復活に備えて残す）。"""
+    return set()
 
 
 # ---- 署名キー（base64(json).hexsig）----

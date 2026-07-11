@@ -74,10 +74,6 @@ export function Admin({ onNav, auth, onAuthChanged }: {
                     {ov.license.source === "applied" ? "適用済み" : "既定（未適用）"}
                   </span> {ov.license.licensee}
                 </div></div>
-              <div className="datagrid-item"><div className="datagrid-title">ティア</div>
-                <div className="datagrid-content">Tier {ov.license.tier}</div></div>
-              <div className="datagrid-item"><div className="datagrid-title">APIオプション</div>
-                <div className="datagrid-content">{ov.license.api_enabled ? "有効" : "無効"}</div></div>
               <div className="datagrid-item"><div className="datagrid-title">残り日数</div>
                 <div className="datagrid-content">{ov.license.days_left != null ? `${ov.license.days_left}日` : "無期限"}</div></div>
             </div>

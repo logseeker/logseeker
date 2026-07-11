@@ -17,8 +17,14 @@ from .models import SourceTypeDetector
 DEFAULT_DETECTORS: list[dict] = [
     {
         "source_type": "web_access",
-        "required_keys": ["vhost", "client", "request", "status"],
-        "optional_keys": ["time", "size", "referer", "user_agent", "raw"],
+        # vhost はマルチバーチャルホスト環境（LiteSpeed/Apache等の複数サイト集約プロキシ経由）でのみ
+        # 付与されるキーで、NAS内蔵Webサーバのような単一サイト構成のアクセスログには存在しない。
+        # required に含めると vhost 無しの web_access ログが required_keys 不成立で候補から外れ、
+        # user+raw だけの緩い auth ルールに誤って吸われてしまう（実データで確認済み）。
+        # そのため vhost は optional（あれば加点）に格下げし、client/request/status の3つだけを
+        # required とする。
+        "required_keys": ["client", "request", "status"],
+        "optional_keys": ["vhost", "time", "size", "referer", "user_agent", "raw"],
         "key_value_hints": {},
         "priority": 100,
         "weight": 1.0,

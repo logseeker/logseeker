@@ -118,15 +118,11 @@ export interface CustomRulesResponse {
 
 export interface LicenseInfo {
   licensee: string | null;
-  tier: number;
-  api_enabled: boolean;
   source: string; // applied / default
   expires_at: string | null;
   days_left: number | null;
   retention_days: number;
   retention_unlimited: boolean;
-  tiers: { tier: number; name: string; desc: string }[];
-  categories: { source_type: string; tier: number | null; connector: boolean; allowed: boolean }[];
 }
 
 export interface IocFeed {
@@ -193,7 +189,7 @@ export interface AdminOverview {
   parse_status: Record<string, number>;
   by_source_type: { source_type: string | null; count: number }[];
   by_channel: { channel: string | null; count: number; last_received: string | null }[];
-  license: { licensee: string | null; tier: number; api_enabled: boolean; source: string; days_left: number | null };
+  license: { licensee: string | null; source: string; days_left: number | null };
   ingest: { tcp_port: number | null; auth_enabled: boolean };
   ioc_sync_hours: number;
   retention: { days: number; unlimited: boolean; oldest_event_at: string | null };

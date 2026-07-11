@@ -32,7 +32,7 @@ sudo nginx -t && sudo systemctl reload nginx
 ## 5. 秘密情報の扱い
 - `LICENSE_SECRET` は**必ず**長いランダム値へ変更（既定値のままだと誰でもライセンスキーを偽造可能）。
   生成手順は [docs/deploy-vps-almalinux-lsws.md](deploy-vps-almalinux-lsws.md) §4 参照。
-- PostgreSQL の DB パスワード（既定値 `loghub`）も秘密情報として扱い、本番では強力な値に変更する。
+- PostgreSQL の DB パスワード（既定値 `logseeker`）も秘密情報として扱い、本番では強力な値に変更する。
   詳細は [docs/deploy-vps-almalinux-lsws.md](deploy-vps-almalinux-lsws.md) §3 参照。
 - SMTP パスワード / IOC APIキー は DB に平文保存される（送信・同期に必要なため）。
   - API 応答では SMTP パスワードは `***` でマスク、IOC キーは返さない（有無のみ）。
@@ -46,6 +46,5 @@ sudo nginx -t && sudo systemctl reload nginx
 - CORS は既定 `*`（Viteプロキシで同一オリジンのため実質不要）。公開時は `CORS_ORIGINS` を自分のオリジンに絞る。
 
 ## 7. ライセンス既定
-- コード既定は **tier1（WEBサーバーのみ）/APIオプション無効**（配布時の安全側。[LICENSE](../LICENSE) 第5条）。
-- `.env` で `LICENSE_DEFAULT_TIER` / `LICENSE_DEFAULT_API` を上げれば動作確認用に一時的に全機能表示もできるが、
-  本番配布時は既定（1/false）のままにし、上位機能はライセンスキー適用(DB) か `LICENSE_KEY`(env) で解放すること。
+- Tierによるログ種別の制限、及びAPIオプションの制限は撤廃済み（[LICENSE](../LICENSE) 第5条）。全ログ種別・APIオプションは既定で無償利用可能。
+- ライセンスキーが制御するのは**データ保持期間の延長**（既定90日）のみ。詳細は [docs/licensing.md](licensing.md) / [docs/retention.md](retention.md) 参照。
