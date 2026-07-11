@@ -430,3 +430,85 @@ printf '%s\n' '{"source":"web01","source_type":"web_access","vhost":"example.com
 - バックアップ対象: PostgreSQL（`pg_dump`）、`JSON_STORE_DIR` 配下、`.env`、nginx/Caddy設定。
 - 公開前に必ず [docs/security.md](docs/security.md) のチェックリストを確認してください
   （認証必須化・`INGEST_TOKEN`・`LICENSE_SECRET`変更・ポート閉塞・TLS等）。
+
+---
+
+## 10. pgAdmin 4 のインストール（任意・DB管理UI）
+
+PostgreSQLの中身をブラウザから直接確認したい場合のための管理画面です。無くてもLogSeeker自体の動作には
+影響しません。ここでは公式RPMリポジトリを使う最もシンプルな方法（Webモード）を説明します。
+
+### 10.1 公式リポジトリの追加とインストール
+
+```bash
+# pgAdmin公式リポジトリ（リポジトリRPMのファイル名・バージョンは変わることがあるため、
+# 実行前に https://www.pgadmin.org/download/pgadmin-4-rpm/ で最新のURLを確認してください）
+sudo dnf -y install https://ftp.postgresql.org/pub/pgadmin/pgadmin4/yum/pgadmin4-redhat-repo-2-1.noarch.rpm
+
+# Webモード（ブラウザから使う）。httpd・mod_wsgi等の依存パッケージも自動で入ります
+sudo dnf -y install pgadmin4-web
+
+# 初期セットアップ（対話式。ログイン用のメールアドレス・パスワードをここで設定する）
+sudo /usr/pgadmin4/bin/setup-web.sh
+```
+
+`setup-web.sh` はhttpdを自動設定し、パス `/pgadmin4` で動くようにします。
+
+### 10.2 ログイン方法
+
+pgAdminには関係する認証情報が3種類あるので混同しないよう注意してください。
+
+| 用途 | 値 |
+|---|---|
+| pgAdmin自体へのログイン | §10.1の`setup-web.sh`で設定した**メールアドレス**とパスワード |
+| Linuxのシステムユーザー | この節では使いません（httpdがサービスとして動くだけ） |
+| PostgreSQLへの接続（pgAdmin画面内で入力） | §2で作成したDBユーザー・パスワード |
+
+1. ブラウザで `http://<サーバーのIPアドレス>/pgadmin4`（ポートを変えた場合は`:8081`等を付与。§10.3参照）を開く。
+2. `setup-web.sh` で設定したメールアドレス・パスワードでログイン。
+3. ログイン後、左メニューの「Servers」を右クリック→「Register」→「Server...」で接続先を登録:
+   - General タブ → Name: 任意の名前（例: `logseeker-db`）
+   - Connection タブ → Host: `127.0.0.1` / Port: `5432` / Username: `logseeker`（§2で作成したユーザー） /
+     Password: §2で設定したパスワード
+
+### 10.3 ネットワーク設定（nginxとのポート競合回避・アクセス制限）
+
+`setup-web.sh` はhttpdを既定で80番で待ち受けるよう設定しますが、この構成では既にnginxが80/443を
+使っているため競合します。httpdのリッスンポートを別ポート（例: 8081）に変更してください。
+
+`/etc/httpd/conf/httpd.conf` の `Listen 80` を次のように変更:
+```
+Listen 8081
+```
+
+```bash
+# SELinux Enforcing環境: 8081をhttpd用ポートとして許可（未登録だと起動時にAVC拒否される）
+sudo semanage port -a -t http_port_t -p tcp 8081 2>/dev/null || sudo semanage port -m -t http_port_t -p tcp 8081
+
+sudo systemctl restart httpd
+```
+
+以降は `http://<サーバーのIPアドレス>:8081/pgadmin4` でアクセスします。
+
+**外部（インターネット全体）に公開しない**ことを強く推奨します。firewalldで開放する際に送信元を絞るか、
+そもそも公開せず必要な時だけSSHポートフォワード（`ssh -L 8081:127.0.0.1:8081 user@server`）で
+手元から `http://127.0.0.1:8081/pgadmin4` にアクセスする運用が最も安全です。
+
+送信元IPを絞って開放する場合の例:
+```bash
+sudo firewall-cmd --permanent --zone=public --add-rich-rule='rule family="ipv4" source address="<自分のIP>/32" port protocol="tcp" port="8081" accept'
+sudo firewall-cmd --reload
+```
+
+§6.1のようにプライベートスイッチ／LANでbackendを分離している構成であれば、httpdのListenを
+eth1側のIPに絞り（`Listen <eth1のIP>:8081`）、firewalldの`internal`ゾーンにのみ8081を開放してください。
+
+nginx経由で1つのドメイン・TLS証明書にまとめたい場合は、httpdを直接公開せず、nginxから
+`/pgadmin4` へリバースプロキシする方法もあります（この場合8081のfirewalld開放は不要、`127.0.0.1`のみで待受）:
+```nginx
+location /pgadmin4 {
+    proxy_pass http://127.0.0.1:8081;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+}
+```
