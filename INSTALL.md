@@ -297,6 +297,50 @@ sudo firewall-cmd --reload
 SELinux（Enforcing前提）: nginxからbackend(127.0.0.1:8000)へのプロキシ接続を許可する場合、
 `sudo setsebool -P httpd_can_network_connect 1` が必要になることがあります。
 
+### 6.1 複数NIC・プライベートスイッチ環境でeth1（ローカル側）のみに絞る場合
+
+さくらのVPS「スイッチ」など、L2の専用線でサーバー間を直結できるプロバイダの機能を使う場合の手順です
+（例: `eth0`=グローバルIP、`eth1`=スイッチ経由のローカルIP。両ホストがスイッチに接続済みで、
+ping疎通は既に取れている前提）。
+
+TCP ingestやbackendのAPIはアプリ側で `0.0.0.0` にbindされていて構いません。制御はfirewalldで
+**eth0とeth1を別ゾーンに分け、開放するポートをeth1側のゾーンにしか追加しない**ことで行います。
+これによりeth0（インターネット側）からは到達不能、eth1（スイッチ経由）からのみ到達可能になります。
+
+受信サーバー側:
+```bash
+# 現在のインターフェース→ゾーン割り当てを確認
+sudo firewall-cmd --get-active-zones
+nmcli con show
+
+# eth1を専用ゾーン（例: internal）に割り当てる（eth0はpublicのまま変更しない）
+sudo firewall-cmd --permanent --zone=internal --change-interface=eth1
+
+# TCP ingestポート(516)は internal ゾーンにのみ開放する（publicゾーンには追加しない）
+sudo firewall-cmd --permanent --zone=internal --add-port=516/tcp
+
+# さらに厳格にする場合、送信元をスイッチのCIDRに絞る
+sudo firewall-cmd --permanent --zone=internal --add-source=<スイッチのローカルCIDR>/24
+
+sudo firewall-cmd --reload
+```
+
+`<スイッチのローカルCIDR>` は `ip -4 addr show eth1` で確認できる、スイッチ作成時に自分で決めたセグメントです。
+
+送信サーバー側は、ログ転送設定（NXLog等）の宛先を**受信サーバーのeth1側IP**（グローバルIPではなく）
+に向けます。スイッチ内は同一L2セグメントなのでゲートウェイ指定は不要です。
+
+```
+# 例: NXLogやsyslog転送設定の宛先
+192.168.100.20:516   # ← 受信サーバーのeth1側IP
+```
+
+注意点:
+- eth1側に**デフォルトゲートウェイを設定しない**でください（両NICにデフォルトルートがあると経路が
+  不安定になるため、デフォルトゲートウェイはeth0側だけに残す）。
+- §2で作成した `pg_hba.conf` のLAN向けCIDR例（`192.168.1.0/24`）を使う場合は、実際のスイッチCIDRに
+  置き換えてください。backendとPostgreSQLを同一サーバーに置く構成（本書の既定）ならこの設定自体不要です。
+
 ---
 
 ## 7. `.env` の設定箇所と主要な環境変数
