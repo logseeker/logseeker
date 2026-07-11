@@ -48,12 +48,10 @@ sudo dnf -y install epel-release dnf-plugins-core git curl tar
 
 # PostgreSQL 公式リポジトリ（PGDG）。$releasever は 8/9/10 に解決される
 sudo dnf -y install https://download.postgresql.org/pub/repos/yum/reporpms/EL-$(rpm -E %rhel)-x86_64/pgdg-redhat-repo-latest.noarch.rpm
-# AppStream の古い postgresql モジュールを無効化（PGDG を使うため）。
-# AlmaLinux/Rocky 10 はモジュール機構自体が廃止済みで postgresql モジュールが存在しないため、
-# 8/9のみ実行する（10で実行すると「引数 postgresql を解決できません」と失敗するが無視してよい）。
-if [ "$(rpm -E %rhel)" -lt 10 ]; then
-  sudo dnf -qy module disable postgresql
-fi
+# AppStream の古い postgresql モジュールを無効化（PGDG を使うため。8・9で必要）。
+# AlmaLinux/Rocky 10 はモジュール機構自体が廃止済みで対象が無いため「引数 postgresql を解決できません」
+# と失敗するが、`|| true` で無視してそのまま次に進めばよい（コピペのままでOK）。
+sudo dnf -qy module disable postgresql || true
 
 # OpenLiteSpeed 公式リポジトリ
 sudo bash -c 'curl -s https://repo.litespeed.sh | bash'

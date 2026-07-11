@@ -43,12 +43,10 @@ sudo dnf -y install epel-release dnf-plugins-core git curl tar
 
 # PostgreSQL 公式リポジトリ（PGDG）
 sudo dnf -y install https://download.postgresql.org/pub/repos/yum/reporpms/EL-$(rpm -E %rhel)-x86_64/pgdg-redhat-repo-latest.noarch.rpm
-# RHEL/Rocky 8・9はAppStream同梱のpostgresqlモジュールとPGDGパッケージが衝突するため無効化が必要。
-# RHEL/Rocky 10はモジュール機構(modularity)自体が廃止されており postgresql モジュールが存在しないため、
-# このコマンドは「引数 postgresql を解決できません」で失敗する（想定内・無視してよい）。
-if [ "$(rpm -E %rhel)" -lt 10 ]; then
-  sudo dnf -qy module disable postgresql
-fi
+# AppStream同梱のpostgresqlモジュールを無効化（PGDGパッケージと衝突するのを防ぐ。RHEL/Rocky 8・9で必要）。
+# RHEL/Rocky 10はモジュール機構(modularity)自体が廃止済みで対象が無いため「引数 postgresql を解決できません」
+# と表示されて失敗するが、10では不要な手順なので `|| true` で無視してそのまま次に進めばよい（コピペのままでOK）。
+sudo dnf -qy module disable postgresql || true
 
 # Node.js 24 LTS（ビルド専用途。NodeSource推奨）
 curl -fsSL https://rpm.nodesource.com/setup_24.x | sudo bash -
