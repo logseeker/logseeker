@@ -43,7 +43,12 @@ sudo dnf -y install epel-release dnf-plugins-core git curl tar
 
 # PostgreSQL 公式リポジトリ（PGDG）
 sudo dnf -y install https://download.postgresql.org/pub/repos/yum/reporpms/EL-$(rpm -E %rhel)-x86_64/pgdg-redhat-repo-latest.noarch.rpm
-sudo dnf -qy module disable postgresql
+# RHEL/Rocky 8・9はAppStream同梱のpostgresqlモジュールとPGDGパッケージが衝突するため無効化が必要。
+# RHEL/Rocky 10はモジュール機構(modularity)自体が廃止されており postgresql モジュールが存在しないため、
+# このコマンドは「引数 postgresql を解決できません」で失敗する（想定内・無視してよい）。
+if [ "$(rpm -E %rhel)" -lt 10 ]; then
+  sudo dnf -qy module disable postgresql
+fi
 
 # Node.js 24 LTS（ビルド専用途。NodeSource推奨）
 curl -fsSL https://rpm.nodesource.com/setup_24.x | sudo bash -
@@ -291,16 +296,14 @@ systemd unitの `EnvironmentFile=` がこのファイルを読み込みます。
 | `GEOIP_DB_PATH` | GeoLite2-Country.mmdb のパス（任意。[docs/geoip.md](docs/geoip.md)） | `backend/geoip/GeoLite2-Country.mmdb` |
 | `JSON_STORE_DIR` | 取り込みJSON等の保存先の親ディレクトリ | `backend/data/json` |
 | `CORS_ORIGINS` | CORS許可オリジン（カンマ区切り、`*`で全許可）。本番はフロントのオリジンに絞る | `*` |
-| `LICENSE_SECRET` | ライセンスキーのHMAC署名鍵。**本番は必ず長いランダム文字列に変更**（既定値のままだと誰でもキーを偽造できる） | 開発用の弱い既定値 |
-| `LICENSE_KEY` | 初回デプロイ時に種まきするライセンスキー（任意。空ならWeb UIの「ライセンス」画面から適用） | 空 |
-| `LICENSE_DEFAULT_TIER` | 正規ライセンスキー未適用時の既定ティア。**方針上は`1`のまま**（Webアクセス/エラーログのみ。[LICENSE](LICENSE)第5条） | `1` |
-| `LICENSE_DEFAULT_API` | 未適用時のAPIオプション既定（M365/Google Workspace等コネクタ） | `false` |
+| `LICENSE_SECRET` | ライセンスキー（データ保持期間の延長用）のHMAC署名鍵。**本番は必ず長いランダム文字列に変更**（既定値のままだと誰でもキーを偽造できる） | 開発用の弱い既定値 |
+| `LICENSE_KEY` | 初回デプロイ時に種まきする保持期間延長キー（任意。空ならWeb UIの「ライセンス」画面から適用） | 空 |
 | `AUTH_REQUIRED` | ログイン必須化。外部公開するなら `true` 推奨（[docs/auth.md](docs/auth.md)） | `false` |
 | `ROOT_USERNAME` / `ROOT_PASSWORD` | 初回起動時にのみ作成される管理者アカウント。**公開前に変更すること** | `logseeker` / `logseeker` |
 | `SESSION_HOURS` | ログインセッションの有効時間 | `12` |
 
-ライセンスキーの発行方法・ティア詳細は [docs/licensing.md](docs/licensing.md)、
-データ保持期間の延長は [docs/retention.md](docs/retention.md) を参照してください。
+> ログ種別による機能制限、及びAPIオプションの制限は撤廃済み。すべて既定で無償利用可能（[docs/licensing.md](docs/licensing.md)）。
+> ライセンスキーが制御するのはデータ保持期間の延長のみ（[docs/retention.md](docs/retention.md)）。
 
 ---
 
