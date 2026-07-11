@@ -85,8 +85,17 @@ SQL
 
 `/var/lib/pgsql/16/data/pg_hba.conf` にローカル接続の許可を追加（例）:
 ```
-host    loghub    loghub    127.0.0.1/32    scram-sha-256
+host    loghub    loghub    127.0.0.1/32       scram-sha-256
+# 任意: backendを別ホスト（同一LAN内）で動かす場合のみ追加。CIDRは自環境のLANセグメントに置き換える
+host    loghub    loghub    192.168.1.0/24     scram-sha-256
 ```
+
+LAN内の別ホストから接続を許可する場合は、`postgresql.conf` の `listen_addresses` も
+`listen_addresses = '*'`（または自ホストのLAN側IPを明示）に変更し、firewalldで5432を
+そのLANセグメントに限定して開放する必要があります（例: `sudo firewall-cmd --permanent --zone=internal --add-port=5432/tcp`。
+`--zone`はLAN側インターフェースが所属するゾーンに合わせる）。§0の方針どおり、backendと同一ホストで完結する
+構成であればこの追加設定は不要です。
+
 変更後: `sudo systemctl restart postgresql-16`
 
 テーブルはbackend初回起動時に自動作成されます（マイグレーション不要、`Base.metadata.create_all`）。
