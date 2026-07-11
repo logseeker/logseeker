@@ -69,11 +69,23 @@ def _handle(conn: socket.socket, addr) -> None:
         log.warning("tcp connection error from %s: %s", ip, e)
 
 
-def _serve(port: int) -> None:
+def _serve(port: int, ready: threading.Event | None = None, ok: threading.Event | None = None) -> None:
+    """bind()はこの別スレッド内で行われるため、失敗してもmain.py起動時のtry/exceptには
+    伝播しない。ここで明示的に捕捉してログを出し、ready/okで呼び出し元に結果を伝える。"""
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind(("0.0.0.0", port))
-    srv.listen(16)
+    try:
+        srv.bind(("0.0.0.0", port))
+        srv.listen(16)
+    except OSError as e:
+        log.error("TCP ingest failed to start on port %d: %s", port, e)
+        srv.close()
+        return
+    finally:
+        if ready is not None:
+            ready.set()
+    if ok is not None:
+        ok.set()
     log.info("TCP NDJSON listener on :%d", port)
     while True:
         try:
@@ -87,4 +99,12 @@ def start() -> None:
     port = settings.TCP_INGEST_PORT
     if not port:
         return
-    threading.Thread(target=_serve, args=(port,), daemon=True).start()
+    ready = threading.Event()
+    ok = threading.Event()
+    threading.Thread(target=_serve, args=(port, ready, ok), daemon=True).start()
+    # bind()はスレッド内で起きるため、ここで少し待って起動可否を呼び出し元のログにも残す
+    # （main.pyの起動try/exceptだけに頼るとサイレント障害になるため）。
+    if not ready.wait(timeout=3):
+        log.warning("TCP ingest listener on port %d did not confirm startup within 3s", port)
+    elif not ok.is_set():
+        log.warning("TCP ingest listener on port %d is not running; TCP ingest is unavailable (see error above)", port)

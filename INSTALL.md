@@ -97,7 +97,6 @@ sudo systemctl enable --now postgresql-16
 sudo -u postgres psql <<'SQL'
 CREATE USER logseeker WITH PASSWORD 'ここを強いパスワードに変更';
 CREATE DATABASE logseeker OWNER logseeker;
-GRANT ALL PRIVILEGES ON DATABASE logseeker TO logseeker;
 SQL
 ```
 
@@ -170,10 +169,17 @@ ExecStart=/opt/logseeker/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8
 Restart=always
 User=logseeker
 Group=logseeker
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+> `TCP_INGEST_PORT`の既定値516は1024未満の特権ポートのため、`User=logseeker`（非root）のままでは
+> 本来bindできません。`AmbientCapabilities=CAP_NET_BIND_SERVICE`により、rootに昇格せずこの
+> プロセスにだけ「1024未満のポートにbindする」権限を個別に付与しています（`CapabilityBoundingSet`
+> で保持できる権限をこの1つだけに絞り込み、他の特権は一切持てないようにしています）。
 
 ```bash
 sudo useradd -r -s /sbin/nologin logseeker 2>/dev/null || true
@@ -208,7 +214,7 @@ nginxが `/api` `/ingest` を中継するので **`VITE_API_BASE` は空**（同
 
 ```bash
 cd /opt/logseeker/frontend
-npm install
+npm ci      # package-lock.json通りに再現性のあるインストール（package.jsonとの不整合は即エラーになる）
 VITE_API_BASE="" npm run build      # 生成: /opt/logseeker/frontend/dist
 
 sudo mkdir -p /var/www/logseeker
@@ -241,13 +247,16 @@ server {
 }
 
 server {
+    # nginx 1.25.1以降は「listen ... http2;」が非推奨（別途 http2 on; を使う新構文）。
+    # 1.25.1未満では逆に新構文はエラーになるため、使用中のnginxバージョンに応じて読み替えること。
     listen 443 ssl http2;
     server_name your-domain.example.com;
 
     ssl_certificate     /etc/letsencrypt/live/your-domain.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/your-domain.example.com/privkey.pem;
 
-    client_max_body_size 50m;
+    # backend側のMAX_INGEST_BYTES(既定5MB)に合わせる。ヘッダ等のオーバーヘッド分の余裕を見て8MBに設定
+    client_max_body_size 8m;
 
     # ingest（機器/連携からの送信）→ backend。認証は INGEST_TOKEN(Bearer) で行う。
     location /ingest {
