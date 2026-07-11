@@ -59,8 +59,8 @@ npm outdated              # 更新候補
 
 運用：
 ```bash
-/opt/loghub/venv/bin/pip install pip-audit
-/opt/loghub/venv/bin/pip-audit -r backend/requirements.txt   # 既知CVE確認
+/opt/logseeker/venv/bin/pip install pip-audit
+/opt/logseeker/venv/bin/pip-audit -r backend/requirements.txt   # 既知CVE確認
 ```
 - `pyyaml` は `safe_load` のみ使用（任意オブジェクト生成を避ける）。
 - `psycopg[binary]` は wheel 配布。定期更新でパッチ適用。
@@ -73,7 +73,7 @@ npm outdated              # 更新候補
   `127.0.0.1` バインドに留め、firewalldでも開放しない（[INSTALL.md](../INSTALL.md) §6参照）。
 - **秘密情報は `.env` / systemd `EnvironmentFile`** で渡し、リポジトリやDocumentRootに置かない。
   `.env` は配布物に含めない（`.gitignore` 済み）。パーミッションも `chmod 600` を推奨。
-- **専用ユーザーで実行**：backendのsystemdサービスはroot以外の専用ユーザー（例 `loghub`）で動かす
+- **専用ユーザーで実行**：backendのsystemdサービスはroot以外の専用ユーザー（例 `logseeker`）で動かす
   （[INSTALL.md](../INSTALL.md) の systemd unit例を参照）。
 - **vite dev serverを本番公開しない**：`npm run dev` は開発専用。本番は `npm run build` の静的ビルドを配信する。
 - OS・依存パッケージ（`dnf update` 等）とPython/Node依存（本ドキュメント §3・§4）を定期的に更新する。

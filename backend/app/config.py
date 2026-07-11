@@ -9,7 +9,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 class Settings:
     DATABASE_URL: str = os.getenv(
         "DATABASE_URL",
-        "postgresql+psycopg://loghub:loghub@localhost:5432/loghub",
+        "postgresql+psycopg://logseeker:logseeker@localhost:5432/logseeker",
     )
 
     # 空文字なら認証なし（ローカルデモ用）。値があるとトークン認証が有効。
@@ -36,7 +36,7 @@ class Settings:
     TCP_MAX_LINE_BYTES: int = int(os.getenv("TCP_MAX_LINE_BYTES", str(1024 * 1024)))
 
     # ライセンス署名鍵（キー発行/検証のHMAC秘密）。本番は必ず変更。
-    LICENSE_SECRET: str = os.getenv("LICENSE_SECRET", "loghub-dev-license-secret")
+    LICENSE_SECRET: str = os.getenv("LICENSE_SECRET", "logseeker-dev-license-secret")
     # 本番はここにライセンスキーを入れる（起動時にDBへ適用）。空なら既定値を使用。
     LICENSE_KEY: str = os.getenv("LICENSE_KEY", "").strip()
     # ライセンス未適用時の既定。LICENSE方針(第5条)どおり「WEBサーバーのみ(tier1)・APIオプション無効」。
