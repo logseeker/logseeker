@@ -1,39 +1,40 @@
 name: Auto Release
 
-# main へのpushをトリガーに、GitHub Releaseを自動作成する。
-# 本文(release notes)は前回リリース以降のコミットのsubject行を並べて作る
+# バージョンタグ(v*)をpushした時だけGitHub Releaseを自動作成する
+# （push毎だと1リリースの中身が薄くなりすぎるため、タグpushという明示的な操作を
+#  トリガーにして、ある程度まとまった単位でリリースを切れるようにする）。
+#
+# 本文(release notes)は前回タグ以降のコミットのsubject行を並べて作る
 # （このリポジトリはPRを使わず直接mainへpushする運用のため、PRタイトルを前提にした
-#  GitHubの generate_release_notes だと拾うものが無く "Full Changelogリンクだけ" になってしまう）。
-# コミットメッセージに [skip release] を含めると、そのpushではリリースを作らない。
+#  GitHubの generate_release_notes だと拾うものが無く内容が空になってしまう）。
+#
+# リリースを切りたいとき:
+#   git tag v1.2.0
+#   git push <remote> v1.2.0
 
 on:
   push:
-    branches: [main]
+    tags: ['v*']
 
 permissions:
   contents: write
 
 jobs:
   release:
-    if: "!contains(github.event.head_commit.message, '[skip release]')"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Compute tag
-        id: tag
-        run: echo "tag=v$(date -u +%Y.%m.%d)-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
-
-      - name: Build release notes from commit subjects since last release
+      - name: Build release notes from commit subjects since previous tag
         id: notes
         run: |
-          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          PREV_TAG=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || echo "")
           if [ -n "$PREV_TAG" ]; then
-            RANGE="$PREV_TAG..HEAD"
+            RANGE="$PREV_TAG..${GITHUB_REF_NAME}"
           else
-            RANGE="HEAD"
+            RANGE="${GITHUB_REF_NAME}"
           fi
           {
             echo "notes<<RELEASE_NOTES_EOF"
@@ -45,7 +46,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          name: ${{ steps.tag.outputs.tag }}
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
           body: ${{ steps.notes.outputs.notes }}
           token: ${{ secrets.GITHUB_TOKEN }}
