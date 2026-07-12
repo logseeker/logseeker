@@ -208,10 +208,11 @@ class IocFeed(Base):
 
 
 class Setting(Base):
-    """汎用キーバリュー設定（同期間隔など）。"""
+    """汎用キーバリュー設定（同期間隔など）。changelogキャッシュのような大きめの値も
+    入るため Text（255文字制限だと changelog_cache_json 等が入りきらずエラーになる）。"""
     __tablename__ = "settings"
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
-    value: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    value: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class User(Base):
