@@ -23,6 +23,7 @@ export function Notifications() {
   const [slackResult, setSlackResult] = useState<string | null>(null);
   const [nowResult, setNowResult] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     api.notifConfig().then(setCfg).catch(() => {});
@@ -32,21 +33,40 @@ export function Notifications() {
     setCfg((p) => ({ ...p, [k]: v }));
 
   const save = async () => {
-    setLoading(true); setSaved(false);
-    await api.saveNotifConfig(cfg).catch(() => {});
-    setLoading(false); setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
+    setLoading(true); setSaved(false); setSaveError(null);
+    try {
+      await api.saveNotifConfig(cfg);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } catch (e) {
+      setSaveError((e as Error).message);
+    } finally {
+      setLoading(false);
+    }
   };
 
+  // テスト送信はDB保存済みの設定を見て動くため、今の入力値を先に保存してから実行する
+  // （フィールドのすぐ横にあるこのボタンだけを押すユーザーが、下のカードの「設定を保存」を
+  // 押し忘れて「未設定」エラーになるのを防ぐ）。
   const testEmail = async () => {
     setEmailResult("送信中…");
-    const r = await api.testEmail().catch((e: Error) => ({ ok: false, error: e.message }));
-    setEmailResult(r.ok ? "✅ 送信成功" : `❌ ${r.error ?? "失敗"}`);
+    try {
+      await api.saveNotifConfig(cfg);
+      const r = await api.testEmail();
+      setEmailResult(r.ok ? "✅ 送信成功" : `❌ ${r.error ?? "失敗"}`);
+    } catch (e) {
+      setEmailResult(`❌ ${(e as Error).message}`);
+    }
   };
   const testSlack = async () => {
     setSlackResult("送信中…");
-    const r = await api.testSlack().catch((e: Error) => ({ ok: false, error: e.message }));
-    setSlackResult(r.ok ? "✅ 送信成功" : `❌ ${r.error ?? "失敗"}`);
+    try {
+      await api.saveNotifConfig(cfg);
+      const r = await api.testSlack();
+      setSlackResult(r.ok ? "✅ 送信成功" : `❌ ${r.error ?? "失敗"}`);
+    } catch (e) {
+      setSlackResult(`❌ ${(e as Error).message}`);
+    }
   };
   const sendNow = async () => {
     setNowResult("送信中…");
@@ -177,6 +197,7 @@ export function Notifications() {
               {loading ? "保存中…" : "設定を保存"}
             </button>
             {saved && <span className="text-success">✅ 保存しました</span>}
+            {saveError && <span className="text-danger">❌ 保存失敗: {saveError}</span>}
             <div className="ms-auto d-flex gap-2 align-items-center">
               <button className="btn btn-outline-warning btn-sm" onClick={sendNow}>
                 今すぐ通知テスト（現在の全ルールヒットを送信）

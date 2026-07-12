@@ -7,6 +7,7 @@
 """
 import csv
 import io
+import json
 
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import func, select
@@ -110,13 +111,45 @@ def create_user(body: UserCreate, request: Request,
     if db.execute(select(User).where(User.username == body.username)).scalar_one_or_none():
         return Response(status_code=409, content='{"error":"同名のユーザーが既に存在します"}',
                         media_type="application/json")
+
+    from .notify import K_EMAIL_ENABLED, _get, send_email
+    email_enabled = _get(db, K_EMAIL_ENABLED) == "true"
+
+    email_sent = None
+    if email_enabled:
+        # メール通知が有効なサーバーでは、管理者はパスワードを一切知らない状態にする
+        # （ランダム生成→本人のメールにのみ送信）。送信に失敗したらユーザー作成自体を中止する。
+        if not body.email:
+            return Response(status_code=400, content='{"error":"メール通知が有効なため、メールアドレスが必須です"}',
+                            media_type="application/json")
+        password = A.generate_temp_password()
+        subject = "[LogSeeker] アカウントが作成されました"
+        text = (f"LogSeekerのアカウントが作成されました。\n\n"
+                f"ユーザー名: {body.username}\n"
+                f"仮パスワード: {password}\n\n"
+                f"ログイン後、パスワードの変更をおすすめします。\n")
+        err = send_email([body.email], subject, text, db)
+        if err:
+            return Response(status_code=502, content=json.dumps({"error": f"メール送信に失敗しました: {err}"}),
+                            media_type="application/json")
+        email_sent = True
+    else:
+        # メール通知が無効なサーバーでは従来通り、管理者が初期パスワードを直接入力する。
+        if not body.password:
+            return Response(status_code=400, content='{"error":"パスワードを入力してください"}',
+                            media_type="application/json")
+        password = body.password
+
     u = User(username=body.username, display_name=body.display_name, role=body.role,
-             password_hash=A.hash_password(body.password), enabled=True)
+             password_hash=A.hash_password(password), enabled=True)
     db.add(u)
     db.commit()
     A.audit(db, action="user.create", user=actor, target=body.username,
             detail=f"role={body.role}", ip=request.client.host if request.client else None)
-    return _user_dict(u)
+
+    result = _user_dict(u)
+    result["email_sent"] = email_sent
+    return result
 
 
 @router.put("/users/{user_id}")

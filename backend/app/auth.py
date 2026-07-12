@@ -32,6 +32,10 @@ def hash_password(pw: str, iterations: int = 200_000) -> str:
     return f"pbkdf2_sha256${iterations}${base64.b64encode(salt).decode()}${base64.b64encode(dk).decode()}"
 
 
+def generate_temp_password(length: int = 12) -> str:
+    return secrets.token_urlsafe(length)
+
+
 def verify_password(pw: str, stored: str | None) -> bool:
     if not stored:
         return False

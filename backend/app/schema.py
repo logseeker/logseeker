@@ -50,9 +50,12 @@ class LoginRequest(BaseModel):
 
 class UserCreate(BaseModel):
     username: str
-    password: str
     display_name: str | None = None
     role: str = "viewer"          # viewer/editor/sysadmin/admin
+    # メール通知が有効なサーバーでは email 必須・ランダム仮パスワードを送信（password は無視）。
+    # 無効なサーバーでは password 必須（従来通り管理者が手入力）。どちらが必須かは実行時に判定。
+    email: str | None = None
+    password: str | None = None
 
 
 class UserUpdate(BaseModel):

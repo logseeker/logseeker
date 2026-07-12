@@ -140,6 +140,9 @@ export interface AuthUser {
   role: Role; role_label: string; enabled: boolean; is_sso: boolean;
   created_at: string | null; last_login_at: string | null;
 }
+export interface CreateUserResult extends AuthUser {
+  email_sent: boolean | null;     // true=仮パスワードをメール送信 / null=メール通知が無効なため対象外
+}
 export interface SsoStatus {
   enabled: boolean; configured: boolean; issuer: string; client_id: string;
   has_secret: boolean; redirect_uri: string; allowed_domains: string;

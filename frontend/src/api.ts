@@ -1,9 +1,9 @@
 import type {
   AdminOverview, Annotation, AuditResponse, AuthStatus, AuthUser, CorrelationResponse, Count,
-  CustomRule, CustomRulesResponse, DeadLettersResponse, EntityDetail, EntityRow, EventDetail,
-  EventRow, EventsResponse, FieldInfo, FilterState, IncidentDetail, IncidentRow, IngestStatus,
-  IocFeedsInfo, LicenseInfo, MappingsResponse, NotificationConfig, Role, RuleDef, RuleHit,
-  SsoStatus, Summary, Timeline,
+  CreateUserResult, CustomRule, CustomRulesResponse, DeadLettersResponse, EntityDetail, EntityRow,
+  EventDetail, EventRow, EventsResponse, FieldInfo, FilterState, IncidentDetail, IncidentRow,
+  IngestStatus, IocFeedsInfo, LicenseInfo, MappingsResponse, NotificationConfig, Role, RuleDef,
+  RuleHit, SsoStatus, Summary, Timeline,
 } from "./types";
 
 const BASE = (import.meta.env.VITE_API_BASE as string) || "";
@@ -155,8 +155,8 @@ export const api = {
     post<{ token: string; user: AuthUser }>(`/api/auth/login`, { username, password }),
   logout: () => post<{ ok: boolean }>(`/api/auth/logout`, {}),
   listUsers: () => get<AuthUser[]>(`/api/users`),
-  createUser: (b: { username: string; password: string; display_name?: string; role: Role }) =>
-    post<AuthUser>(`/api/users`, b),
+  createUser: (b: { username: string; display_name?: string; role: Role; email?: string; password?: string }) =>
+    post<CreateUserResult>(`/api/users`, b),
   updateUser: (id: number, b: { display_name?: string; role?: Role; enabled?: boolean; password?: string }) =>
     put<AuthUser>(`/api/users/${id}`, b),
   deleteUser: (id: number) => del<{ ok: boolean }>(`/api/users/${id}`),
@@ -169,7 +169,7 @@ export const api = {
 
   // 通知設定（全ライセンスティアで使用可）
   notifConfig: () => get<NotificationConfig>(`/api/notifications`),
-  saveNotifConfig: (cfg: NotificationConfig) => post<{ ok: boolean }>(`/api/notifications`, cfg),
+  saveNotifConfig: (cfg: NotificationConfig) => put<{ ok: boolean }>(`/api/notifications`, cfg),
   testEmail: () => post<{ ok: boolean; error?: string }>(`/api/notifications/test/email`, {}),
   testSlack: () => post<{ ok: boolean; error?: string }>(`/api/notifications/test/slack`, {}),
   notifyNow: () => post<{ hits: number; result: object }>(`/api/notifications/send-now`, {}),
