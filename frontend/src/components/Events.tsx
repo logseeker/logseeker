@@ -24,7 +24,7 @@ const dash = (v: string | null) => (v ? v : <span className="text-secondary">-</
 
 // 横スクロール時も主要列（時刻・ログソース・種別・重大度）を常に見えるようにする sticky 設定。
 const STICKY_W = [150, 130, 90, 90]; // px: 時刻, ログソース, 種別, 重大度
-const STICKY_LEFT = STICKY_W.reduce<number[]>((acc, w, i) => [...acc, i === 0 ? 0 : acc[i - 1] + STICKY_W[i - 1]], []);
+const STICKY_LEFT = STICKY_W.reduce<number[]>((acc, _w, i) => [...acc, i === 0 ? 0 : acc[i - 1] + STICKY_W[i - 1]], []);
 function stickyStyle(i: number, isHeader = false): React.CSSProperties {
   return {
     position: "sticky",
