@@ -1,0 +1,34 @@
+name: Auto Release
+
+# main へのpushをトリガーに、GitHub Releaseを自動作成する。
+# 本文(release notes)は generate_release_notes で前回リリース以降のコミットから自動生成される
+# （手書きが不要になる。人手でReleaseを書く運用はやめて、これに一本化する）。
+# コミットメッセージに [skip release] を含めると、そのpushではリリースを作らない。
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: "!contains(github.event.head_commit.message, '[skip release]')"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute tag
+        id: tag
+        run: echo "tag=v$(date -u +%Y.%m.%d)-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
+          generate_release_notes: true
+          token: ${{ secrets.GITHUB_TOKEN }}
