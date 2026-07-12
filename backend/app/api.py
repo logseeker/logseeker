@@ -38,7 +38,7 @@ TAX_COLS = {
     "service_name": N.service_name,
     "network_protocol": N.network_protocol,
 }
-CONTROL = {"q", "start", "end", "limit", "offset", "interval", "groupby", "field", "top", "attention", "threat"}
+CONTROL = {"q", "start", "end", "limit", "offset", "interval", "groupby", "field", "top", "attention", "threat", "format"}
 
 
 def _threat_clause(threat: str):
