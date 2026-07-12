@@ -22,21 +22,52 @@ function SevBadge({ s }: { s: string | null }) {
 }
 const dash = (v: string | null) => (v ? v : <span className="text-secondary">-</span>);
 
-// イベント1件の「対応策」セル。危険なものだけ具体アクションを出す。
+// 横スクロール時も主要列（時刻・ログソース・種別・重大度）を常に見えるようにする sticky 設定。
+const STICKY_W = [150, 130, 90, 90]; // px: 時刻, ログソース, 種別, 重大度
+const STICKY_LEFT = STICKY_W.reduce<number[]>((acc, w, i) => [...acc, i === 0 ? 0 : acc[i - 1] + STICKY_W[i - 1]], []);
+function stickyStyle(i: number, isHeader = false): React.CSSProperties {
+  return {
+    position: "sticky",
+    left: STICKY_LEFT[i],
+    width: STICKY_W[i],
+    minWidth: STICKY_W[i],
+    maxWidth: STICKY_W[i],
+    background: "var(--tblr-card-bg, #fff)",
+    zIndex: isHeader ? 3 : 2,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    boxShadow: i === STICKY_W.length - 1 ? "2px 0 4px -2px rgba(0,0,0,.15)" : undefined,
+  };
+}
+
+// イベント1件の「対応策」セル。既定はルール名バッジ1つのみ表示し、
+// 「詳細」クリックでアクションバッジ・調査ボタンを展開する（列が横に広がりすぎるのを防ぐ）。
 function AdviceCell({ e, onPick }: { e: EventRow; onPick: (k: string, v: string) => void }) {
   const a = adviseForEvent(e);
+  const [open, setOpen] = useState(false);
   if (!a) return <span className="text-secondary">-</span>;
   return (
-    <div style={{ minWidth: 220, whiteSpace: "normal" }}>
-      <div className={`fw-bold small text-${a.level === "danger" ? "danger" : "warning"}`}>{a.title}</div>
-      <div className="d-flex flex-wrap gap-1 my-1">
-        {a.actions.map((x) => <span key={x} className="badge bg-azure-lt">{x}</span>)}
-      </div>
-      {e.source_ip && (
-        <button className="btn btn-xs btn-outline-danger py-0"
-          onClick={(ev) => { ev.stopPropagation(); onPick("source_ip", e.source_ip!); }}>
-          このIPを調査 ({e.source_ip})
+    <div style={{ maxWidth: 240, whiteSpace: "normal" }}>
+      <div className="d-flex align-items-center flex-wrap gap-1">
+        <span className={`badge ${a.level === "danger" ? "bg-red-lt" : "bg-yellow-lt"}`}>{a.title}</span>
+        <button type="button" className="btn btn-xs btn-link p-0"
+          onClick={(ev) => { ev.stopPropagation(); setOpen((v) => !v); }}>
+          {open ? "隠す" : "詳細"}
         </button>
+      </div>
+      {open && (
+        <div className="mt-1">
+          <div className="d-flex flex-wrap gap-1 mb-1">
+            {a.actions.map((x) => <span key={x} className="badge bg-azure-lt">{x}</span>)}
+          </div>
+          {e.source_ip && (
+            <button className="btn btn-xs btn-outline-danger py-0"
+              onClick={(ev) => { ev.stopPropagation(); onPick("source_ip", e.source_ip!); }}>
+              このIPを調査 ({e.source_ip})
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -222,19 +253,24 @@ export function Events({
               </button>
             </div>
           </div>
+          <div className="table-responsive">
           <table className="table table-vcenter table-sm card-table table-hover">
             <thead><tr>
-              <th>時刻</th><th>ログソース</th><th>種別</th><th>重大度</th><th>ホスト/デバイス</th><th>ドメイン</th>
+              <th style={stickyStyle(0, true)}>時刻</th>
+              <th style={stickyStyle(1, true)}>ログソース</th>
+              <th style={stickyStyle(2, true)}>種別</th>
+              <th style={stickyStyle(3, true)}>重大度</th>
+              <th>ホスト/デバイス</th><th>ドメイン</th>
               <th>送信元IP</th><th>ユーザー</th><th>イベント/サービス</th><th>対象</th><th>ステータス</th><th>メッセージ</th>
               {showAdvice && <th>対応策</th>}
             </tr></thead>
             <tbody>
               {data.items.map((e) => (
                 <tr key={e.id} style={{ cursor: "pointer" }} onClick={() => setSel(e.id)}>
-                  <td className="text-nowrap">{e.event_time ? e.event_time.replace("T", " ").slice(0, 19) : <span className="text-secondary">（時刻なし）</span>}</td>
-                  <td className="text-nowrap"><a role="button" className="text-primary" onClick={(ev) => { stop(ev); e.source_name && onTax("source_name", e.source_name); }}>{dash(e.source_name)}</a></td>
-                  <td className="text-nowrap">{stLabel(e.source_type)}</td>
-                  <td className="text-nowrap"><SevBadge s={e.event_severity} /></td>
+                  <td style={stickyStyle(0)} title={e.event_time ?? undefined}>{e.event_time ? e.event_time.replace("T", " ").slice(0, 19) : <span className="text-secondary">（時刻なし）</span>}</td>
+                  <td style={stickyStyle(1)} title={e.source_name ?? undefined}><a role="button" className="text-primary" onClick={(ev) => { stop(ev); e.source_name && onTax("source_name", e.source_name); }}>{dash(e.source_name)}</a></td>
+                  <td style={stickyStyle(2)}>{stLabel(e.source_type)}</td>
+                  <td style={stickyStyle(3)}><SevBadge s={e.event_severity} /></td>
                   <td className="text-nowrap"><a role="button" className="text-reset" onClick={(ev) => { stop(ev); e.device_name && onTax("device_name", e.device_name); }}>{dash(e.device_name)}</a></td>
                   <td className="text-nowrap"><a role="button" className="text-reset" onClick={(ev) => { stop(ev); e.url_domain && onTax("url_domain", e.url_domain); }}>{dash(e.url_domain)}</a></td>
                   <td className="text-nowrap">
@@ -255,6 +291,7 @@ export function Events({
               {data.items.length === 0 && <tr><td colSpan={showAdvice ? 13 : 12} className="text-secondary text-center py-4">該当なし</td></tr>}
             </tbody>
           </table>
+          </div>
           <div className="card-footer d-flex align-items-center">
             <span className="text-secondary">{from.toLocaleString()}–{to.toLocaleString()} / {data.total.toLocaleString()} 件</span>
             <div className="ms-auto d-flex align-items-center gap-2">
