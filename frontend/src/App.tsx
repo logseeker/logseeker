@@ -2,8 +2,10 @@ import { useEffect, useState } from "react";
 import {
   IconAffiliate, IconAlertTriangle, IconArrowsExchange, IconBell, IconClipboardList, IconColumns,
   IconFileText, IconCloudDownload, IconInbox, IconLayoutDashboard, IconLicense, IconList, IconLogout,
-  IconServer, IconSettings, IconShield, IconSitemap, IconUsers, IconWorld,
+  IconServer, IconSettings, IconShield, IconSitemap, IconSpeakerphone, IconUsers, IconWorld,
 } from "@tabler/icons-react";
+import { useChangelog } from "./changelog";
+import { Changelog } from "./components/Changelog";
 import { Dashboard } from "./components/Dashboard";
 import { Events } from "./components/Events";
 import { Sources } from "./components/Sources";
@@ -75,6 +77,7 @@ function parseUrl(search: string): { screen: Screen; filter: FilterState } {
 
 const MENU: { key: Screen; label: string; Icon: typeof IconList; ready: boolean }[] = [
   { key: "dashboard", label: "ダッシュボード", Icon: IconLayoutDashboard, ready: true },
+  { key: "changelog", label: "お知らせ", Icon: IconSpeakerphone, ready: true },
   { key: "events", label: "イベント", Icon: IconList, ready: true },
   { key: "sources", label: "ログソース", Icon: IconServer, ready: true },
   { key: "hosts", label: "ホスト / ドメイン", Icon: IconWorld, ready: true },
@@ -102,6 +105,7 @@ export default function App() {
   const [search, setSearch] = useState(INIT.filter.q ?? "");
   const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [authLoaded, setAuthLoaded] = useState(false);
+  const changelog = useChangelog(auth);
 
   const loadAuth = () => api.authStatus().then(setAuth).catch(() => setAuth(null)).finally(() => setAuthLoaded(true));
   useEffect(() => {
@@ -182,7 +186,8 @@ export default function App() {
 
   const body = () => {
     switch (screen) {
-      case "dashboard": return <Dashboard onPick={drill} />;
+      case "dashboard": return <Dashboard onPick={drill} changelog={changelog} onNavChangelog={() => setScreen("changelog")} />;
+      case "changelog": return <Changelog />;
       case "events": return <Events filter={filter} search={search} setSearch={setSearch}
         onTax={onTax} onDate={onDate} onAttention={onAttention} onThreat={onThreat} onEntity={navEntity} onNav={setScreen} />;
       case "sources": return <Sources filter={filter} onPick={drill} />;
@@ -226,6 +231,9 @@ export default function App() {
                   <a className="nav-link" role="button" onClick={() => setScreen(m.key)}>
                     <span className="nav-link-icon"><m.Icon size={18} /></span>
                     <span className="nav-link-title">{m.label}</span>
+                    {m.key === "changelog" && changelog.unread && (
+                      <span className="badge bg-red ms-auto" style={{ width: 8, height: 8, padding: 0, borderRadius: "50%" }}></span>
+                    )}
                     {!m.ready && <span className="badge bg-secondary-lt ms-auto">未実装</span>}
                   </a>
                 </li>

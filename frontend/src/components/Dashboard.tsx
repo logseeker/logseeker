@@ -1,9 +1,31 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { api } from "../api";
+import type { useChangelog } from "../changelog";
 import type { FilterState, Summary, Timeline } from "../types";
 import { BarChart } from "./BarChart";
 import { PieChart } from "./PieChart";
 import { TimelineChart } from "./TimelineChart";
+
+// 未読の最新お知らせがあればダッシュボード上部に表示するバナー。閉じると、
+// 次に新しいリリースが出るまで再表示しない（useChangelogのdismissロジックに従う）。
+function ChangelogBanner({ changelog, onNav }: { changelog: ReturnType<typeof useChangelog>; onNav: () => void }) {
+  if (!changelog.unread || !changelog.latest) return null;
+  const r = changelog.latest;
+  return (
+    <div className="col-12">
+      <div className="alert alert-primary d-flex align-items-start">
+        <div className="flex-fill">
+          <div className="d-flex align-items-center gap-2 mb-1">
+            <strong>📢 お知らせ：{r.name}</strong>
+            <span className="text-secondary small">{r.published_at?.slice(0, 10)}</span>
+          </div>
+          <a role="button" className="text-primary" onClick={onNav}>更新内容を見る →</a>
+        </div>
+        <button type="button" className="btn-close ms-2" onClick={changelog.dismiss}></button>
+      </div>
+    </div>
+  );
+}
 
 function Stat({ n, label }: { n: number; label: string }) {
   return (
@@ -39,7 +61,11 @@ const RANGES: Record<string, { label: string; interval: string; ms: number }> = 
   "30d": { label: "直近1ヶ月", interval: "day", ms: 30 * 24 * 3600 * 1000 },
 };
 
-export function Dashboard({ onPick }: { onPick: (k: string, v: string) => void }) {
+export function Dashboard({ onPick, changelog, onNavChangelog }: {
+  onPick: (k: string, v: string) => void;
+  changelog: ReturnType<typeof useChangelog>;
+  onNavChangelog: () => void;
+}) {
   const [s, setS] = useState<Summary | null>(null);
   const [tl, setTl] = useState<Timeline>({ buckets: [], series: {} });
   const [range, setRange] = useState("24h");
@@ -62,6 +88,7 @@ export function Dashboard({ onPick }: { onPick: (k: string, v: string) => void }
 
   return (
     <div className="row row-deck row-cards">
+      <ChangelogBanner changelog={changelog} onNav={onNavChangelog} />
       <div className="col-12">
         <div className="row row-cards">
           <Stat n={s.total} label="総イベント" />

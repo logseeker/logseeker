@@ -2,8 +2,8 @@ import type {
   AdminOverview, Annotation, AuditResponse, AuthStatus, AuthUser, CorrelationResponse, Count,
   CreateUserResult, CustomRule, CustomRulesResponse, DeadLettersResponse, EntityDetail, EntityRow,
   EventDetail, EventRow, EventsResponse, FieldInfo, FilterState, IncidentDetail, IncidentRow,
-  IngestStatus, IocFeedsInfo, LicenseInfo, MappingsResponse, NotificationConfig, Role, RuleDef,
-  RuleHit, SsoStatus, Summary, Timeline,
+  IngestStatus, IocFeedsInfo, LicenseInfo, MappingsResponse, NotificationConfig, ReleaseItem, Role,
+  RuleDef, RuleHit, SsoStatus, Summary, Timeline,
 } from "./types";
 
 const BASE = (import.meta.env.VITE_API_BASE as string) || "";
@@ -179,4 +179,10 @@ export const api = {
   testEmail: () => post<{ ok: boolean; error?: string }>(`/api/notifications/test/email`, {}),
   testSlack: () => post<{ ok: boolean; error?: string }>(`/api/notifications/test/slack`, {}),
   notifyNow: () => post<{ hits: number; result: object }>(`/api/notifications/send-now`, {}),
+
+  // お知らせ・更新履歴（GitHub Releases。バックエンドでキャッシュ済み）
+  changelog: () => get<ReleaseItem[]>(`/api/changelog`),
+  // 既読状態（ログイン中はDB、未ログインはフロント側でlocalStorageにフォールバック）
+  getDismissedRelease: () => get<{ last_dismissed_release: string | null }>(`/api/changelog/dismissed`),
+  setDismissedRelease: (tag_name: string) => put<{ ok: boolean }>(`/api/changelog/dismissed`, { tag_name }),
 };

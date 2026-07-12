@@ -229,6 +229,14 @@ class User(Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class UserSettings(Base):
+    """ユーザーごとの画面設定（お知らせの既読状態など）。ログイン中のみ使う
+    （認証OFF時はユーザーが定まらないため、フロント側はlocalStorageにフォールバックする）。"""
+    __tablename__ = "user_settings"
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    last_dismissed_release: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+
 class AuthSession(Base):
     """ログインセッション（Bearerトークン）。token_hash のみ保存（平文は保持しない）。"""
     __tablename__ = "auth_sessions"

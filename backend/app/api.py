@@ -5,14 +5,15 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import String, and_, case, cast, func, nulls_last, or_, select, text
 from sqlalchemy.orm import Session
 
-from .auth import require_editor, require_login, require_sysadmin
+from .auth import get_current_user, require_editor, require_login, require_sysadmin
 from .config import settings
 from .db import get_db
 from .models import Annotation, CustomRule, DeadLetter, Event, EventEntity, IOC, Incident, IncidentEvent
-from .models import IocFeed, License, Setting
+from .models import IocFeed, License, Setting, User, UserSettings
 from .models import NormalizedEvent as N
-from .schema import (AnnotationCreate, CustomRuleCreate, CustomRuleUpdate, FeedUpdate, IncidentCreate,
-                     IncidentEventAdd, LicenseApply, NotificationConfig, SilenceSettings, SyncSettings)
+from .schema import (AnnotationCreate, CustomRuleCreate, CustomRuleUpdate, DismissedRelease, FeedUpdate,
+                     IncidentCreate, IncidentEventAdd, LicenseApply, NotificationConfig, SilenceSettings,
+                     SyncSettings)
 
 router = APIRouter(prefix="/api")
 
@@ -833,6 +834,38 @@ def mappings_csv():
     data = "﻿" + buf.getvalue()  # BOM付きでExcel文字化け回避
     return Response(content=data, media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": "attachment; filename=logseeker_mappings.csv"})
+
+
+# ============================ お知らせ・更新履歴 ============================
+@router.get("/changelog")
+def changelog(db: Session = Depends(get_db)):
+    """GitHub Releasesをキャッシュ経由で返す（お知らせ一覧・ダッシュボードバナー共通）。"""
+    from .changelog import get_releases
+    return get_releases(db)
+
+
+@router.get("/changelog/dismissed")
+def get_dismissed_release(user: User | None = Depends(get_current_user), db: Session = Depends(get_db)):
+    """ログイン中ユーザーが最後に閉じたお知らせのタグ名。未ログイン（認証OFF等）ならnull
+    （フロント側はその場合localStorageにフォールバックする）。"""
+    if not user:
+        return {"last_dismissed_release": None}
+    row = db.get(UserSettings, user.id)
+    return {"last_dismissed_release": row.last_dismissed_release if row else None}
+
+
+@router.put("/changelog/dismissed")
+def set_dismissed_release(body: DismissedRelease, user: User | None = Depends(get_current_user),
+                          db: Session = Depends(get_db)):
+    if not user:
+        return {"ok": True}  # 未ログイン時はDBに保存しない（フロントはlocalStorageを使う）
+    row = db.get(UserSettings, user.id)
+    if not row:
+        row = UserSettings(user_id=user.id)
+        db.add(row)
+    row.last_dismissed_release = body.tag_name
+    db.commit()
+    return {"ok": True}
 
 
 # ============================ 管理（システム状態）============================

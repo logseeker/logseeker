@@ -216,4 +216,13 @@ export interface NotificationConfig {
 export type Screen =
   | "dashboard" | "events" | "sources" | "hosts" | "entities" | "correlations"
   | "fields" | "mappings" | "ingest" | "deadletters" | "incidents" | "rules"
-  | "threatintel" | "notifications" | "license" | "admin" | "users" | "audit";
+  | "threatintel" | "notifications" | "license" | "admin" | "users" | "audit" | "changelog";
+
+export interface ReleaseItem {
+  tag_name: string;
+  name: string;
+  body: string;
+  published_at: string | null;
+  html_url: string;
+  prerelease: boolean;
+}

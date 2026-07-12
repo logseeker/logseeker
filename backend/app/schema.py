@@ -109,6 +109,10 @@ class SSOConfig(BaseModel):
     auto_provision_role: str = "viewer"
 
 
+class DismissedRelease(BaseModel):
+    tag_name: str
+
+
 class NotificationConfig(BaseModel):
     email_enabled:  bool        = False
     email_host:     str         = ""
