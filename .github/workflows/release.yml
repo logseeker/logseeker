@@ -1,8 +1,9 @@
 name: Auto Release
 
 # main へのpushをトリガーに、GitHub Releaseを自動作成する。
-# 本文(release notes)は generate_release_notes で前回リリース以降のコミットから自動生成される
-# （手書きが不要になる。人手でReleaseを書く運用はやめて、これに一本化する）。
+# 本文(release notes)は前回リリース以降のコミットのsubject行を並べて作る
+# （このリポジトリはPRを使わず直接mainへpushする運用のため、PRタイトルを前提にした
+#  GitHubの generate_release_notes だと拾うものが無く "Full Changelogリンクだけ" になってしまう）。
 # コミットメッセージに [skip release] を含めると、そのpushではリリースを作らない。
 
 on:
@@ -25,10 +26,26 @@ jobs:
         id: tag
         run: echo "tag=v$(date -u +%Y.%m.%d)-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
 
+      - name: Build release notes from commit subjects since last release
+        id: notes
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="$PREV_TAG..HEAD"
+          else
+            RANGE="HEAD"
+          fi
+          {
+            echo "notes<<RELEASE_NOTES_EOF"
+            git log "$RANGE" --no-merges --pretty=format:"- %s"
+            echo ""
+            echo "RELEASE_NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: ${{ steps.tag.outputs.tag }}
-          generate_release_notes: true
+          body: ${{ steps.notes.outputs.notes }}
           token: ${{ secrets.GITHUB_TOKEN }}
