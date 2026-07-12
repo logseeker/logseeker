@@ -72,9 +72,8 @@ export function Users({ auth, onChanged }: { auth: AuthStatus; onChanged: () => 
                         <select className="form-select form-select-sm w-auto" value={u.role}
                           disabled={!canManage}
                           onChange={(e) => guard(async () => { await api.updateUser(u.id, { role: e.target.value as Role }); flash("ロールを変更しました"); })}>
-                          {ROLE_OPTS.map((r) => (
-                            <option key={r.v} value={r.v}
-                              disabled={!isAdmin && (r.v === "sysadmin" || r.v === "admin")}>{r.label}</option>
+                          {assignable.map((r) => (
+                            <option key={r.v} value={r.v}>{r.label}</option>
                           ))}
                         </select>
                       </td>
