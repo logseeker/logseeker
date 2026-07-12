@@ -64,6 +64,20 @@ const del = <T>(path: string): Promise<T> => send<T>("DELETE", path);
 
 const ev = (v: string) => encodeURIComponent(v);
 
+// 認証必須(ON)の環境では /api/* すべてに Bearer トークンが要る。CSV等のファイルは
+// 素の <a href> だとヘッダを付けられず401になるため、fetch+blob で認証ヘッダ付きDLする。
+async function downloadFile(path: string, filename: string): Promise<void> {
+  const res = await fetch(`${BASE}${path}`, { headers: { ...authHeaders() } });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
 export const api = {
   events: (f: FilterState, limit = 100, offset = 0) =>
     get<EventsResponse>(`/api/events${qs(f, { limit, offset })}`),
@@ -112,17 +126,8 @@ export const api = {
   saveSilenceSettings: (hours: number) => post<{ ok: boolean }>(`/api/monitor/silence`, { hours }),
 
   // イベントのCSV/JSONエクスポート（現在の絞り込みに従う。認証ヘッダ付きでblobダウンロード）
-  exportEvents: async (f: FilterState, format: "csv" | "json") => {
-    const res = await fetch(`${BASE}/api/events/export${qs(f, { format })}`, { headers: { ...authHeaders() } });
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `logseeker_events.${format}`;
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
-  },
+  exportEvents: (f: FilterState, format: "csv" | "json") =>
+    downloadFile(`/api/events/export${qs(f, { format })}`, `logseeker_events.${format}`),
 
   // ライセンス
   license: () => get<LicenseInfo>(`/api/license`),
@@ -144,7 +149,7 @@ export const api = {
 
   // マッピング（正規化キー対応表）
   mappings: () => get<MappingsResponse>(`/api/mappings`),
-  mappingsCsvUrl: () => `${BASE}/api/mappings.csv`,
+  downloadMappingsCsv: () => downloadFile(`/api/mappings.csv`, "logseeker_mappings.csv"),
 
   // 管理
   adminOverview: () => get<AdminOverview>(`/api/admin/overview`),
@@ -162,7 +167,8 @@ export const api = {
   deleteUser: (id: number) => del<{ ok: boolean }>(`/api/users/${id}`),
   toggleAuth: (enabled: boolean) => post<{ ok: boolean; auth_required: boolean }>(`/api/auth/require`, { enabled }),
   audit: (limit = 500) => get<AuditResponse>(`/api/audit?limit=${limit}`),
-  auditCsvUrl: () => `${BASE}/api/audit.csv`,
+  downloadAuditCsv: () => downloadFile(`/api/audit.csv`, "logseeker_audit.csv"),
+  downloadAuditJson: () => downloadFile(`/api/audit.json`, "logseeker_audit.json"),
   getSso: () => get<SsoStatus>(`/api/sso`),
   saveSso: (b: Partial<SsoStatus> & { client_secret?: string; enabled: boolean }) =>
     put<{ ok: boolean; note: string }>(`/api/sso`, b),

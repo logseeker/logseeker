@@ -476,10 +476,15 @@ def incident_detail(incident_id: int, db: Session = Depends(get_db)):
 @router.post("/incidents/{incident_id}/events")
 def add_incident_event(incident_id: int, body: IncidentEventAdd, db: Session = Depends(get_db),
                        _a=Depends(require_editor)):
-    db.add(IncidentEvent(incident_id=incident_id, event_id=body.event_id, note=body.note))
     inc = db.get(Incident, incident_id)
-    if inc:
-        inc.updated_at = datetime.now().astimezone()
+    if not inc:
+        return Response(status_code=404, content='{"error":"インシデントが見つかりません"}',
+                        media_type="application/json")
+    if not db.get(Event, body.event_id):
+        return Response(status_code=404, content='{"error":"イベントが見つかりません"}',
+                        media_type="application/json")
+    db.add(IncidentEvent(incident_id=incident_id, event_id=body.event_id, note=body.note))
+    inc.updated_at = datetime.now().astimezone()
     db.commit()
     return {"ok": True}
 
@@ -494,8 +499,9 @@ def list_annotations(event_id: int, db: Session = Depends(get_db)):
 
 @router.post("/events/{event_id}/annotations")
 def add_annotation(event_id: int, body: AnnotationCreate, db: Session = Depends(get_db),
-                   _a=Depends(require_editor)):
-    a = Annotation(event_id=event_id, comment=body.comment, tags=body.tags, created_by=body.created_by)
+                   actor=Depends(require_editor)):
+    created_by = body.created_by or getattr(actor, "username", None)
+    a = Annotation(event_id=event_id, comment=body.comment, tags=body.tags, created_by=created_by)
     db.add(a)
     db.commit()
     return {"id": a.id}

@@ -251,18 +251,22 @@ def save_sso(body: SSOConfig, request: Request,
 
 
 # ---------------- 監査ログ（sysadmin以上） ----------------
+def _audit_dict(a: AuditLog) -> dict:
+    return {
+        "id": a.id, "at": a.at.isoformat() if a.at else None,
+        "username": a.username, "role": a.role, "action": a.action,
+        "method": a.method, "path": a.path, "status": a.status,
+        "target": a.target, "detail": a.detail, "ip": a.ip,
+    }
+
+
 @router.get("/audit")
 def list_audit(_: User | None = Depends(A.require_sysadmin), db: Session = Depends(get_db),
                limit: int = 500):
     rows = db.execute(select(AuditLog).order_by(AuditLog.at.desc()).limit(min(limit, 2000))).scalars().all()
     return {
         "total": db.scalar(select(func.count()).select_from(AuditLog)),
-        "items": [{
-            "id": a.id, "at": a.at.isoformat() if a.at else None,
-            "username": a.username, "role": a.role, "action": a.action,
-            "method": a.method, "path": a.path, "status": a.status,
-            "target": a.target, "detail": a.detail, "ip": a.ip,
-        } for a in rows],
+        "items": [_audit_dict(a) for a in rows],
     }
 
 
@@ -275,7 +279,18 @@ def audit_csv(request: Request, actor: User | None = Depends(A.require_sysadmin)
     for a in rows:
         w.writerow([a.at.isoformat() if a.at else "", a.username or "", a.role or "", a.action,
                     a.method or "", a.path or "", a.status or "", a.target or "", a.detail or "", a.ip or ""])
-    A.audit(db, action="audit.download", user=actor, ip=request.client.host if request.client else None)
+    A.audit(db, action="audit.download", user=actor, detail="format=csv",
+            ip=request.client.host if request.client else None)
     data = "﻿" + buf.getvalue()
     return Response(content=data, media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": "attachment; filename=logseeker_audit.csv"})
+
+
+@router.get("/audit.json")
+def audit_json(request: Request, actor: User | None = Depends(A.require_sysadmin), db: Session = Depends(get_db)):
+    rows = db.execute(select(AuditLog).order_by(AuditLog.at.desc())).scalars().all()
+    A.audit(db, action="audit.download", user=actor, detail="format=json",
+            ip=request.client.host if request.client else None)
+    data = json.dumps([_audit_dict(a) for a in rows], ensure_ascii=False, indent=2)
+    return Response(content=data, media_type="application/json; charset=utf-8",
+                    headers={"Content-Disposition": "attachment; filename=logseeker_audit.json"})

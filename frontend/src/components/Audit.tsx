@@ -42,7 +42,10 @@ export function Audit() {
             <div className="card-actions d-flex gap-2">
               <input className="form-control form-control-sm" placeholder="絞り込み（ユーザー/操作/IP…）"
                 value={q} onChange={(e) => setQ(e.target.value)} style={{ minWidth: 220 }} />
-              <a className="btn btn-sm btn-outline-primary" href={api.auditCsvUrl()}>⬇ CSV</a>
+              <button className="btn btn-sm btn-outline-primary"
+                onClick={() => api.downloadAuditCsv().catch((e) => setErr((e as Error).message))}>⬇ CSV</button>
+              <button className="btn btn-sm btn-outline-secondary"
+                onClick={() => api.downloadAuditJson().catch((e) => setErr((e as Error).message))}>⬇ JSON</button>
             </div>
           </div>
           <div className="table-responsive" style={{ maxHeight: "70vh" }}>

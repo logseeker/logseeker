@@ -2,10 +2,100 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { stLabel } from "../labels";
 import { adviseForEvent } from "../advice";
-import type { EventDetail as Detail, EventRow } from "../types";
+import type { Annotation, EventDetail as Detail, EventRow, IncidentRow } from "../types";
 
-const TABS = ["概要", "Payload", "正規化", "エンティティ", "相関", "Parser"] as const;
+const TABS = ["概要", "Payload", "正規化", "エンティティ", "相関", "コメント", "Parser"] as const;
 type Tab = (typeof TABS)[number];
+
+// コメント・タグの付与＋インシデントへの紐付け（PROJECT.md §10.4）。
+// 既存の annotations / incidents API を結線する。editor 以上（認証OFF時は誰でも）で操作可。
+function CommentsTab({ eventId }: { eventId: number }) {
+  const [notes, setNotes] = useState<Annotation[]>([]);
+  const [incidents, setIncidents] = useState<IncidentRow[]>([]);
+  const [comment, setComment] = useState("");
+  const [tags, setTags] = useState("");
+  const [incidentId, setIncidentId] = useState<number | "">("");
+  const [note, setNote] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const loadNotes = () => api.annotations(eventId).then(setNotes).catch(() => {});
+  useEffect(() => {
+    loadNotes();
+    api.incidents().then(setIncidents).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [eventId]);
+
+  const flash = (m: string) => { setMsg(m); setTimeout(() => setMsg(null), 2500); };
+
+  const addComment = async () => {
+    setErr(null);
+    try {
+      await api.addAnnotation(eventId, { comment: comment.trim() || undefined, tags: tags.trim() || undefined });
+      setComment(""); setTags(""); loadNotes(); flash("コメントを追加しました");
+    } catch (e) { setErr((e as Error).message); }
+  };
+  const attach = async () => {
+    if (incidentId === "") return;
+    setErr(null);
+    try {
+      await api.addIncidentEvent(Number(incidentId), { event_id: eventId, note: note.trim() || undefined });
+      setNote(""); setIncidentId(""); flash("インシデントに追加しました");
+    } catch (e) { setErr((e as Error).message); }
+  };
+
+  return (
+    <div>
+      {err && <div className="alert alert-danger py-2">{err}</div>}
+      {msg && <div className="alert alert-success py-2">{msg}</div>}
+
+      <div className="mb-3">
+        <label className="form-label">コメント</label>
+        <textarea className="form-control mb-2" rows={2} placeholder="調査メモ・気づいたことなど"
+          value={comment} onChange={(e) => setComment(e.target.value)} />
+        <label className="form-label">タグ（カンマ区切り・任意）</label>
+        <input className="form-control mb-2" placeholder="例: 要監視, 誤検知"
+          value={tags} onChange={(e) => setTags(e.target.value)} />
+        <button className="btn btn-primary btn-sm" disabled={!comment.trim() && !tags.trim()} onClick={addComment}>
+          コメントを追加
+        </button>
+      </div>
+
+      <div className="mb-3">
+        {notes.length === 0 && <div className="text-secondary small">まだコメントはありません。</div>}
+        {notes.map((a) => (
+          <div key={a.id} className="border rounded p-2 mb-1">
+            {a.comment && <div className="text-break">{a.comment}</div>}
+            {a.tags && <div className="mt-1">{a.tags.split(",").map((t) => t.trim()).filter(Boolean).map((t) => <span key={t} className="badge bg-azure-lt me-1">{t}</span>)}</div>}
+            <div className="text-secondary small mt-1">
+              {a.created_by ? `${a.created_by} · ` : ""}{a.created_at ? a.created_at.replace("T", " ").slice(0, 19) : ""}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="border-top pt-3">
+        <label className="form-label">インシデントに追加</label>
+        {incidents.length === 0 ? (
+          <div className="text-secondary small">インシデントがありません。「インシデント」画面で作成してください。</div>
+        ) : (
+          <>
+            <select className="form-select mb-2" value={incidentId}
+              onChange={(e) => setIncidentId(e.target.value ? Number(e.target.value) : "")}>
+              <option value="">インシデントを選択…</option>
+              {incidents.map((i) => <option key={i.id} value={i.id}>{i.title}</option>)}
+            </select>
+            <input className="form-control mb-2" placeholder="メモ（任意）"
+              value={note} onChange={(e) => setNote(e.target.value)} />
+            <button className="btn btn-outline-primary btn-sm" disabled={incidentId === ""} onClick={attach}>
+              このイベントを追加
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // 正規化フィールド → [表示名, エンティティ種別]（エンティティ＝資産/主体のみ）
 const PIVOTS: [string, string, string][] = [
@@ -151,6 +241,8 @@ export function EventDetail({ id, onClose, onPivot, onEntity }:
               <MiniEvents items={related.items} />
             </>
           )}
+
+          {d && tab === "コメント" && <CommentsTab eventId={id} />}
 
           {d && tab === "Parser" && (
             <KV obj={{

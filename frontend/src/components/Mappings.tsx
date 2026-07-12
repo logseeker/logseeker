@@ -23,7 +23,8 @@ export function Mappings() {
           <div className="card-header">
             <h3 className="card-title">正規化マッピング（JSONキー → 正規化フィールド）</h3>
             <div className="card-actions d-flex gap-2 d-print-none">
-              <a className="btn btn-sm btn-outline-primary" href={api.mappingsCsvUrl()}>⬇ CSVダウンロード</a>
+              <button className="btn btn-sm btn-outline-primary"
+                onClick={() => api.downloadMappingsCsv().catch((e) => setErr((e as Error).message))}>⬇ CSVダウンロード</button>
               <button className="btn btn-sm btn-outline-secondary" onClick={() => window.print()}>🖨 印刷 / PDF保存</button>
             </div>
           </div>
