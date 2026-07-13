@@ -39,8 +39,3 @@ dist/
 # editor / os
 .DS_Store
 *.log
-
-# advisor（Gemini AI解析。SaaS版専用の別コンポーネントで、公開リポジトリには一切含めない）
-advisor/
-docker-compose.override.yml
-.env.advisor
