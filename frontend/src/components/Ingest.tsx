@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { IngestStatus } from "../types";
 
-// API/TCP 連携の案内＋取り込み状態（§5, §12.10）。ファイルアップロードUIは作らない。
+// API/TCP 連携の案内（§5, §12.10）。ファイルアップロードUIは作らない。
+// 取り込み状態・転送量は「運用」画面にまとめてある（分けても見る意味が薄いため統合）。
 export function Ingest() {
   const [st, setSt] = useState<IngestStatus | null>(null);
   useEffect(() => { api.ingestStatus().then(setSt).catch(() => setSt(null)); }, []);
@@ -54,34 +55,6 @@ printf '%s\\n' '{"source":"router","source_type":"router","time":"2026/04/06 00:
             </table>
             <pre className="bg-light p-2 rounded border" style={{ fontSize: 12 }}>{ndjson}</pre>
             <p className="text-secondary small mb-0">JSON内に <code>source</code> / <code>source_type</code> があれば使います。不正な行は Dead Letter に保存されます。</p>
-          </div>
-        </div>
-      </div>
-
-      <div className="col-12">
-        <div className="card">
-          <div className="card-header"><h3 className="card-title">取り込み状態</h3></div>
-          <div className="card-body">
-            {!st && <div className="text-secondary">読み込み中…</div>}
-            {st && (
-              <>
-                <div className="row g-2 mb-3">
-                  <div className="col-auto"><span className="text-secondary">総イベント</span> <strong>{st.total.toLocaleString()}</strong></div>
-                  <div className="col-auto"><span className="text-secondary">Dead Letter</span> <strong>{st.dead_letters.toLocaleString()}</strong></div>
-                </div>
-                <table className="table table-sm">
-                  <thead><tr><th>チャネル</th><th>件数</th><th>最終受信</th></tr></thead>
-                  <tbody>
-                    {st.by_channel.map((c) => (
-                      <tr key={c.channel ?? "-"}>
-                        <td>{c.channel}</td><td>{c.count.toLocaleString()}</td>
-                        <td>{c.last_received ? c.last_received.replace("T", " ").slice(0, 19) : "-"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </>
-            )}
           </div>
         </div>
       </div>

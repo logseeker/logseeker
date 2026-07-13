@@ -103,8 +103,8 @@ export interface IngestVolume {
   bytes_yesterday: number;
   bytes_last_5min: number;
   avg_bytes_per_minute_last_5min: number;
+  bytes_hourly_today: { hour: string; bytes: number }[];
   bytes_daily: { day: string; bytes: number }[];
-  bytes_monthly: { month: string; bytes: number }[];
 }
 
 export interface RuleHit {

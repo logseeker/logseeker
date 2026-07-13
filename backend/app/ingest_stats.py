@@ -1,7 +1,7 @@
 """受信ペイロードのバイト数記録・集計（転送量把握用。件数ベースの既存統計を補う）。
 記録は本来のログ取り込みとは独立した別セッションで行い、失敗しても例外を外へ投げない
 （バイト数記録の失敗が本来のログ取り込みを止めてはならないため）。
-日別/月別の区切りはJST基準（運用者向け表示に合わせる。timeparse.pyのJST定数と同じ+9:00固定、
+時間別/日別の区切りはJST基準（運用者向け表示に合わせる。timeparse.pyのJST定数と同じ+9:00固定、
 DST無し）。received_at自体はTIMESTAMPTZ=絶対時刻のままで、集計時の境界だけJSTで区切る。"""
 import logging
 from datetime import datetime, timedelta, timezone
@@ -77,14 +77,16 @@ def bytes_daily(db: Session, days: int = 31) -> list[dict]:
     return [{"day": d.isoformat(), "bytes": int(b or 0)} for d, b in rows]
 
 
-def bytes_monthly(db: Session, months: int = 12) -> list[dict]:
-    """直近months ヶ月分の月別(JST)合計転送バイト数。"""
-    since = datetime.now(JST) - timedelta(days=months * 31)  # 月初境界はdate_truncで正確に揃うのでざっくりでよい
-    month = func.date_trunc("month", IngestStat.received_at, "Asia/Tokyo")
+def bytes_hourly_today(db: Session) -> list[dict]:
+    """本日(JST, 0時スタート)の時間別合計転送バイト数。データが無い時間帯も0で埋める。"""
+    now_jst = datetime.now(JST)
+    today_start = now_jst.replace(hour=0, minute=0, second=0, microsecond=0)
+    hour = func.date_trunc("hour", IngestStat.received_at, "Asia/Tokyo")
     rows = db.execute(
-        select(month.label("month"), func.sum(IngestStat.bytes))
-        .where(IngestStat.received_at >= since)
-        .group_by(month.label("month"))
-        .order_by(month.label("month"))
+        select(hour.label("hour"), func.sum(IngestStat.bytes))
+        .where(IngestStat.received_at >= today_start)
+        .group_by(hour.label("hour"))
     ).all()
-    return [{"month": m.isoformat(), "bytes": int(b or 0)} for m, b in rows]
+    by_hour = {h.hour: int(b or 0) for h, b in rows}
+    return [{"hour": (today_start + timedelta(hours=i)).isoformat(), "bytes": by_hour.get(i, 0)}
+            for i in range(now_jst.hour + 1)]
