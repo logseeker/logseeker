@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .db import get_db
+from .ingest_stats import record_bytes
 from .pipeline import dead_letter, ingest_one
 from .schema import IngestResponse
 
@@ -35,6 +36,7 @@ async def _ingest(request: Request, db: Session, source: str | None, source_type
         dead_letter(db, body.decode("utf-8", "replace"), "invalid_json", str(e),
                     channel="api", source=source, source_type=source_type, receiver_ip=client_ip)
         db.commit()
+        record_bytes(len(body), source=source)
         raise HTTPException(status_code=400, detail="invalid JSON")
 
     records = payload if isinstance(payload, list) else [payload]
@@ -50,6 +52,8 @@ async def _ingest(request: Request, db: Session, source: str | None, source_type
             skipped += 1
             detail.append(f"record[{i}]: {e}")
     db.commit()
+    # 転送量記録は本来の取り込みと切り離す（1リクエスト=受信body全体のバイト数として1件記録）。
+    record_bytes(len(body), source=source)
     return IngestResponse(accepted=len(records), stored=stored, skipped=skipped, detail=detail)
 
 

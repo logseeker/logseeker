@@ -2,8 +2,8 @@ import type {
   AdminOverview, Annotation, AuditResponse, AuthStatus, AuthUser, CorrelationResponse, Count,
   CreateUserResult, CustomRule, CustomRulesResponse, DeadLettersResponse, EntityDetail, EntityRow,
   EventDetail, EventRow, EventsResponse, FieldInfo, FilterState, IncidentDetail, IncidentRow,
-  IngestStatus, IocFeedsInfo, LicenseInfo, MappingsResponse, NotificationConfig, ReleaseItem, Role,
-  RuleDef, RuleHit, SsoStatus, Summary, Timeline,
+  IngestStatus, IngestVolume, IocFeedsInfo, LicenseInfo, MappingsResponse, NotificationConfig,
+  ReleaseItem, Role, RuleDef, RuleHit, SsoStatus, Summary, Timeline,
 } from "./types";
 
 const BASE = (import.meta.env.VITE_API_BASE as string) || "";
@@ -153,6 +153,7 @@ export const api = {
 
   // 管理
   adminOverview: () => get<AdminOverview>(`/api/admin/overview`),
+  ingestVolume: () => get<IngestVolume>(`/api/admin/ingest-volume`),
 
   // 認証・ユーザー・監査
   authStatus: () => get<AuthStatus>(`/api/auth/status`),

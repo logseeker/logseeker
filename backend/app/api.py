@@ -755,6 +755,24 @@ def ingest_status(db: Session = Depends(get_db)):
     }
 
 
+# ============================ 運用（転送量・ログ量） ============================
+@router.get("/admin/ingest-volume")
+def ingest_volume(db: Session = Depends(get_db)):
+    """転送量（バイト）の運用向け集計（JST基準）。総量・平均ログサイズ・直近の受信ペース・日別/月別推移。"""
+    from .ingest_stats import avg_bytes, bytes_daily, bytes_monthly, bytes_recent_minutes, bytes_yesterday, total_bytes
+
+    recent_5min = bytes_recent_minutes(db, 5)
+    return {
+        "total_bytes": total_bytes(db),
+        "avg_bytes_per_event": avg_bytes(db),
+        "bytes_yesterday": bytes_yesterday(db),
+        "bytes_last_5min": recent_5min,
+        "avg_bytes_per_minute_last_5min": recent_5min / 5,
+        "bytes_daily": bytes_daily(db, 31),
+        "bytes_monthly": bytes_monthly(db, 12),
+    }
+
+
 # ============================ 取り込み失敗（Dead Letter）============================
 @router.get("/dead-letters")
 def dead_letters(db: Session = Depends(get_db), limit: int = Query(200, ge=1, le=1000)):

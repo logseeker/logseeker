@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import {
   IconAffiliate, IconAlertTriangle, IconArrowsExchange, IconBell, IconClipboardList, IconColumns,
-  IconFileText, IconCloudDownload, IconInbox, IconLayoutDashboard, IconLicense, IconList, IconLogout,
-  IconServer, IconSettings, IconShield, IconSitemap, IconSpeakerphone, IconUsers, IconWorld,
+  IconFileText, IconCloudDownload, IconGauge, IconInbox, IconLayoutDashboard, IconLicense, IconList,
+  IconLogout, IconServer, IconSettings, IconShield, IconSitemap, IconSpeakerphone, IconUsers, IconWorld,
 } from "@tabler/icons-react";
 import { useChangelog } from "./changelog";
 import { Changelog } from "./components/Changelog";
@@ -13,6 +13,7 @@ import { HostsDomains } from "./components/HostsDomains";
 import { Fields } from "./components/Fields";
 import { Entities } from "./components/Entities";
 import { Ingest } from "./components/Ingest";
+import { Operations } from "./components/Operations";
 import { Incidents } from "./components/Incidents";
 import { Rules } from "./components/Rules";
 import { ThreatIntel } from "./components/ThreatIntel";
@@ -86,6 +87,7 @@ const MENU: { key: Screen; label: string; Icon: typeof IconList; ready: boolean 
   { key: "correlations", label: "相関分析", Icon: IconSitemap, ready: true },
   { key: "mappings", label: "マッピング", Icon: IconArrowsExchange, ready: true },
   { key: "ingest", label: "取り込み", Icon: IconInbox, ready: true },
+  { key: "operations", label: "運用", Icon: IconGauge, ready: true },
   { key: "deadletters", label: "取り込み失敗", Icon: IconAlertTriangle, ready: true },
   { key: "incidents", label: "インシデント", Icon: IconFileText, ready: true },
   { key: "rules", label: "ルール / 注意喚起", Icon: IconShield, ready: true },
@@ -195,6 +197,7 @@ export default function App() {
       case "fields": return <Fields filter={filter} />;
       case "entities": return <Entities onPick={drill} initial={entityInit} />;
       case "ingest": return <Ingest />;
+      case "operations": return <Operations />;
       case "incidents": return <Incidents />;
       case "rules": return <Rules filter={filter} onPick={drill} auth={auth ?? undefined} />;
       case "threatintel": return <ThreatIntel />;

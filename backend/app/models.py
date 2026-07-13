@@ -5,7 +5,7 @@ MVP1/2 範囲: events / normalized_events / dead_letters。
 """
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -115,6 +115,19 @@ class DeadLetter(Base):
     error_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class IngestStat(Base):
+    """受信ペイロードのバイト数記録（転送量集計用。件数だけでなくMB/GB規模を把握するため）。
+    非圧縮JSON前提：受信バイト数 ≒ 実ログ量。将来gzip等の圧縮転送を導入する場合は、
+    展開後サイズ用に uncompressed_bytes 等を後から追加できる（このテーブルはそのための
+    拡張余地として bytes 以外の詳細を持たせず単純にしてある）。"""
+    __tablename__ = "ingest_stats"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    source: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
 
 class SourceTypeDetector(Base):

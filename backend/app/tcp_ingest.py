@@ -8,12 +8,14 @@ import threading
 
 from .config import settings
 from .db import SessionLocal
+from .ingest_stats import record_bytes
 from .pipeline import dead_letter, ingest_one
 
 log = logging.getLogger("tcp_ingest")
 
 
-def _process_line(line: str, ip: str | None) -> None:
+def _process_line(line: str, ip: str | None, raw_bytes: int) -> None:
+    src = None
     db = SessionLocal()
     try:
         payload = json.loads(line)
@@ -32,6 +34,8 @@ def _process_line(line: str, ip: str | None) -> None:
         log.warning("tcp ingest error from %s: %s", ip, e)
     finally:
         db.close()
+    # 転送量記録は本来の取り込みと切り離す（成否・種別を問わず、受信した生バイト数を記録）。
+    record_bytes(raw_bytes, source=src)
 
 
 def _handle(conn: socket.socket, addr) -> None:
@@ -51,7 +55,7 @@ def _handle(conn: socket.socket, addr) -> None:
                     raw, buf = buf.split(b"\n", 1)
                     line = raw.decode("utf-8", "replace").strip()
                     if line:
-                        _process_line(line, ip)
+                        _process_line(line, ip, len(raw))
                 if len(buf) > maxlen:  # 改行が来ないまま上限超過 → 破棄
                     db = SessionLocal()
                     try:
@@ -64,7 +68,7 @@ def _handle(conn: socket.socket, addr) -> None:
             # 残り（改行なしの最終行）
             tail = buf.decode("utf-8", "replace").strip()
             if tail and len(buf) <= maxlen:
-                _process_line(tail, ip)
+                _process_line(tail, ip, len(buf))
     except Exception as e:  # 接続単位の異常は握りつぶす
         log.warning("tcp connection error from %s: %s", ip, e)
 

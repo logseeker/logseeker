@@ -97,6 +97,16 @@ export interface IngestStatus {
   by_channel: { channel: string | null; count: number; last_received: string | null }[];
 }
 
+export interface IngestVolume {
+  total_bytes: number;
+  avg_bytes_per_event: number;
+  bytes_yesterday: number;
+  bytes_last_5min: number;
+  avg_bytes_per_minute_last_5min: number;
+  bytes_daily: { day: string; bytes: number }[];
+  bytes_monthly: { month: string; bytes: number }[];
+}
+
 export interface RuleHit {
   rule_id: string; rule_name: string; severity: string;
   title: string; evidence: string; count: number; recommendation: string;
@@ -215,7 +225,7 @@ export interface NotificationConfig {
 
 export type Screen =
   | "dashboard" | "events" | "sources" | "hosts" | "entities" | "correlations"
-  | "fields" | "mappings" | "ingest" | "deadletters" | "incidents" | "rules"
+  | "fields" | "mappings" | "ingest" | "operations" | "deadletters" | "incidents" | "rules"
   | "threatintel" | "notifications" | "license" | "admin" | "users" | "audit" | "changelog";
 
 export interface ReleaseItem {
