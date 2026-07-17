@@ -233,9 +233,16 @@ sudo systemctl status logseeker-backend
 Apacheが `/api` `/ingest` を中継するので **`VITE_API_BASE` は空**（同一オリジン）でビルドします。
 
 ```bash
+# §3 で /opt/logseeker を logseeker ユーザー所有に変更済みのため、このまま npm ci を実行すると
+# node_modules 作成で EACCES になる。ビルドの間だけ自分（ログイン中のユーザー）の所有に戻す。
+sudo chown -R "$USER" /opt/logseeker/frontend
+
 cd /opt/logseeker/frontend
 npm ci      # package-lock.json通りに再現性のあるインストール（package.jsonとの不整合は即エラーになる）
 VITE_API_BASE="" npm run build      # 生成: /opt/logseeker/frontend/dist
+
+# ビルド後は logseeker ユーザー所有に戻す（他ファイルと所有者を揃える）
+sudo chown -R logseeker:logseeker /opt/logseeker/frontend
 
 sudo mkdir -p /var/www/logseeker
 sudo cp -r dist/* /var/www/logseeker/
@@ -517,8 +524,11 @@ printf '%s\n' '{"source":"web01","source_type":"web_access","vhost":"example.com
 ## 10. 補足
 
 - **入力は JSON のみ**（REST `/ingest` ＋ TCP NDJSON）。送信側（NXLog等）がJSON化して送る前提。画面からのファイルアップロードは無し。
-- 運用更新: コード更新 → backendは `pip install -r requirements.txt` 後 `sudo systemctl restart logseeker-backend`、
-  frontendは `npm run build` し直して `/var/www/logseeker` に再配置。
+- 運用更新: `/opt/logseeker` は `logseeker` ユーザー所有のため、`git pull` は
+  `sudo -u logseeker git pull` で行う（自分のユーザーで直接 `git pull` すると
+  "detected dubious ownership" や `.git/FETCH_HEAD` の権限エラーになる）。
+  その後 backendは `pip install -r requirements.txt` 後 `sudo systemctl restart logseeker-backend`、
+  frontendは §4 と同様に一時的に所有権を戻してから `npm run build` し直して `/var/www/logseeker` に再配置。
 - バックアップ対象: PostgreSQL（`pg_dump`）、`JSON_STORE_DIR` 配下、`.env`、Apache設定（`/etc/httpd/conf.d/`）。
   pgAdminの設定（登録済みサーバー一覧等）は既定で `/var/lib/pgadmin` 配下。
 - 公開前に必ず [docs/security.md](docs/security.md) のチェックリストを確認してください
