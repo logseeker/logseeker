@@ -202,6 +202,12 @@ sudo systemctl enable --now logseeker-backend
 sudo systemctl status logseeker-backend
 ```
 
+> `logseeker`は`-r`（システムアカウント）`-s /sbin/nologin`で作成しているため、**パスワードは存在せず
+> ログインもできない**（意図的な設計。サービス実行専用のアカウント）。`su logseeker`やSSHでの
+> ログインは試さないこと。ファイル操作は常にログイン中のユーザー（`rocky`等）から`sudo`で行い、
+> `logseeker`所有のファイルを直接編集・更新したい場合は`sudo -u logseeker <コマンド>`
+> （例: `git pull`）や、一時的に`chown`で自分に戻してから作業する方法を使う（§4・§9参照）。
+
 <details>
 <summary>複数ワーカー構成にする場合の注意（該当者のみ）</summary>
 
@@ -262,21 +268,39 @@ sudo chcon -R -t httpd_sys_content_t /var/www/logseeker   # SELinuxラベル（r
 `mod_proxy` / `mod_proxy_http` はhttpdパッケージに標準同梱で、既定で有効になっています
 （`/etc/httpd/conf.modules.d/00-proxy.conf` を参照）。
 
+**先にTLSをどこで終端するか決めてください**（下の3方式のうちどれか1つだけを実施する）:
+
+| 方式 | 概要 | オリジンの443番 | こんな場合に選ぶ |
+|---|---|---|---|
+| [方式A: Let's Encrypt](#5a-方式a-lets-encrypt証明書をこのサーバー自身で取得する) | certbotで自前取得 | 使う | Cloudflare等のCDNを使わず、ドメインを直接このVPSに向ける |
+| [方式B: Cloudflare Flexible](#5b-方式b-cloudflare-flexibleオリジンはhttpのみ・最も簡単) | Cloudflareが終端、オリジンは平文 | 使わない | Cloudflare配下で、設定を最短にしたい |
+| [方式C: Cloudflare Full（厳格）](#5c-方式c-cloudflare-full厳格cloudflare-origin-ca証明書を使う) | Cloudflareが終端＋オリジンも暗号化 | 使う（Cloudflare発行の証明書） | Cloudflare配下で、Cloudflare⇔オリジン間も暗号化したい（推奨） |
+
+### 5.0 共通の前提: mod_sslの既定設定を無効化する
+
 `mod_ssl`パッケージ同梱の`/etc/httpd/conf.d/ssl.conf`には、証明書ファイルが未設定
 （`SSLCertificateFile`等がコメントアウト）の`<VirtualHost _default_:443>`が既定で入っている。
 443番で待ち受けるVirtualHostが存在する以上mod_sslはこれにも証明書を要求するため、
 このままでは（自分の`logseeker.conf`が正しくても）`httpd`が起動できない
-（`AH02572: Failed to configure at least one certificate and key`）。先に無効化しておく:
+（`AH02572: Failed to configure at least one certificate and key`）。**方式A/B/Cいずれを選ぶ場合も**
+先に無効化しておく:
 
 ```bash
 sudo mv /etc/httpd/conf.d/ssl.conf /etc/httpd/conf.d/ssl.conf.disabled
 ```
 
 > `ssl.conf`には`<VirtualHost _default_:443>`だけでなく **`Listen 443 https`ディレクティブ自体もこのファイルに入っている**。
-> 無効化すると443番の待受そのものが消える（`ss -tlnp`に443が出てこない）ため、
-> 下の`logseeker.conf`側で`Listen 443 https`を必ず書き直すこと（下のテンプレートに含めてある）。
+> 無効化すると443番の待受そのものが消える（`ss -tlnp`に443が出てこない）。
+> 443番を使う方式A・方式Cでは、`logseeker.conf`側で`Listen 443 https`を明示的に復元すること
+> （各方式のテンプレートに含めてある）。443番を使わない方式Bでは復元不要。
 
-続けて、`sudo vi /etc/httpd/conf.d/logseeker.conf`（または`sudo nano`等）で以下の内容を作成してください。
+---
+
+### 5A. 方式A: Let's Encrypt（証明書をこのサーバー自身で取得する）
+
+Cloudflare等を使わず、ドメインを直接このVPSに向ける場合の方式。
+
+`sudo vi /etc/httpd/conf.d/logseeker.conf`（または`sudo nano`等）で以下の内容を作成してください。
 
 ```apache
 # ssl.conf無効化でListen 443も消えるため、ここで明示的に復元する。
@@ -360,11 +384,13 @@ sudo systemctl reload httpd
 SELinux（Enforcing前提）: Apacheからbackend(127.0.0.1:8000)へのプロキシ接続を許可する場合、
 `sudo setsebool -P httpd_can_network_connect 1` が必要になることがあります。
 
-### 代替: Cloudflare等でTLSを終端する場合（オリジンはHTTPのみ）
+---
 
-Cloudflare等のCDN/プロキシを前段に置き、そちら側でTLS終端する構成であれば、
-オリジン（このサーバー）自身にLet's Encrypt証明書を取得する必要はない。
-その場合は上記の`<VirtualHost *:443>`・certbotの手順は丸ごと不要で、80番のみで運用する。
+### 5B. 方式B: Cloudflare Flexible（オリジンはHTTPのみ・最も簡単）
+
+Cloudflare等のCDN/プロキシを前段に置き、そちら側でTLS終端する構成。
+オリジン（このサーバー）自身にLet's Encrypt証明書を取得する必要はなく、
+443番のVirtualHost・certbotの手順は丸ごと不要。80番のみで運用する。
 
 `sudo vi /etc/httpd/conf.d/logseeker.conf`（または`sudo nano`等）で以下の内容を作成してください。
 
@@ -392,20 +418,26 @@ Cloudflare等のCDN/プロキシを前段に置き、そちら側でTLS終端す
 </VirtualHost>
 ```
 
-Cloudflare側のSSL/TLS暗号化モードを、ダッシュボードの「SSL/TLS」→「概要」で選ぶ。
-
-**Flexible（最も簡単）**: ブラウザ⇔Cloudflareのみ暗号化、Cloudflare⇔オリジンは上記の平文HTTPのまま。
-firewalldは`http`のみで足りる:
 ```bash
+sudo apachectl configtest
+sudo systemctl enable --now httpd
 sudo firewall-cmd --add-service=http --permanent
 sudo firewall-cmd --reload
 ```
+
+Cloudflareダッシュボードの「SSL/TLS」→「概要」で暗号化モードを**「Flexible」**に設定する
+（ブラウザ⇔Cloudflareのみ暗号化、Cloudflare⇔オリジンは上記の平文HTTPのまま）。
+
 > 「自動SSL/TLS（推奨）」のままだとCloudflareが自動判定で「フル」を選び、オリジンの443番が
 > 存在せずアクセスが522（Cloudflareからオリジンへ接続不可）になる。Flexibleを明示的に選ぶこと。
 
-**Full（厳格）（推奨・より安全）**: Cloudflare⇔オリジン間も暗号化する。Let's Encryptの
-HTTP-01検証は不要な、**Cloudflare Origin CA証明書**（SSL/TLS→「配信元サーバー証明書」→
-「証明書を作成する」、有効期間は最大15年）を使う。
+---
+
+### 5C. 方式C: Cloudflare Full（厳格）（Cloudflare Origin CA証明書を使う）
+
+方式Bと同じくCloudflare配下だが、Cloudflare⇔オリジン間も暗号化する。Let's Encryptの
+HTTP-01検証は不要な、**Cloudflare Origin CA証明書**（Cloudflareダッシュボードの
+「SSL/TLS」→「配信元サーバー証明書」→「証明書を作成する」、有効期間は最大15年）を使う。
 
 1. Cloudflareダッシュボードで発行した証明書とプライベートキーをオリジンに設置する
    （このVPS上で作成・オリジンの外に出さない。`chmod 600`推奨）:
@@ -415,8 +447,9 @@ HTTP-01検証は不要な、**Cloudflare Origin CA証明書**（SSL/TLS→「配
    sudo vi /etc/pki/tls/cloudflare/logseeker-origin.key   # プライベートキーを貼り付け
    sudo chmod 600 /etc/pki/tls/cloudflare/logseeker-origin.key
    ```
-2. `logseeker.conf`を以下のように書き換える（`ssl.conf`無効化で消えた`Listen 443 https`を
-   復元しつつ、80番は443へリダイレクト、443番でCloudflare Origin CA証明書を使う）:
+2. `sudo vi /etc/httpd/conf.d/logseeker.conf`（または`sudo nano`等）で以下の内容を作成する
+   （`ssl.conf`無効化で消えた`Listen 443 https`を復元しつつ、80番は443へリダイレクト、
+   443番でCloudflare Origin CA証明書を使う）:
    ```apache
    Listen 443 https
 
@@ -460,10 +493,7 @@ HTTP-01検証は不要な、**Cloudflare Origin CA証明書**（SSL/TLS→「配
    sudo firewall-cmd --add-service=https --permanent
    sudo firewall-cmd --reload
    ```
-4. Cloudflareダッシュボードの暗号化モードを「フル（厳格）」にする。
-
-> 逆に、Cloudflareを使わず本サーバーに直接ドメインを向ける場合は、上の証明書取得の手順
-> （本節冒頭）に従うこと。
+4. Cloudflareダッシュボードの暗号化モードを**「フル（厳格）」**にする。
 
 ---
 
@@ -544,6 +574,13 @@ pgAdminには関係する認証情報が3種類あるので混同しないよう
 外部の送信元（NXLog等）からTCP NDJSONで直接受信する場合のみ、TCP ingestポート（既定516）を開放します。
 REST `/ingest` のみで運用する場合はこの手順は不要です。
 
+> **Cloudflare等を使っている場合（§5方式B/C）の注意**: CloudflareのプロキシはHTTP/HTTPS（80/443）
+> のみを中継し、任意のTCPポート（516等）は通さない。§9の動作確認例にある
+> `nc your-domain.example.com 516` のように**プロキシ済みのドメイン名へTCPで直接送っても届かない**。
+> TCP ingestを使う場合は、送信元から**オリジン（このVPS）のグローバルIPに直接**送るか、
+> そのホスト名だけCloudflareで「プロキシなし（DNSのみ／グレークラウド）」に設定した
+> 別のAレコード（例: `ingest.your-domain.example.com`）を使うこと。
+
 > **516を開けるかどうかの判断基準**:
 > - NXLog等の送信元がこのサーバー**自身（127.0.0.1）からPOSTするだけ**の構成であれば、516は
 >   外部公開する必要が無い。`--add-port=516/tcp` は実行せず、閉じたままにする。
@@ -615,6 +652,13 @@ sudo firewall-cmd --reload
 
 `.env.example` をコピーして `/opt/logseeker/backend/.env` に配置し、値を編集します（§3参照）。
 systemd unitの `EnvironmentFile=` がこのファイルを読み込みます。
+
+> **`.env`は編集しただけでは反映されない**。`EnvironmentFile`はプロセス起動時に一度だけ読み込まれるため、
+> 値を変えたら必ずbackendを再起動すること:
+> ```bash
+> sudo systemctl restart logseeker-backend
+> ```
+> （反映確認: `curl -s http://127.0.0.1:8000/api/auth/status` で`auth_required`等の値を見る）
 
 | 変数 | 説明 | 既定値 |
 |---|---|---|

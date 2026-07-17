@@ -198,6 +198,12 @@ sudo systemctl enable --now logseeker-backend
 sudo systemctl status logseeker-backend
 ```
 
+> `logseeker`は`-r`（システムアカウント）`-s /sbin/nologin`で作成しているため、**パスワードは存在せず
+> ログインもできない**（意図的な設計。サービス実行専用のアカウント）。`su logseeker`やSSHでの
+> ログインは試さないこと。ファイル操作は常にログイン中のユーザーから`sudo`で行い、
+> `logseeker`所有のファイルを直接編集・更新したい場合は`sudo -u logseeker <コマンド>`
+> （例: `git pull`）や、一時的に`chown`で自分に戻してから作業する方法を使う。
+
 <details>
 <summary>複数ワーカー構成にする場合の注意（該当者のみ）</summary>
 
@@ -439,6 +445,11 @@ sudo systemctl reload caddy
 外部の送信元（NXLog等）からTCP NDJSONで直接受信する場合のみ、TCP ingestポート（既定516）を開放します。
 REST `/ingest` のみで運用する場合はこの手順は不要です。
 
+> **Cloudflare等を使っている場合の注意**: CloudflareのプロキシはHTTP/HTTPS（80/443）のみを中継し、
+> 任意のTCPポート（516等）は通さない。プロキシ済みのドメイン名へTCPで直接送っても届かない。
+> TCP ingestを使う場合は、送信元から**オリジンのグローバルIPに直接**送るか、そのホスト名だけ
+> Cloudflareで「プロキシなし（DNSのみ／グレークラウド）」に設定した別のAレコードを使うこと。
+
 > **516を開けるかどうかの判断基準**:
 > - NXLog等の送信元がこのサーバー**自身（127.0.0.1）からPOSTするだけ**の構成であれば、516は
 >   外部公開する必要が無い。`--add-port=516/tcp` は実行せず、閉じたままにする。
@@ -518,6 +529,13 @@ sudo firewall-cmd --reload
 
 `.env.example` をコピーして `/opt/logseeker/backend/.env` に配置し、値を編集します（§3参照）。
 systemd unitの `EnvironmentFile=` がこのファイルを読み込みます。
+
+> **`.env`は編集しただけでは反映されない**。`EnvironmentFile`はプロセス起動時に一度だけ読み込まれるため、
+> 値を変えたら必ずbackendを再起動すること:
+> ```bash
+> sudo systemctl restart logseeker-backend
+> ```
+> （反映確認: `curl -s http://127.0.0.1:8000/api/auth/status` で`auth_required`等の値を見る）
 
 | 変数 | 説明 | 既定値 |
 |---|---|---|
