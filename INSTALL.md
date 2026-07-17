@@ -79,6 +79,7 @@ sudo dnf -qy module disable postgresql
 ```bash
 # Node.js 24 LTS（ビルド専用途。NodeSource推奨）
 curl -fsSL https://rpm.nodesource.com/setup_24.x | sudo bash -
+sudo dnf -y install nodejs
 
 # nginx
 sudo dnf -y install nginx
