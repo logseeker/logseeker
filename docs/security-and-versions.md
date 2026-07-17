@@ -11,7 +11,7 @@
 |---|---|---|---|
 | **Node.js** | **24 LTS（最新パッチ）** | 24=Active LTS / 22=Maintenance / **20=EOL(2026-04-30)** / 26=Current(非LTS) | 本プロジェクトでは**フロントのビルド時のみ**使用（本番はnginx/Apacheが静的配信＝Node常駐なし）。`npm run dev`(vite dev server)は開発専用、本番公開しない。|
 | **PostgreSQL** | 16.x（最新マイナー） | サポート中（17も可） | 定期 `dnf update` / イメージ再pullでパッチ適用。|
-| **Python** | 3.14.x（最新パッチ） | サポート中 | `python:3.14-slim` は再ビルドで base 更新。|
+| **Python** | 3.12.x（最新パッチ） | サポート中 | `python:3.12-slim` は再ビルドで base 更新。|
 | **pgAdmin 4**（[INSTALL-pgadmin.md](../INSTALL-pgadmin.md)使用時のみ） | 最新 | — | `dnf update pgadmin4-web` を定期実行。|
 
 > **Node は 22 を使わない（24 LTS にする）**。本リポジトリは Docker を `node:24-bookworm-slim`、VPS手順を `setup_24.x` に更新済み。

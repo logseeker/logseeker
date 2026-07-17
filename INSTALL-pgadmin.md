@@ -54,7 +54,7 @@ nginxのままpgAdminを追加すると、nginx（アプリ公開用）とApache
 |---|---|---|
 | EPEL | 補助パッケージ | `dnf install epel-release` |
 | PostgreSQL 16 | DB | PGDG 公式 yum リポジトリ |
-| Python 3.14 | backend 実行 | AlmaLinux AppStream（`python3.14`） |
+| Python 3.12 | backend 実行 | AlmaLinux AppStream（`python3.12`） |
 | Node.js 24 LTS | frontend ビルド専用（本番は常駐しない） | NodeSource または AppStream |
 | Apache（httpd）+ mod_ssl | リバースプロキシ / TLS終端 / 静的配信 / pgAdmin(mod_wsgi) | AppStream |
 | pgAdmin 4（Webモード） | DB管理画面 | pgAdmin 公式 yum リポジトリ |
@@ -149,8 +149,8 @@ git clone <YOUR_REPO_URL> /opt/logseeker
 # もしくは、このtarball/zipを /opt/logseeker に展開
 
 cd /opt/logseeker/backend
-sudo dnf -y install python3.14 python3.14-pip
-python3.14 -m venv /opt/logseeker/venv
+sudo dnf -y install python3.12 python3.12-pip
+python3.12 -m venv /opt/logseeker/venv
 /opt/logseeker/venv/bin/pip install --upgrade pip
 /opt/logseeker/venv/bin/pip install -r requirements.txt
 ```
