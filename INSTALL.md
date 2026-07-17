@@ -452,7 +452,11 @@ HTTP-01検証は不要な、**Cloudflare Origin CA証明書**（Cloudflareダッ
    }
 
    server {
-       listen 443 ssl http2;
+       # nginx 1.25.1以降は「listen ... http2;」が非推奨（別途 http2 on; を使う新構文）。
+       # 1.25.1未満では逆に新構文はエラーになるため、使用中のnginxバージョンに応じて読み替えること
+       # （EL10標準のnginx 1.26系では下記の新構文でよい）。
+       listen 443 ssl;
+       http2 on;
        server_name your-domain.example.com;
 
        ssl_certificate     /etc/pki/tls/cloudflare/logseeker-origin.pem;
