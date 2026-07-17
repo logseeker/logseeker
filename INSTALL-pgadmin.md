@@ -165,6 +165,9 @@ cp /opt/logseeker/.env.example /opt/logseeker/backend/.env
 
 ### systemd unit（`/etc/systemd/system/logseeker-backend.service`）
 
+`sudo`権限が無いと書き込めない場所なので、`sudo vi /etc/systemd/system/logseeker-backend.service`
+（または`sudo nano`等）で以下の内容を作成してください。
+
 ```ini
 [Unit]
 Description=LogSeeker backend (FastAPI/Uvicorn + TCP ingest)
@@ -259,12 +262,32 @@ sudo chcon -R -t httpd_sys_content_t /var/www/logseeker   # SELinuxラベル（r
 `mod_proxy` / `mod_proxy_http` はhttpdパッケージに標準同梱で、既定で有効になっています
 （`/etc/httpd/conf.modules.d/00-proxy.conf` を参照）。
 
-`/etc/httpd/conf.d/logseeker.conf`:
+`mod_ssl`パッケージ同梱の`/etc/httpd/conf.d/ssl.conf`には、証明書ファイルが未設定
+（`SSLCertificateFile`等がコメントアウト）の`<VirtualHost _default_:443>`が既定で入っている。
+443番で待ち受けるVirtualHostが存在する以上mod_sslはこれにも証明書を要求するため、
+このままでは（自分の`logseeker.conf`が正しくても）`httpd`が起動できない
+（`AH02572: Failed to configure at least one certificate and key`）。先に無効化しておく:
+
+```bash
+sudo mv /etc/httpd/conf.d/ssl.conf /etc/httpd/conf.d/ssl.conf.disabled
+```
+
+> `ssl.conf`には`<VirtualHost _default_:443>`だけでなく **`Listen 443 https`ディレクティブ自体もこのファイルに入っている**。
+> 無効化すると443番の待受そのものが消える（`ss -tlnp`に443が出てこない）ため、
+> 下の`logseeker.conf`側で`Listen 443 https`を必ず書き直すこと（下のテンプレートに含めてある）。
+
+続けて、`sudo vi /etc/httpd/conf.d/logseeker.conf`（または`sudo nano`等）で以下の内容を作成してください。
 
 ```apache
+# ssl.conf無効化でListen 443も消えるため、ここで明示的に復元する。
+Listen 443 https
+
 # 80番はHTTPS化前の暫定 or ACME challenge用。TLS設定後は443へリダイレクトに変更する。
 <VirtualHost *:80>
     ServerName your-domain.example.com
+
+    # certbot certonly --webroot の検証パス。証明書がまだ無い最初の起動時から必要。
+    DocumentRoot /var/www/logseeker
 
     RewriteEngine On
     RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/
@@ -274,9 +297,13 @@ sudo chcon -R -t httpd_sys_content_t /var/www/logseeker   # SELinuxラベル（r
 <VirtualHost *:443>
     ServerName your-domain.example.com
 
-    SSLEngine on
-    SSLCertificateFile      /etc/letsencrypt/live/your-domain.example.com/fullchain.pem
-    SSLCertificateKeyFile   /etc/letsencrypt/live/your-domain.example.com/privkey.pem
+    # 証明書取得前はコメントアウトのままにしておくこと。
+    # （ここが有効な状態で存在するファイルを指していないと、mod_sslがhttpd起動時に
+    #   証明書ファイルの存在チェックで失敗する＝httpdが起動できない。
+    #   下の証明書取得手順が終わってから、コメントを外して`systemctl reload httpd`する）
+    #SSLEngine on
+    #SSLCertificateFile      /etc/letsencrypt/live/your-domain.example.com/fullchain.pem
+    #SSLCertificateKeyFile   /etc/letsencrypt/live/your-domain.example.com/privkey.pem
 
     # /ingest のリクエストサイズ上限（backend側のMAX_INGEST_BYTESと合わせる。既定5MB、ヘッダ分の余裕を見て8MBに設定）
     LimitRequestBody 8388608
@@ -304,21 +331,139 @@ sudo chcon -R -t httpd_sys_content_t /var/www/logseeker   # SELinuxラベル（r
 </VirtualHost>
 ```
 
-証明書取得（certbot、AlmaLinux/RHEL系の例）:
-```bash
-sudo dnf -y install certbot python3-certbot-apache
-sudo certbot --apache -d your-domain.example.com
-```
-
-設定確認・反映:
+まず上記の状態（443番のSSL設定はコメントアウトのまま）で起動する
+（`:443`のVirtualHost自体は存在するが証明書を要求されないよう`SSLEngine`行ごとコメントアウトしてある）:
 ```bash
 sudo apachectl configtest
 sudo systemctl enable --now httpd
+```
+
+証明書取得（certbot、AlmaLinux/RHEL系の例）。`--apache`はhttpdの再起動を自分で行おうとして
+上のコメントアウト状態と噛み合わず失敗するため、**`certonly --webroot`を使う**（証明書ファイルの取得のみ行い、
+Apache設定には触れない）:
+```bash
+sudo dnf -y install certbot
+sudo certbot certonly --webroot -w /var/www/logseeker -d your-domain.example.com
+```
+
+取得できたら`logseeker.conf`の`<VirtualHost *:443>`内、`SSLEngine on`〜`SSLCertificateKeyFile`の
+3行のコメント（`#`）を外し、反映する:
+```bash
+sudo apachectl configtest
 sudo systemctl reload httpd
 ```
 
+証明書の自動更新（`certbot renew`）はwebroot方式なのでhttpd再起動不要。cronやsystemdタイマーで
+`certbot renew --quiet`を定期実行しておく（certbotパッケージが`certbot-renew.timer`を自動で有効化する場合が多い。
+`systemctl list-timers | grep certbot`で確認）。
+
 SELinux（Enforcing前提）: Apacheからbackend(127.0.0.1:8000)へのプロキシ接続を許可する場合、
 `sudo setsebool -P httpd_can_network_connect 1` が必要になることがあります。
+
+### 代替: Cloudflare等でTLSを終端する場合（オリジンはHTTPのみ）
+
+Cloudflare等のCDN/プロキシを前段に置き、そちら側でTLS終端する構成であれば、
+オリジン（このサーバー）自身にLet's Encrypt証明書を取得する必要はない。
+その場合は上記の`<VirtualHost *:443>`・certbotの手順は丸ごと不要で、80番のみで運用する。
+
+`sudo vi /etc/httpd/conf.d/logseeker.conf`（または`sudo nano`等）で以下の内容を作成してください。
+
+```apache
+<VirtualHost *:80>
+    ServerName your-domain.example.com
+
+    LimitRequestBody 8388608
+    ProxyPreserveHost On
+
+    ProxyPass        /ingest http://127.0.0.1:8000/ingest
+    ProxyPassReverse /ingest http://127.0.0.1:8000/ingest
+    ProxyPass        /api http://127.0.0.1:8000/api
+    ProxyPassReverse /api http://127.0.0.1:8000/api
+    ProxyPass        /health http://127.0.0.1:8000/health
+    ProxyPassReverse /health http://127.0.0.1:8000/health
+
+    DocumentRoot /var/www/logseeker
+    <Directory /var/www/logseeker>
+        Options -Indexes
+        AllowOverride None
+        Require all granted
+        FallbackResource /index.html
+    </Directory>
+</VirtualHost>
+```
+
+Cloudflare側のSSL/TLS暗号化モードを、ダッシュボードの「SSL/TLS」→「概要」で選ぶ。
+
+**Flexible（最も簡単）**: ブラウザ⇔Cloudflareのみ暗号化、Cloudflare⇔オリジンは上記の平文HTTPのまま。
+firewalldは`http`のみで足りる:
+```bash
+sudo firewall-cmd --add-service=http --permanent
+sudo firewall-cmd --reload
+```
+> 「自動SSL/TLS（推奨）」のままだとCloudflareが自動判定で「フル」を選び、オリジンの443番が
+> 存在せずアクセスが522（Cloudflareからオリジンへ接続不可）になる。Flexibleを明示的に選ぶこと。
+
+**Full（厳格）（推奨・より安全）**: Cloudflare⇔オリジン間も暗号化する。Let's Encryptの
+HTTP-01検証は不要な、**Cloudflare Origin CA証明書**（SSL/TLS→「配信元サーバー証明書」→
+「証明書を作成する」、有効期間は最大15年）を使う。
+
+1. Cloudflareダッシュボードで発行した証明書とプライベートキーをオリジンに設置する
+   （このVPS上で作成・オリジンの外に出さない。`chmod 600`推奨）:
+   ```bash
+   sudo mkdir -p /etc/pki/tls/cloudflare
+   sudo vi /etc/pki/tls/cloudflare/logseeker-origin.pem   # 証明書を貼り付け
+   sudo vi /etc/pki/tls/cloudflare/logseeker-origin.key   # プライベートキーを貼り付け
+   sudo chmod 600 /etc/pki/tls/cloudflare/logseeker-origin.key
+   ```
+2. `logseeker.conf`を以下のように書き換える（`ssl.conf`無効化で消えた`Listen 443 https`を
+   復元しつつ、80番は443へリダイレクト、443番でCloudflare Origin CA証明書を使う）:
+   ```apache
+   Listen 443 https
+
+   <VirtualHost *:80>
+       ServerName your-domain.example.com
+
+       RewriteEngine On
+       RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+   </VirtualHost>
+
+   <VirtualHost *:443>
+       ServerName your-domain.example.com
+
+       SSLEngine on
+       SSLCertificateFile      /etc/pki/tls/cloudflare/logseeker-origin.pem
+       SSLCertificateKeyFile   /etc/pki/tls/cloudflare/logseeker-origin.key
+
+       LimitRequestBody 8388608
+       ProxyPreserveHost On
+
+       ProxyPass        /ingest http://127.0.0.1:8000/ingest
+       ProxyPassReverse /ingest http://127.0.0.1:8000/ingest
+       ProxyPass        /api http://127.0.0.1:8000/api
+       ProxyPassReverse /api http://127.0.0.1:8000/api
+       ProxyPass        /health http://127.0.0.1:8000/health
+       ProxyPassReverse /health http://127.0.0.1:8000/health
+
+       DocumentRoot /var/www/logseeker
+       <Directory /var/www/logseeker>
+           Options -Indexes
+           AllowOverride None
+           Require all granted
+           FallbackResource /index.html
+       </Directory>
+   </VirtualHost>
+   ```
+3. 反映してfirewalldで443も開ける:
+   ```bash
+   sudo apachectl configtest
+   sudo systemctl reload httpd
+   sudo firewall-cmd --add-service=https --permanent
+   sudo firewall-cmd --reload
+   ```
+4. Cloudflareダッシュボードの暗号化モードを「フル（厳格）」にする。
+
+> 逆に、Cloudflareを使わず本サーバーに直接ドメインを向ける場合は、上の証明書取得の手順
+> （本節冒頭）に従うこと。
 
 ---
 
@@ -374,7 +519,8 @@ pgAdminには関係する認証情報が3種類あるので混同しないよう
 ログイン画面が見えてしまいます。外部公開したくない場合は、`<VirtualHost *:443>` の中に
 `/pgadmin4` 専用のアクセス制限を追加してください。
 
-送信元IPを絞る場合の例（`/etc/httpd/conf.d/logseeker.conf` の `<VirtualHost *:443>` 内に追記）:
+送信元IPを絞る場合の例。`sudo vi /etc/httpd/conf.d/logseeker.conf`（または`sudo nano`等）で
+`<VirtualHost *:443>` 内に追記してください:
 ```apache
 <Location /pgadmin4>
     Require ip <自分のグローバルIP>
