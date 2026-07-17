@@ -398,6 +398,9 @@ REST `/ingest` のみで運用する場合はこの手順は不要です。
 >   516を開放し、可能であれば`--add-rich-rule`等で送信元IPを限定する（§7.1も参照）。
 
 ```bash
+# firewalldはイメージによっては未起動なので、まず確実に起動しておく
+sudo systemctl enable --now firewalld
+
 # 公開: 80/443（Apache）。TCP ingestは外部送信元がある場合のみ。
 sudo firewall-cmd --permanent --add-service=http --add-service=https
 sudo firewall-cmd --permanent --add-port=516/tcp
