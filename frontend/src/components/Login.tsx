@@ -37,13 +37,15 @@ export function Login({ onLoggedIn, sso }: {
             <h2 className="h3 text-center mb-3">アカウントにログイン</h2>
             {err && <div className="alert alert-danger py-2">{err}</div>}
             <div className="mb-3">
-              <label className="form-label">ユーザー名</label>
-              <input className="form-control" value={username} autoFocus
+              <label className="form-label" htmlFor="login-username">ユーザー名</label>
+              <input className="form-control" id="login-username" name="username"
+                autoComplete="username" value={username} autoFocus
                 onChange={(e) => setUsername(e.target.value)} />
             </div>
             <div className="mb-3">
-              <label className="form-label">パスワード</label>
-              <input className="form-control" type="password" value={password}
+              <label className="form-label" htmlFor="login-password">パスワード</label>
+              <input className="form-control" id="login-password" name="password"
+                type="password" autoComplete="current-password" value={password}
                 onChange={(e) => setPassword(e.target.value)} />
             </div>
             <div className="form-footer">
