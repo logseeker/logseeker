@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { stLabel } from "../labels";
-import type { EntityDetail, EntityRow, EventRow } from "../types";
+import type { EntityDetail, EntityRow, EventRow, Screen } from "../types";
 
 const TYPES = ["", "ip", "user", "host", "domain", "mac", "email"];
 const TYPE_LABEL: Record<string, string> = {
@@ -13,9 +13,10 @@ const PIVOT: Record<string, string> = {
   ip: "source_ip", user: "actor_user", host: "device_name", domain: "url_domain",
 };
 
-export function Entities({ onPick, initial }: {
+export function Entities({ onPick, initial, onNav }: {
   onPick: (k: string, v: string) => void;
   initial?: { type: string; value: string; nonce?: number };
+  onNav?: (s: Screen) => void;
 }) {
   const [type, setType] = useState(initial?.type ?? "");
   const [q, setQ] = useState("");
@@ -46,6 +47,16 @@ export function Entities({ onPick, initial }: {
 
   return (
     <div className="row row-cards">
+      <div className="col-12">
+        <div className="text-secondary small mb-1 d-flex align-items-center flex-wrap gap-2">
+          <span>
+            このページは、ログ上で観測された全ての識別子（IP・ユーザー・ホスト等）を対象にした調査・相関用の一覧です。
+            自社の資産一覧ではなく、アクセス元IPや外部ホストのIPも区別なく含まれます。
+            ローカルIPや登録済みグローバルIPを資産として確認したい場合は「アセット」画面をご覧ください。
+          </span>
+          {onNav && <button className="btn btn-sm btn-outline-secondary text-nowrap" onClick={() => onNav("assets")}>アセット画面へ</button>}
+        </div>
+      </div>
       <div className="col-12">
         <div className="card"><div className="card-body">
           <div className="d-flex gap-2 align-items-center flex-wrap">

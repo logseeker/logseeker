@@ -158,6 +158,20 @@ class EventEntity(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
 
+class Asset(Base):
+    """ユーザー登録のグローバルIP資産（§7.10）。ローカル(プライベート)IPは
+    ipaddress.is_private で動的判定するためここには保存しない（api.py 参照）。"""
+    __tablename__ = "assets"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ip: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    ip_version: Mapped[str] = mapped_column(String(2))  # v4 / v6
+    label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
 class Incident(Base):
     """インシデント＝調査ケース（§9.5）。"""
     __tablename__ = "incidents"

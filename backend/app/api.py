@@ -1,4 +1,5 @@
 """検索・集計・ダッシュボードAPI（PROJECT.md §11）。events と normalized_events を結合して扱う。"""
+import ipaddress
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query, Request, Response
@@ -8,12 +9,12 @@ from sqlalchemy.orm import Session
 from .auth import get_current_user, require_editor, require_login, require_sysadmin
 from .config import settings
 from .db import get_db
-from .models import Annotation, CustomRule, DeadLetter, Event, EventEntity, IOC, Incident, IncidentEvent
+from .models import Annotation, Asset, CustomRule, DeadLetter, Event, EventEntity, IOC, Incident, IncidentEvent
 from .models import IocFeed, License, Setting, User, UserSettings
 from .models import NormalizedEvent as N
-from .schema import (AnnotationCreate, CustomRuleCreate, CustomRuleUpdate, DismissedRelease, FeedUpdate,
-                     IncidentCreate, IncidentEventAdd, LicenseApply, NotificationConfig, SilenceSettings,
-                     SyncSettings)
+from .schema import (AnnotationCreate, AssetCreate, AssetUpdate, CustomRuleCreate, CustomRuleUpdate,
+                     DismissedRelease, FeedUpdate, IncidentCreate, IncidentEventAdd, LicenseApply,
+                     NotificationConfig, SilenceSettings, SyncSettings)
 
 router = APIRouter(prefix="/api")
 
@@ -372,6 +373,104 @@ def entity_events(type: str, value: str, db: Session = Depends(get_db),
             .where(Event.id.in_(select(ids.c.event_id)))
             .order_by(nulls_last(N.event_time.desc()), Event.id.desc()).limit(limit))
     return [_row(e, n) for e, n in db.execute(stmt).all()]
+
+
+# ============================ Assets（資産） §10.7 ============================
+# 「エンティティ」は観測された全IPの調査用一覧、「資産」は自社が保有するIPの一覧、という
+# 別概念（PROJECT.md 10.7/10.8）。ローカルIPは登録不要で自動判定、グローバルIPは
+# assets テーブルへの手動登録があるものだけを資産として扱う。
+def _classify_ip(ip: str) -> tuple[str, str] | None:
+    """IPを (ip_version, scope) に分類する。scope は private/global。パース不能は None。"""
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return None
+    return ("v4" if addr.version == 4 else "v6", "private" if addr.is_private else "global")
+
+
+def _asset_dict(ip: str, ip_version: str, scope: str, label: str | None, description: str | None,
+                asset_id: int | None, count: int, first_seen, last_seen) -> dict:
+    return {
+        "id": asset_id, "ip": ip, "ip_version": ip_version, "scope": scope,
+        "label": label, "description": description, "count": count,
+        "first_seen": first_seen.isoformat() if first_seen else None,
+        "last_seen": last_seen.isoformat() if last_seen else None,
+    }
+
+
+def _asset_reg_dict(a: Asset) -> dict:
+    return {"id": a.id, "ip": a.ip, "ip_version": a.ip_version, "label": a.label,
+            "description": a.description,
+            "created_at": a.created_at.isoformat() if a.created_at else None}
+
+
+@router.get("/assets")
+def list_assets(db: Session = Depends(get_db)):
+    stmt = (select(EventEntity.entity_value, func.count(), func.min(N.event_time), func.max(N.event_time))
+            .join(N, N.event_id == EventEntity.event_id)
+            .join(Event, Event.id == EventEntity.event_id)
+            .where(EventEntity.entity_type == "ip")
+            .group_by(EventEntity.entity_value))
+    lc = _license_clause(_blocked(db))
+    if lc is not None:
+        stmt = stmt.where(lc)
+    stats = {v: (c, fs, ls) for v, c, fs, ls in db.execute(stmt).all()}
+
+    out = []
+    for ip, (count, fs, ls) in stats.items():
+        cls = _classify_ip(ip)
+        if not cls or cls[1] != "private":
+            continue
+        out.append(_asset_dict(ip, cls[0], "local", None, None, None, count, fs, ls))
+
+    registered = db.execute(select(Asset).order_by(Asset.created_at.desc())).scalars().all()
+    for a in registered:
+        count, fs, ls = stats.get(a.ip, (0, None, None))
+        out.append(_asset_dict(a.ip, a.ip_version, "registered_global", a.label, a.description,
+                                a.id, count, fs, ls))
+
+    out.sort(key=lambda r: (r["scope"] != "local", -(r["count"] or 0)))
+    return out
+
+
+@router.post("/assets")
+def create_asset(body: AssetCreate, db: Session = Depends(get_db), actor=Depends(require_editor)):
+    cls = _classify_ip(body.ip)
+    if not cls:
+        return Response(status_code=400, content='{"error":"不正なIPアドレス"}', media_type="application/json")
+    ip_version, scope = cls
+    if scope == "private":
+        return Response(status_code=400,
+                        content='{"error":"ローカルIPは自動判定されるため登録不要です"}',
+                        media_type="application/json")
+    if db.execute(select(Asset).where(Asset.ip == body.ip)).scalar_one_or_none():
+        return Response(status_code=400, content='{"error":"既に登録済みです"}', media_type="application/json")
+    a = Asset(ip=body.ip, ip_version=ip_version, label=body.label, description=body.description,
+             created_by=getattr(actor, "username", None))
+    db.add(a)
+    db.commit()
+    return _asset_reg_dict(a)
+
+
+@router.put("/assets/{asset_id}")
+def update_asset(asset_id: int, body: AssetUpdate, db: Session = Depends(get_db), _a=Depends(require_editor)):
+    a = db.get(Asset, asset_id)
+    if not a:
+        return Response(status_code=404, content='{"error":"not found"}', media_type="application/json")
+    for k, v in body.model_dump(exclude_unset=True).items():
+        setattr(a, k, v)
+    db.commit()
+    return _asset_reg_dict(a)
+
+
+@router.delete("/assets/{asset_id}")
+def delete_asset(asset_id: int, db: Session = Depends(get_db), _a=Depends(require_editor)):
+    a = db.get(Asset, asset_id)
+    if not a:
+        return Response(status_code=404, content='{"error":"not found"}', media_type="application/json")
+    db.delete(a)
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/events/{event_id}/related")

@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import {
   IconAffiliate, IconAlertTriangle, IconArrowsExchange, IconBell, IconClipboardList, IconColumns,
   IconFileText, IconCloudDownload, IconGauge, IconInbox, IconLayoutDashboard, IconLicense, IconList,
-  IconLogout, IconServer, IconSettings, IconShield, IconSitemap, IconSpeakerphone, IconUsers, IconWorld,
+  IconLogout, IconServer, IconSettings, IconShield, IconShieldCheck, IconSitemap, IconSpeakerphone,
+  IconUsers, IconWorld,
 } from "@tabler/icons-react";
 import { useChangelog } from "./changelog";
 import { Changelog } from "./components/Changelog";
@@ -11,6 +12,7 @@ import { Events } from "./components/Events";
 import { Sources } from "./components/Sources";
 import { HostsDomains } from "./components/HostsDomains";
 import { Fields } from "./components/Fields";
+import { Assets } from "./components/Assets";
 import { Entities } from "./components/Entities";
 import { Ingest } from "./components/Ingest";
 import { Operations } from "./components/Operations";
@@ -83,6 +85,7 @@ const MENU: { key: Screen; label: string; Icon: typeof IconList; ready: boolean 
   { key: "sources", label: "ログソース", Icon: IconServer, ready: true },
   { key: "hosts", label: "ホスト / ドメイン", Icon: IconWorld, ready: true },
   { key: "fields", label: "フィールド", Icon: IconColumns, ready: true },
+  { key: "assets", label: "アセット（資産）", Icon: IconShieldCheck, ready: true },
   { key: "entities", label: "エンティティ", Icon: IconAffiliate, ready: true },
   { key: "correlations", label: "相関分析", Icon: IconSitemap, ready: true },
   { key: "mappings", label: "マッピング", Icon: IconArrowsExchange, ready: true },
@@ -195,7 +198,8 @@ export default function App() {
       case "sources": return <Sources filter={filter} onPick={drill} />;
       case "hosts": return <HostsDomains filter={filter} onPick={drill} />;
       case "fields": return <Fields filter={filter} />;
-      case "entities": return <Entities onPick={drill} initial={entityInit} />;
+      case "assets": return <Assets onEntity={navEntity} auth={auth ?? undefined} />;
+      case "entities": return <Entities onPick={drill} initial={entityInit} onNav={setScreen} />;
       case "ingest": return <Ingest />;
       case "operations": return <Operations />;
       case "incidents": return <Incidents />;

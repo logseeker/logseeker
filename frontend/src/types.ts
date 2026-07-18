@@ -75,6 +75,17 @@ export interface EntityRow {
   entity_type: string; entity_value: string; count: number;
   first_seen: string | null; last_seen: string | null;
 }
+export interface AssetRow {
+  id: number | null;
+  ip: string;
+  ip_version: "v4" | "v6";
+  scope: "local" | "registered_global";
+  label: string | null;
+  description: string | null;
+  count: number;
+  first_seen: string | null;
+  last_seen: string | null;
+}
 export interface EntityDetail {
   entity_type: string; entity_value: string; count: number;
   first_seen: string | null; last_seen: string | null;
@@ -224,7 +235,7 @@ export interface NotificationConfig {
 }
 
 export type Screen =
-  | "dashboard" | "events" | "sources" | "hosts" | "entities" | "correlations"
+  | "dashboard" | "events" | "sources" | "hosts" | "assets" | "entities" | "correlations"
   | "fields" | "mappings" | "ingest" | "operations" | "deadletters" | "incidents" | "rules"
   | "threatintel" | "notifications" | "license" | "admin" | "users" | "audit" | "changelog";
 

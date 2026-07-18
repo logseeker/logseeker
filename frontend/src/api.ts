@@ -1,5 +1,5 @@
 import type {
-  AdminOverview, Annotation, AuditResponse, AuthStatus, AuthUser, CorrelationResponse, Count,
+  AdminOverview, Annotation, AssetRow, AuditResponse, AuthStatus, AuthUser, CorrelationResponse, Count,
   CreateUserResult, CustomRule, CustomRulesResponse, DeadLettersResponse, EntityDetail, EntityRow,
   EventDetail, EventRow, EventsResponse, FieldInfo, FilterState, IncidentDetail, IncidentRow,
   IngestStatus, IngestVolume, IocFeedsInfo, LicenseInfo, MappingsResponse, NotificationConfig,
@@ -96,6 +96,14 @@ export const api = {
   entity: (type: string, value: string) => get<EntityDetail>(`/api/entity?type=${ev(type)}&value=${ev(value)}`),
   entityEvents: (type: string, value: string) => get<EventRow[]>(`/api/entity/events?type=${ev(type)}&value=${ev(value)}`),
   related: (id: number) => get<{ keys: { entity_type: string; entity_value: string }[]; items: EventRow[] }>(`/api/events/${id}/related`),
+
+  // 資産（アセット）：ローカルIPは自動判定、グローバルIPは手動登録
+  assets: () => get<AssetRow[]>(`/api/assets`),
+  createAsset: (b: { ip: string; label?: string; description?: string }) =>
+    post<{ id: number; ip: string; ip_version: string; label: string | null; description: string | null }>(`/api/assets`, b),
+  updateAsset: (id: number, b: { label?: string; description?: string }) =>
+    put<{ id: number; ip: string; ip_version: string; label: string | null; description: string | null }>(`/api/assets/${id}`, b),
+  deleteAsset: (id: number) => del<{ ok: boolean }>(`/api/assets/${id}`),
 
   // MVP5: インシデント & コメント
   incidents: () => get<IncidentRow[]>(`/api/incidents`),

@@ -901,6 +901,33 @@ mapping_configs
 
 ---
 
+### 7.10 assets
+
+ユーザーが明示的に登録したグローバルIP資産を保存する。
+ローカル(プライベート)IPは動的に自動判定するため、このテーブルへの登録は不要
+（判定ルールは 10.7 Assets を参照）。
+
+```text
+assets
+- id
+- ip
+- ip_version
+- label
+- description
+- created_by
+- created_at
+- updated_at
+```
+
+ip_version:
+
+```text
+v4
+v6
+```
+
+---
+
 ## 8. parser / extractor / mapping
 
 ### 8.1 parser
@@ -1093,7 +1120,22 @@ GET /api/entities/{type}/{value}/timeline
 
 ---
 
-### 9.6 admin API
+### 9.6 assets API
+
+```text
+GET /api/assets
+GET /api/assets/{ip}
+POST /api/assets
+PUT /api/assets/{id}
+DELETE /api/assets/{id}
+```
+
+ローカル(プライベート)IPは自動判定して一覧に含めるため、登録系エンドポイントの対象は
+グローバルIPのみでよい。
+
+---
+
+### 9.7 admin API
 
 ```text
 GET /api/admin/ingest-status
@@ -1117,6 +1159,7 @@ Dashboard
 Events
 Sources
 Hosts / Domains
+Assets
 Entities
 Correlations
 Fields
@@ -1360,7 +1403,62 @@ kantsuri
 
 ---
 
-### 10.7 Entities
+### 10.7 Assets（アセット / 資産）
+
+自社が保有するIP資産を確認する画面。Entities（ログ上で観測された全IP）とは異なり、
+「自分たちの資産かどうか」を軸にした一覧である。
+
+対象:
+
+```text
+ローカルIP（プライベートアドレス）: 自動判定。登録不要
+グローバルIP（自前のVPS/クラウド/オフィス回線等）: ユーザーが手動登録
+```
+
+ローカルIP自動判定ルール（IPv4）:
+
+```text
+10.0.0.0/8
+172.16.0.0/12
+192.168.0.0/16
+127.0.0.0/8
+169.254.0.0/16
+```
+
+ローカルIP自動判定ルール（IPv6）:
+
+```text
+fc00::/7   (Unique Local Address)
+fe80::/10  (link-local)
+::1        (loopback)
+```
+
+上記レンジに一致する IP entity は、登録なしで自動的に資産として一覧表示する。
+上記に一致しないグローバルIPは、ユーザーが assets（7.10）に登録したものだけ資産として
+表示する。未登録のグローバルIPは Assets には表示されず、Entities側で通常のIPエンティティ
+として（区分：未登録/グローバル）確認できる。
+
+表示項目:
+
+```text
+IP
+IPバージョン（v4 / v6）
+区分（ローカル / 登録済みグローバル）
+ラベル（登録時のみ）
+初回出現
+最終出現
+出現回数
+関連ホスト/デバイス
+```
+
+---
+
+### 10.8 Entities
+
+ログ上で観測された全ての識別子（IP・ユーザー・MAC・ドメイン等）を対象にした
+調査・相関用の一覧画面である。**自社の資産一覧ではない**。アクセス元IPや外部ホストの
+IPも区別なく含まれる。ローカルIPおよび登録済みグローバルIPの資産としての確認は
+Assets（10.7）を参照する。
 
 IP、ユーザー、MAC、URL、リソースを軸に調査する画面。
 
@@ -1394,7 +1492,7 @@ Entity detail では以下を表示する。
 
 ---
 
-### 10.8 Correlations
+### 10.9 Correlations
 
 相関イベントを確認する画面。
 
@@ -1417,7 +1515,7 @@ near_time
 
 ---
 
-### 10.9 Fields
+### 10.10 Fields
 
 payload に含まれるフィールドを探索する画面。
 
@@ -1444,7 +1542,7 @@ mapping候補を作る
 
 ---
 
-### 10.10 Mappings
+### 10.11 Mappings
 
 payload key と taxonomy field の対応を管理する画面。
 
@@ -1460,7 +1558,7 @@ mapping versionを管理する
 
 ---
 
-### 10.11 Ingest
+### 10.12 Ingest
 
 API / TCP 受信状態を確認する画面。
 
@@ -1478,7 +1576,7 @@ dead letter件数
 
 ---
 
-### 10.12 Dead Letters
+### 10.13 Dead Letters
 
 不正 JSON や取り込み失敗を確認する画面。
 
@@ -1762,6 +1860,8 @@ MAC抽出
 URL抽出
 エンティティ画面
 相関イベント一覧
+assets（ローカルIP自動判定 + グローバルIP手動登録）
+Assets画面
 ```
 
 ---

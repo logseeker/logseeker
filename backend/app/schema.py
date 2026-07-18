@@ -95,6 +95,17 @@ class CustomRuleUpdate(BaseModel):
     enabled: bool | None = None
 
 
+class AssetCreate(BaseModel):
+    ip: str
+    label: str | None = None
+    description: str | None = None
+
+
+class AssetUpdate(BaseModel):
+    label: str | None = None
+    description: str | None = None
+
+
 class SilenceSettings(BaseModel):
     hours: int = 24
 
