@@ -259,6 +259,10 @@ sudo chown -R apache:apache /var/www/logseeker   # SELinux Enforcing環境の権
 sudo chcon -R -t httpd_sys_content_t /var/www/logseeker   # SELinuxラベル（restorecon代替）
 ```
 
+> `getenforce`が`Disabled`の環境（多くのクラウドVPSの既定イメージ含む）では、上の`chcon`が
+> `ラベルが付けられていないファイル...`というエラーで失敗するが、これは無害。SELinux自体が
+> 無効なのでラベル付けが意味を持たないだけで、配信には影響しない。無視してよい。
+
 コード更新時は `npm run build` をやり直して `/var/www/logseeker` へ再配置してください。
 
 ---
