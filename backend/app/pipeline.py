@@ -12,6 +12,11 @@ from .normalize import PARSER_VERSION, normalize
 log = logging.getLogger("pipeline")
 _NORM_COLS = set(NormalizedEvent.__table__.columns.keys()) - {"event_id"}
 
+# syslogのファシリティ/ログファイル名（secure, messages等）はPROJECT.mdの方針により
+# source_type として使わない。NXLog経由のLinuxログは source_type="linux" に一本化する
+# （どのログファイル由来かは payload の SourceModuleName 等、他フィールドで判別する）。
+_SOURCE_TYPE_ALIASES = {"secure": "linux", "messages": "linux"}
+
 # 正規化フィールド → 相関エンティティ (entity_type, role)
 # エンティティ＝相関・調査の対象になる「資産／主体／観測可能な指標」だけを持つ。
 # URLパスやリクエストIDは“リクエストの属性”であって資産ではないのでここには入れない
@@ -63,6 +68,7 @@ def ingest_one(
     どれにもマッチしなければ None のまま（従来通り Event.source_type=NULL → UI "Unknown" 表示）。"""
     if not source_type:
         source_type = detect_source_type(db, payload)
+    source_type = _SOURCE_TYPE_ALIASES.get(source_type, source_type)
 
     ev = Event(
         payload=payload,
