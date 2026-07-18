@@ -47,10 +47,31 @@ def set_silence_hours(db: Session, hours: int) -> None:
     db.commit()
 
 # 危険パス（攻撃でよく狙われる）。url_path にこれらを含むアクセスは1回でも要注意。
+# 有名CMS/フレームワークの管理画面・設定ファイル探索パターンを含む（WordPress/Movable Type/
+# Joomla/Drupal/TYPO3/EC-CUBE 等）。frontend/src/advice.ts の SENSITIVE と同期させること。
 SENSITIVE_PATHS = [
-    "wp-login", "xmlrpc.php", "wp-config", "/.env", "/.git", "/.aws",
-    "/phpmyadmin", "/phpMyAdmin", "eval-stdin", "/shell", "/wp-content/plugins/",
-    "/wp-admin/", "/.ssh", "/config.php", "/vendor/", "/.well-known/", "wso.php",
+    # WordPress
+    "wp-login", "xmlrpc.php", "wp-config", "/wp-admin/", "/wp-content/plugins/",
+    "/wp-content/uploads/", "/wp-json/wp/v2/users",
+    # Movable Type
+    "mt-static/", "mt-config.cgi", "/mt.cgi", "mt-search.cgi", "mt-load.cgi", "mt-comments.cgi",
+    # Joomla
+    "/administrator/", "/components/com_", "configuration.php~",
+    # Drupal
+    "/user/register", "/core/CHANGELOG.txt", "/sites/default/settings.php",
+    # TYPO3
+    "/typo3/", "/typo3conf/",
+    # EC-CUBE（国内ECサイトで多用）
+    "/html/admin/", "/data/downloads/",
+    # phpMyAdmin 系
+    "/phpmyadmin", "/phpMyAdmin", "/pma/", "/myadmin/", "/dbadmin/",
+    # 汎用の機密ファイル・設定ファイル
+    "/.env", "/.git", "/.aws", "/.ssh", "/config.php", "/vendor/", "/.well-known/",
+    "/.htpasswd", "/.docker/", "web.config",
+    # フレームワークのデバッグ/管理系エンドポイント
+    "/actuator", "/telescope", "/_profiler", "/_ignition",
+    # Webシェル・コマンド実行の痕跡
+    "eval-stdin", "/shell", "wso.php", "c99.php", "r57.php", "/cmd.php",
 ]
 
 # ルール定義（画面の「監視ルール一覧」用）
@@ -62,7 +83,7 @@ RULE_DEFS = [
      "description": "同一送信元からの 4xx(404等) 失敗リクエストが多発。",
      "recommendation": "該当IPをWAF/FWで遮断。/wp-* 等の不要パスを塞ぎ、レート制限を導入。"},
     {"id": "sensitive_path", "name": "危険パスへのアクセス", "severity": "high",
-     "description": "wp-login / xmlrpc / .env / .git / phpMyAdmin 等、攻撃で狙われるパスへのアクセス。",
+     "description": "WordPress/Movable Type/Joomla/Drupal/TYPO3/EC-CUBE等の管理画面・.env/.git/phpMyAdmin等、攻撃で狙われるパスへのアクセス。",
      "recommendation": "該当IPを遮断。該当パスを公開停止/認証保護。CMS・プラグインを最新化。"},
     {"id": "auth_bruteforce_user", "name": "認証総当たり（ユーザー単位）", "severity": "high",
      "description": "同一ユーザーへの認証失敗が多発。",

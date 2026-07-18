@@ -18,10 +18,30 @@ interface EventLike {
   source_type?: string | null;
 }
 
+// backend/app/rules.py の SENSITIVE_PATHS と同期させること。
 const SENSITIVE = [
-  "wp-login", "xmlrpc.php", "wp-config", "/.env", "/.git", "/.aws", "/phpmyadmin",
-  "/phpMyAdmin", "eval-stdin", "/shell", "/wp-content/plugins/", "/wp-admin/", "/.ssh",
-  "/config.php", "/vendor/", "/.well-known/", "wso.php",
+  // WordPress
+  "wp-login", "xmlrpc.php", "wp-config", "/wp-admin/", "/wp-content/plugins/",
+  "/wp-content/uploads/", "/wp-json/wp/v2/users",
+  // Movable Type
+  "mt-static/", "mt-config.cgi", "/mt.cgi", "mt-search.cgi", "mt-load.cgi", "mt-comments.cgi",
+  // Joomla
+  "/administrator/", "/components/com_", "configuration.php~",
+  // Drupal
+  "/user/register", "/core/CHANGELOG.txt", "/sites/default/settings.php",
+  // TYPO3
+  "/typo3/", "/typo3conf/",
+  // EC-CUBE
+  "/html/admin/", "/data/downloads/",
+  // phpMyAdmin 系
+  "/phpmyadmin", "/phpMyAdmin", "/pma/", "/myadmin/", "/dbadmin/",
+  // 汎用の機密ファイル・設定ファイル
+  "/.env", "/.git", "/.aws", "/.ssh", "/config.php", "/vendor/", "/.well-known/",
+  "/.htpasswd", "/.docker/", "web.config",
+  // フレームワークのデバッグ/管理系エンドポイント
+  "/actuator", "/telescope", "/_profiler", "/_ignition",
+  // Webシェル・コマンド実行の痕跡
+  "eval-stdin", "/shell", "wso.php", "c99.php", "r57.php", "/cmd.php",
 ];
 
 export function adviseForEvent(e: EventLike): EventAdvice | null {

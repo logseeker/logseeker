@@ -22,6 +22,21 @@ function SevBadge({ s }: { s: string | null }) {
 }
 const dash = (v: string | null) => (v ? v : <span className="text-secondary">-</span>);
 
+// ページ番号一覧を生成（多い場合は省略記号「…」を挟む）。例: 1 … 4 5 [6] 7 8 … 20
+function pageNumbers(current: number, total: number): (number | "...")[] {
+  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+  const keep = new Set([1, 2, total - 1, total, current - 1, current, current + 1]);
+  const sorted = [...keep].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
+  const result: (number | "...")[] = [];
+  let prev = 0;
+  for (const p of sorted) {
+    if (prev && p - prev > 1) result.push("...");
+    result.push(p);
+    prev = p;
+  }
+  return result;
+}
+
 // 横スクロール時も主要列（時刻・ログソース・種別・重大度）を常に見えるようにする sticky 設定。
 const STICKY_W = [150, 130, 90, 90]; // px: 時刻, ログソース, 種別, 重大度
 const STICKY_LEFT = STICKY_W.reduce<number[]>((acc, _w, i) => [...acc, i === 0 ? 0 : acc[i - 1] + STICKY_W[i - 1]], []);
@@ -142,6 +157,9 @@ export function Events({
   const to = offset + data.items.length;
   const hasPrev = offset > 0;
   const hasNext = to < data.total;
+  const totalPages = Math.max(1, Math.ceil(data.total / pageSize));
+  const currentPage = Math.floor(offset / pageSize) + 1;
+  const goToPage = (p: number) => setOffset((Math.min(Math.max(p, 1), totalPages) - 1) * pageSize);
 
   return (
     <div className="row row-cards">
@@ -292,8 +310,8 @@ export function Events({
             </tbody>
           </table>
           </div>
-          <div className="card-footer d-flex align-items-center">
-            <span className="text-secondary">{from.toLocaleString()}–{to.toLocaleString()} / {data.total.toLocaleString()} 件</span>
+          <div className="card-footer d-flex align-items-center flex-wrap gap-2">
+            <span className="text-secondary">{from.toLocaleString()}–{to.toLocaleString()} / {data.total.toLocaleString()} 件（{currentPage} / {totalPages} ページ）</span>
             <div className="ms-auto d-flex align-items-center gap-2">
               <span className="text-secondary small">表示件数</span>
               <select className="form-select form-select-sm w-auto" value={pageSize}
@@ -301,8 +319,29 @@ export function Events({
                 <option value={30}>30</option><option value={50}>50</option>
                 <option value={100}>100</option><option value={200}>200</option>
               </select>
-              <button className="btn btn-sm" disabled={!hasPrev} onClick={() => setOffset(Math.max(0, offset - pageSize))}>← 前</button>
-              <button className="btn btn-sm" disabled={!hasNext} onClick={() => setOffset(offset + pageSize)}>次 →</button>
+              <ul className="pagination pagination-sm m-0">
+                <li className={`page-item ${!hasPrev ? "disabled" : ""}`}>
+                  <button type="button" className="page-link" disabled={!hasPrev} onClick={() => goToPage(1)}>«</button>
+                </li>
+                <li className={`page-item ${!hasPrev ? "disabled" : ""}`}>
+                  <button type="button" className="page-link" disabled={!hasPrev} onClick={() => goToPage(currentPage - 1)}>前</button>
+                </li>
+                {pageNumbers(currentPage, totalPages).map((p, i) =>
+                  p === "..." ? (
+                    <li key={`ellipsis-${i}`} className="page-item disabled"><span className="page-link">…</span></li>
+                  ) : (
+                    <li key={p} className={`page-item ${p === currentPage ? "active" : ""}`}>
+                      <button type="button" className="page-link" onClick={() => goToPage(p)}>{p}</button>
+                    </li>
+                  )
+                )}
+                <li className={`page-item ${!hasNext ? "disabled" : ""}`}>
+                  <button type="button" className="page-link" disabled={!hasNext} onClick={() => goToPage(currentPage + 1)}>次</button>
+                </li>
+                <li className={`page-item ${!hasNext ? "disabled" : ""}`}>
+                  <button type="button" className="page-link" disabled={!hasNext} onClick={() => goToPage(totalPages)}>»</button>
+                </li>
+              </ul>
             </div>
           </div>
         </div>
