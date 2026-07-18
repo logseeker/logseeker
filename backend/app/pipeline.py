@@ -5,7 +5,7 @@ import logging
 from sqlalchemy.orm import Session
 
 from .detectors import detect_source_type
-from .geoip import country_of
+from .geoip import asn_of, country_of
 from .models import DeadLetter, Event, EventEntity, NormalizedEvent
 from .normalize import PARSER_VERSION, normalize
 
@@ -82,11 +82,16 @@ def ingest_one(
     try:
         norm, status = normalize(payload, source, source_type)
         ev.parse_status = status
-        # GeoIP: mmdb があれば国コードを付与（無ければ null のまま。オフライン・ローカル処理のみ）
+        # GeoIP: mmdb があれば国コード・ASNを付与（無ければ null のまま。オフライン・ローカル処理のみ）
         if norm.get("source_ip"):
             country = country_of(norm["source_ip"])
             if country:
                 norm["source_country"] = country
+            asn, as_org = asn_of(norm["source_ip"])
+            if asn:
+                norm["source_asn"] = asn
+            if as_org:
+                norm["source_as_org"] = as_org
     except Exception as e:  # 正規化に失敗しても payload は保存する（§19.1）
         log.warning("normalize failed: %s", e)
         norm, ev.parse_status, ev.parse_error = {}, "failed", str(e)

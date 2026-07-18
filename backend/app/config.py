@@ -19,6 +19,10 @@ class Settings:
     GEOIP_DB_PATH: str = os.getenv(
         "GEOIP_DB_PATH", str(BASE_DIR / "geoip" / "GeoLite2-Country.mmdb")
     )
+    # GeoIP ASN mmdb の場所（任意）。存在しなければ asn/as_org=null で動作。
+    GEOIP_ASN_DB_PATH: str = os.getenv(
+        "GEOIP_ASN_DB_PATH", str(BASE_DIR / "geoip" / "GeoLite2-ASN.mmdb")
+    )
 
     # 取り込んだ生JSONを保存する場所（bind mount される）
     JSON_STORE_DIR: Path = Path(os.getenv("JSON_STORE_DIR", str(BASE_DIR / "data" / "json")))

@@ -16,9 +16,11 @@ FIELD_MAP: dict[str, Any] = {
     "event_category": N.event_category, "event_action": N.event_action, "event_result": N.event_result,
     "http_status_code": N.http_status_code, "service_name": N.service_name,
     "source_country": N.source_country, "host_name": N.host_name,
+    "source_asn": N.source_asn, "source_as_org": N.source_as_org,
 }
 # 集計軸（group_by）に使える項目（Eventsの絞り込みキーと一致させる＝クリックで絞込可能にするため）
-GROUPBY_FIELDS = ["source_ip", "actor_user", "device_name", "url_domain", "host_name", "source_country"]
+GROUPBY_FIELDS = ["source_ip", "actor_user", "device_name", "url_domain", "host_name", "source_country",
+                  "source_as_org"]
 
 # しきい値（必要なら調整）
 WEB_SCAN_MIN = 10      # 同一IPからの 4xx 失敗リクエスト数

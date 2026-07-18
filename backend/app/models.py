@@ -72,6 +72,8 @@ class NormalizedEvent(Base):
     # network 系
     source_ip: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     source_country: Mapped[str | None] = mapped_column(String(4), index=True, nullable=True)  # ISO国コード（GeoIP mmdb 未設定時は null）
+    source_asn: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # AS番号（GeoIP ASN mmdb 未設定時は null）
+    source_as_org: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)  # AS組織名（同上）
     source_port: Mapped[str | None] = mapped_column(String(16), nullable=True)
     destination_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     destination_port: Mapped[str | None] = mapped_column(String(16), nullable=True)

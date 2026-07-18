@@ -31,6 +31,8 @@ TAX_COLS = {
     "device_name": N.device_name,
     "source_ip": N.source_ip,
     "source_country": N.source_country,
+    "source_asn": N.source_asn,
+    "source_as_org": N.source_as_org,
     "actor_user": N.actor_user,
     "url_domain": N.url_domain,
     "url_path": N.url_path,
@@ -129,7 +131,8 @@ def _row(ev: Event, n: N) -> dict:
         "event_category": n.event_category, "event_action": n.event_action,
         "event_result": n.event_result, "event_severity": n.event_severity,
         "source_name": n.source_name, "device_name": n.device_name,
-        "source_ip": n.source_ip, "source_country": n.source_country, "actor_user": n.actor_user,
+        "source_ip": n.source_ip, "source_country": n.source_country,
+        "source_asn": n.source_asn, "source_as_org": n.source_as_org, "actor_user": n.actor_user,
         "url_domain": n.url_domain, "url_path": n.url_path,
         "http_method": n.http_method, "http_status_code": n.http_status_code,
         "service_name": n.service_name,
@@ -195,7 +198,8 @@ def export_events(db: Session = Depends(get_db), f: dict = Depends(filters),
     import io
     buf = io.StringIO()
     cols = ["id", "event_time", "source_name", "source_type", "device_name", "url_domain",
-            "source_ip", "source_country", "actor_user", "event_action", "event_result",
+            "source_ip", "source_country", "source_asn", "source_as_org", "actor_user",
+            "event_action", "event_result",
             "event_severity", "service_name", "url_path", "http_status_code", "message"]
     w = csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
     w.writeheader()

@@ -10,7 +10,7 @@ payload は無改変。source_type / normalized_events / event_entities のみ�
 import argparse
 
 from ..db import SessionLocal
-from ..geoip import country_of
+from ..geoip import asn_of, country_of
 from ..models import Event, EventEntity, NormalizedEvent
 from ..normalize import normalize
 from ..pipeline import _NORM_COLS, _entities
@@ -43,6 +43,11 @@ def main() -> None:
             country = country_of(norm["source_ip"])
             if country:
                 norm["source_country"] = country
+            asn, as_org = asn_of(norm["source_ip"])
+            if asn:
+                norm["source_asn"] = asn
+            if as_org:
+                norm["source_as_org"] = as_org
 
         db.query(NormalizedEvent).filter(NormalizedEvent.event_id == ev.id).delete()
         db.query(EventEntity).filter(EventEntity.event_id == ev.id).delete()

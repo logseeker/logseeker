@@ -14,6 +14,7 @@ const FIELD_LABEL: Record<string, string> = {
   source_ip: "送信元IP", device_name: "ホスト/デバイス", event_category: "カテゴリ",
   event_action: "アクション", event_result: "結果", http_status_code: "HTTPステータス",
   service_name: "サービス", source_country: "国コード", host_name: "ホスト名",
+  source_asn: "AS番号", source_as_org: "AS組織名",
 };
 
 const EMPTY_FORM = {

@@ -15,6 +15,8 @@ export interface EventRow {
   service_name: string | null;
   source_ip: string | null;
   source_country: string | null;
+  source_asn: number | null;
+  source_as_org: string | null;
   actor_user: string | null;
   url_path: string | null;
   http_method: string | null;

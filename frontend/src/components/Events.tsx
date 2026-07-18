@@ -294,6 +294,11 @@ export function Events({
                   <td className="text-nowrap">
                     <a role="button" className="text-primary" onClick={(ev) => { stop(ev); e.source_ip && onTax("source_ip", e.source_ip); }}>{dash(e.source_ip)}</a>
                     {e.source_country && <span className="badge bg-secondary-lt ms-1">{e.source_country}</span>}
+                    {e.source_as_org && (
+                      <a role="button" className="text-reset" onClick={(ev) => { stop(ev); onTax("source_as_org", e.source_as_org!); }}>
+                        <br /><small className="text-secondary">{e.source_as_org}{e.source_asn ? ` (AS${e.source_asn})` : ""}</small>
+                      </a>
+                    )}
                   </td>
                   <td className="text-nowrap">{dash(e.actor_user)}</td>
                   <td className="text-nowrap">
