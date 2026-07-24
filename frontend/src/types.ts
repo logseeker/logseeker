@@ -177,6 +177,13 @@ export interface AuthStatus {
   roles: { value: Role; label: string }[];
   sso: SsoStatus;
 }
+export interface IpAllowEntry { cidr: string; label: string; }
+export interface IpRestrictScope { key: string; label: string; enabled: boolean; }
+export interface IpRestrictStatus {
+  scopes: IpRestrictScope[];
+  allowlist: IpAllowEntry[];
+  your_ip: string | null;
+}
 export interface AuditRow {
   id: number; at: string | null; username: string | null; role: string | null;
   action: string; method: string | null; path: string | null; status: string | null;
@@ -239,7 +246,8 @@ export interface NotificationConfig {
 export type Screen =
   | "dashboard" | "events" | "sources" | "hosts" | "assets" | "entities" | "correlations"
   | "fields" | "mappings" | "ingest" | "operations" | "deadletters" | "incidents" | "rules"
-  | "threatintel" | "notifications" | "license" | "admin" | "users" | "audit" | "changelog";
+  | "threatintel" | "notifications" | "license" | "admin" | "users" | "audit" | "changelog"
+  | "administration";
 
 export interface ReleaseItem {
   tag_name: string;

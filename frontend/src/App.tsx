@@ -25,6 +25,7 @@ import { Correlations } from "./components/Correlations";
 import { DeadLetters } from "./components/DeadLetters";
 import { Mappings } from "./components/Mappings";
 import { Admin } from "./components/Admin";
+import { Administration } from "./components/Administration";
 import { Users } from "./components/Users";
 import { Audit } from "./components/Audit";
 import { Login } from "./components/Login";
@@ -177,6 +178,10 @@ export default function App() {
     setScreen("entities");
   };
 
+  // 通常のログイン後画面とは完全に切り離した管理パネル。左メニューには出さず、
+  // 認証状態(auth)やログイン画面のチェックより前段でURLだけを見て振り分ける。
+  if (screen === "administration") return <Administration />;
+
   const cur = MENU.find((m) => m.key === screen)!;
   const onFilterScreen = FILTER_SCREENS.has(screen);
 
@@ -209,7 +214,7 @@ export default function App() {
       case "correlations": return <Correlations onPick={drill} onEntity={navEntity} />;
       case "mappings": return <Mappings />;
       case "deadletters": return <DeadLetters />;
-      case "admin": return auth ? <Admin onNav={setScreen} auth={auth} onAuthChanged={loadAuth} /> : null;
+      case "admin": return <Admin onNav={setScreen} auth={auth ?? undefined} />;
       case "users": return auth ? <Users auth={auth} onChanged={loadAuth} /> : null;
       case "audit": return <Audit />;
       case "license": return <License />;

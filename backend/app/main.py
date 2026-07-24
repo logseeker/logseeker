@@ -119,7 +119,7 @@ async def audit_mutations(request: Request, call_next):
 
 # 認証必須(ON)のとき、/api 全体でログインを強制する（読み取りAPIも含めて一括防御）。
 # ログイン前でも必要な status/login は素通り。/ingest は機器用（INGEST_TOKENで別管理）。
-_AUTH_OPEN_PATHS = {"/api/auth/login", "/api/auth/status"}
+_AUTH_OPEN_PATHS = {"/api/auth/login", "/api/auth/status", "/api/auth/admin-login"}
 
 
 @app.middleware("http")
@@ -134,6 +134,32 @@ async def enforce_auth(request: Request, call_next):
                 return JSONResponse({"error": "ログインが必要です"}, status_code=401)
         finally:
             db.close()
+    return await call_next(request)
+
+
+# 画面ごとのIPアクセス制限（アプリ層・任意ON）。有効化されたscopeのパスだけ、許可リスト外のIPを拒否する。
+@app.middleware("http")
+async def enforce_ip_restrict(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api"):
+        from . import ip_restrict as R
+        from .auth import access_control_ip, audit
+        from .db import SessionLocal
+        scope = R.scope_for_path(path)
+        if scope:
+            db = SessionLocal()
+            try:
+                if scope in R.enabled_scopes(db):
+                    ip = access_control_ip(request)
+                    if not R.ip_in_allowlist(db, ip):
+                        audit(db, action="ip_restrict.block", method=request.method, path=path,
+                              status="403", ip=ip, detail=f"scope={scope}")
+                        return JSONResponse(
+                            {"error": "このネットワークからのアクセスは許可されていません", "your_ip": ip},
+                            status_code=403,
+                        )
+            finally:
+                db.close()
     return await call_next(request)
 
 

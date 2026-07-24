@@ -124,6 +124,16 @@ class DismissedRelease(BaseModel):
     tag_name: str
 
 
+class IpAllowEntry(BaseModel):
+    cidr: str
+    label: str = ""
+
+
+class IpRestrictSave(BaseModel):
+    scopes: list[str] = Field(default_factory=list)
+    allowlist: list[IpAllowEntry] = Field(default_factory=list)
+
+
 class NotificationConfig(BaseModel):
     email_enabled:  bool        = False
     email_host:     str         = ""
