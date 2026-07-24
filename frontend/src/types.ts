@@ -178,9 +178,8 @@ export interface AuthStatus {
   sso: SsoStatus;
 }
 export interface IpAllowEntry { cidr: string; label: string; }
-export interface IpRestrictScope { key: string; label: string; enabled: boolean; }
 export interface IpRestrictStatus {
-  scopes: IpRestrictScope[];
+  enabled: boolean;
   allowlist: IpAllowEntry[];
   your_ip: string | null;
 }

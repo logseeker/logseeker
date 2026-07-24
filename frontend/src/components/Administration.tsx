@@ -3,14 +3,25 @@ import { api, tokenStore } from "../api";
 import type { AuthUser, IpAllowEntry, IpRestrictStatus, SsoStatus } from "../types";
 
 // 通常のログイン後画面（左メニュー）とは完全に切り離した、管理者(admin)専用の管理パネル。
-// ?screen=administration でのみ到達し、左メニューには一切出さない。専用のログインを毎回要求し、
-// admin以外のロールはパスワードが合っていてもここでは弾く（backend: /api/auth/admin-login）。
+// ?screen=administration でのみ到達し、左メニューには一切出さない。admin以外のロールは
+// パスワードが合っていてもここでは弾く（backend: /api/auth/admin-login）。
+// 既にadminロールでログイン済み（通常アプリ・別タブ問わず同じブラウザの既存セッション）なら
+// 再ログインは求めず、そのまま管理パネルへ入る。
 export function Administration() {
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [checking, setChecking] = useState(true);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!tokenStore.get()) { setChecking(false); return; }
+    api.authStatus()
+      .then((s) => { if (s.user?.role === "admin") setUser(s.user); })
+      .catch(() => {})
+      .finally(() => setChecking(false));
+  }, []);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -26,6 +37,10 @@ export function Administration() {
       setBusy(false);
     }
   };
+
+  if (checking) {
+    return <div className="page page-center"><div className="text-secondary">確認中…</div></div>;
+  }
 
   if (!user) {
     return (
@@ -189,10 +204,13 @@ function AdminSecurity() {
   );
 }
 
-// 画面ごとのIPアクセス制限（アプリ層。admin専用）
+// 管理パネル(?screen=administration)へのアクセスそのもののIP制限（アプリ層。admin専用）。
+// SSHのAllowUsers/送信元制限や、WordPress管理画面のIP制限と同じ発想＝「そもそもログイン試行自体を
+// そのIP以外弾く」もの。通常のログイン後画面（ユーザー管理・監査ログ等）はロール(sysadmin以上)だけで
+// 守り、この対象外。
 function AdminIpRestrict() {
   const [st, setSt] = useState<IpRestrictStatus | null>(null);
-  const [scopes, setScopes] = useState<Set<string>>(new Set());
+  const [enabled, setEnabled] = useState(false);
   const [entries, setEntries] = useState<IpAllowEntry[]>([]);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -200,18 +218,13 @@ function AdminIpRestrict() {
 
   const load = () => api.getIpRestrict().then((s) => {
     setSt(s);
-    setScopes(new Set(s.scopes.filter((x) => x.enabled).map((x) => x.key)));
+    setEnabled(s.enabled);
     setEntries(s.allowlist.length ? s.allowlist : []);
   }).catch((e) => setErr((e as Error).message));
 
   useEffect(() => { load(); }, []);
 
   const flash = (m: string) => { setMsg(m); setTimeout(() => setMsg(null), 3000); };
-  const toggleScope = (key: string) => setScopes((prev) => {
-    const next = new Set(prev);
-    if (next.has(key)) next.delete(key); else next.add(key);
-    return next;
-  });
   const addEntry = () => setEntries((prev) => [...prev, { cidr: "", label: "" }]);
   const updateEntry = (i: number, patch: Partial<IpAllowEntry>) =>
     setEntries((prev) => prev.map((e, idx) => (idx === i ? { ...e, ...patch } : e)));
@@ -226,11 +239,11 @@ function AdminIpRestrict() {
     setSaving(true);
     try {
       const result = await api.saveIpRestrict({
-        scopes: Array.from(scopes),
+        enabled,
         allowlist: entries.filter((e) => e.cidr.trim()),
       });
       setSt(result);
-      setScopes(new Set(result.scopes.filter((x) => x.enabled).map((x) => x.key)));
+      setEnabled(result.enabled);
       setEntries(result.allowlist);
       flash("保存しました");
     } catch (e) {
@@ -259,10 +272,10 @@ function AdminIpRestrict() {
         {err && <div className="alert alert-danger py-2">{err}</div>}
         {msg && <div className="alert alert-success py-2">{msg}</div>}
         <div className="text-secondary small mb-3">
-          このアプリ自体（nginx/Apache等のリバースプロキシより後段）で、選んだ画面ごとに
-          「許可したIP/CIDR以外からのアクセスを拒否」を上乗せできます。既定は全画面OFF＝無効。
-          有効化する画面には、少なくとも今あなたが使っているIPを許可リストに入れる必要があります
-          （自分自身がロックアウトされるのを防ぐため）。
+          この管理パネル（このログイン画面自体）へのアクセスを、許可したIP/CIDR以外は
+          拒否できます。SSHの送信元IP制限やWordPress管理画面のIP制限と同じ発想です。
+          通常のログイン後画面（ユーザー管理・監査ログ等）はロールだけで守られ、この対象外です。
+          既定はOFF＝無効。
         </div>
         <div className="mb-3">
           現在検出しているあなたのIP：
@@ -272,19 +285,18 @@ function AdminIpRestrict() {
           {st.your_ip && <button className="btn btn-sm btn-outline-primary ms-2" onClick={addMyIp}>許可リストに追加</button>}
         </div>
 
-        <div className="mb-3">
-          <label className="form-label">対象画面（チェックした画面だけIP制限がかかります）</label>
-          <div className="row">
-            {st.scopes.map((s) => (
-              <div className="col-md-4 col-6" key={s.key}>
-                <label className="form-check">
-                  <input className="form-check-input" type="checkbox" checked={scopes.has(s.key)}
-                    onChange={() => toggleScope(s.key)} />
-                  <span className="form-check-label">{s.label}</span>
-                </label>
+        <div className="mb-4">
+          <label className="form-check form-switch">
+            <input className="form-check-input" type="checkbox" checked={enabled}
+              onChange={(e) => setEnabled(e.target.checked)} />
+            <span className="form-check-label">
+              <strong>管理パネルへのIPアクセス制限を有効にする</strong>
+              <div className="text-secondary small">
+                ONにする前に、下の許可リストに少なくとも今のあなたのIPを追加してください
+                （自分自身がロックアウトされるのを防ぐため）。
               </div>
-            ))}
-          </div>
+            </span>
+          </label>
         </div>
 
         <div className="mb-2">

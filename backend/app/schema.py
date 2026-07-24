@@ -130,7 +130,7 @@ class IpAllowEntry(BaseModel):
 
 
 class IpRestrictSave(BaseModel):
-    scopes: list[str] = Field(default_factory=list)
+    enabled: bool = False
     allowlist: list[IpAllowEntry] = Field(default_factory=list)
 
 
