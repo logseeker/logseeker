@@ -166,6 +166,40 @@ def client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
+def access_control_ip(request: Request) -> str | None:
+    """アクセス制御（IP許可リスト）専用の送信元IP判定。client_ip()とは別物。
+
+    client_ip() は監査ログの表示用に X-Forwarded-For の「先頭」（＝最初にリクエストを
+    受けたプロキシが記録したオリジン）を使うが、これはクライアントが
+    `X-Forwarded-For: 偽装したいIP` を自分で送りつけるだけで詐称できてしまう
+    （nginx/Apache/OpenLiteSpeedいずれも、そのプロキシ自身が観測した接続元IPは
+    「末尾」に追記する仕様のため、先頭はクライアントの自己申告のまま残る）。
+
+    許可/拒否を決めるアクセス制御では逆に「末尾」（＝直前の信頼できるリバースプロキシが
+    実際に観測した接続元）だけを信じる。この末尾追記の挙動は nginx
+    （`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`）・Apache
+    （mod_proxy_httpの既定 `ProxyAddHeaders On`）・OpenLiteSpeed のいずれもリバースプロキシ
+    として動作する際の標準動作なので、プロキシの種類を問わず同じロジックで安全に判定できる。
+
+    ヘッダが全く無い場合は request.client.host にフォールバックしない
+    （backendは127.0.0.1でのみ待ち受け＝直前のプロキシ自身のIPしか見えないため、フォールバックすると
+    全員が同じアドレスに見えてしまい、許可リストが実質無意味化する）。None を返し、呼び出し側で
+    「判定不能＝拒否」として扱う。
+    """
+    cf = request.headers.get("cf-connecting-ip")
+    if cf:
+        return cf.strip()
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        parts = [p.strip() for p in xff.split(",") if p.strip()]
+        if parts:
+            return parts[-1]
+    xri = request.headers.get("x-real-ip")
+    if xri:
+        return xri.strip()
+    return None
+
+
 # ---------- 監査ログ ----------
 def audit(db: Session, *, action: str, user: User | None = None,
           method: str | None = None, path: str | None = None,

@@ -1,20 +1,19 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { stLabel } from "../labels";
-import type { AdminOverview, AuthStatus, Screen, SsoStatus } from "../types";
+import type { AdminOverview, AuthStatus, Screen } from "../types";
 
 const COUNT_LABEL: Record<string, string> = {
   events: "イベント", normalized: "正規化レコード", entities: "エンティティ",
   incidents: "インシデント", ioc: "脅威情報(IOC)", dead_letters: "取り込み失敗",
 };
 
-// 管理：システム全体の状態を一望する運用ダッシュボード。admin は認証ON/OFF・SSO設定も。
-export function Admin({ onNav, auth, onAuthChanged }: {
-  onNav: (s: Screen) => void; auth: AuthStatus; onAuthChanged: () => void;
-}) {
+// 管理：システム全体の状態を一望する運用ダッシュボード（読み取り専用の統計のみ）。
+// ログイン必須ON/OFF・SSO・IPアクセス制限などの操作系設定は ?screen=administration の
+// 専用管理パネル（Administration.tsx）に分離してある（通常のログイン後画面には置かない）。
+export function Admin({ onNav, auth }: { onNav: (s: Screen) => void; auth?: AuthStatus }) {
   const [ov, setOv] = useState<AdminOverview | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const isAdmin = !auth.auth_required || auth.user?.role === "admin";
 
   useEffect(() => {
     api.adminOverview().then(setOv).catch((e) => setErr((e as Error).message));
@@ -24,18 +23,27 @@ export function Admin({ onNav, auth, onAuthChanged }: {
   if (!ov) return <div className="text-secondary">読み込み中…</div>;
 
   const ts = (s: string | null) => (s ? s.replace("T", " ").slice(0, 19) : "-");
+  // 認証OFF（デモ）の間は誰でも管理者相当（他画面のeffRoleの扱いと同じ）。ONなら実際にadminロールか。
+  const isAdmin = !auth?.auth_required || auth?.user?.role === "admin";
 
   return (
     <div className="row row-cards">
       <div className="col-12">
-        <div className="alert alert-info mb-0">
-          <strong>システム状態</strong>：取り込み件数・パース状況・受信経路・ライセンス等の
-          <strong>稼働状況を一望する運用ビュー</strong>です（読み取り専用）。
-          <span className="text-secondary">
-            ※「ユーザー/アカウント管理」はまだありません。本ツールは現在ログイン機能を持たず、
-            公開時は nginx 側の認証で保護する設計です（<code>docs/security.md</code>）。
-            アカウント管理はログイン機能の導入時に追加予定です。
-          </span>
+        <div className="alert alert-info mb-0 d-flex align-items-center flex-wrap gap-2">
+          <div>
+            <strong>システム状態</strong>：取り込み件数・パース状況・受信経路・ライセンス等の
+            <strong>稼働状況を一望する運用ビュー</strong>です（読み取り専用）。
+            <span className="text-secondary">
+              ※「ユーザー/アカウント管理」はまだありません。本ツールは現在ログイン機能を持たず、
+              公開時は nginx 側の認証で保護する設計です（<code>docs/security.md</code>）。
+              アカウント管理はログイン機能の導入時に追加予定です。
+            </span>
+          </div>
+          {isAdmin && (
+            <a href="?screen=administration" className="btn btn-sm btn-outline-primary ms-auto">
+              🔐 管理パネルを見る
+            </a>
+          )}
         </div>
       </div>
 
@@ -181,111 +189,7 @@ export function Admin({ onNav, auth, onAuthChanged }: {
         </div>
       </div>
 
-      {isAdmin && (
-        <div className="col-12">
-          <AdminSecurity auth={auth} onAuthChanged={onAuthChanged} onNav={onNav} />
-        </div>
-      )}
     </div>
   );
 }
 
-// 管理者(root)専用：ログイン必須ON/OFF と SSO 設定
-function AdminSecurity({ auth, onAuthChanged, onNav }: {
-  auth: AuthStatus; onAuthChanged: () => void; onNav: (s: Screen) => void;
-}) {
-  const [sso, setSso] = useState<SsoStatus | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [form, setForm] = useState({ issuer: "", client_id: "", client_secret: "", redirect_uri: "", allowed_domains: "", auto_provision_role: "viewer", enabled: false });
-
-  useEffect(() => {
-    api.getSso().then((s) => {
-      setSso(s);
-      setForm({ issuer: s.issuer, client_id: s.client_id, client_secret: "", redirect_uri: s.redirect_uri, allowed_domains: s.allowed_domains, auto_provision_role: s.auto_provision_role, enabled: s.enabled });
-    }).catch(() => {});
-  }, []);
-
-  const flash = (m: string) => { setMsg(m); setTimeout(() => setMsg(null), 2500); };
-  const toggleAuth = async (enabled: boolean) => {
-    setErr(null);
-    try { await api.toggleAuth(enabled); onAuthChanged(); flash(enabled ? "ログイン必須にしました" : "ログイン不要にしました"); }
-    catch (e) { setErr((e as Error).message); }
-  };
-  const saveSso = async () => {
-    setErr(null);
-    try { const r = await api.saveSso(form); flash(r.note); api.getSso().then(setSso); }
-    catch (e) { setErr((e as Error).message); }
-  };
-
-  return (
-    <div className="card border-primary">
-      <div className="card-header"><h3 className="card-title">🔐 セキュリティ設定（管理者のみ）</h3></div>
-      <div className="card-body">
-        {err && <div className="alert alert-danger py-2">{err}</div>}
-        {msg && <div className="alert alert-success py-2">{msg}</div>}
-
-        <div className="mb-4">
-          <label className="form-check form-switch">
-            <input className="form-check-input" type="checkbox" checked={auth.auth_required}
-              onChange={(e) => toggleAuth(e.target.checked)} />
-            <span className="form-check-label">
-              <strong>ログインを必須にする</strong>
-              <div className="text-secondary small">
-                OFF＝誰でも全操作可（デモ）。ON＝ロールで制御。ONにする前に
-                <a role="button" className="text-primary" onClick={() => onNav("users")}> ユーザー</a>を作成してください。
-              </div>
-            </span>
-          </label>
-        </div>
-
-        <hr />
-        <h4 className="mb-1">SSO（OIDC）</h4>
-        <div className="text-secondary small mb-3">
-          {sso?.implemented
-            ? "有効化するとログイン画面にSSOボタンが出ます。"
-            : "現バージョンは設定の保管のみ（実接続は未実装）。Google/Azure AD(Entra)/Keycloak等のOIDCを想定。"}
-        </div>
-        <div className="row g-2">
-          <div className="col-md-6">
-            <label className="form-label">Issuer (discovery URL)</label>
-            <input className="form-control" placeholder="https://accounts.google.com" value={form.issuer}
-              onChange={(e) => setForm({ ...form, issuer: e.target.value })} />
-          </div>
-          <div className="col-md-6">
-            <label className="form-label">Client ID</label>
-            <input className="form-control" value={form.client_id} onChange={(e) => setForm({ ...form, client_id: e.target.value })} />
-          </div>
-          <div className="col-md-6">
-            <label className="form-label">Client Secret {sso?.has_secret && <span className="text-secondary small">(設定済み・変更時のみ入力)</span>}</label>
-            <input className="form-control" type="password" value={form.client_secret} onChange={(e) => setForm({ ...form, client_secret: e.target.value })} />
-          </div>
-          <div className="col-md-6">
-            <label className="form-label">Redirect URI</label>
-            <input className="form-control" placeholder="https://<自分のホスト>/api/sso/callback" value={form.redirect_uri}
-              onChange={(e) => setForm({ ...form, redirect_uri: e.target.value })} />
-          </div>
-          <div className="col-md-6">
-            <label className="form-label">許可ドメイン（任意・カンマ区切り）</label>
-            <input className="form-control" placeholder="example.co.jp" value={form.allowed_domains}
-              onChange={(e) => setForm({ ...form, allowed_domains: e.target.value })} />
-          </div>
-          <div className="col-md-3">
-            <label className="form-label">自動作成ロール</label>
-            <select className="form-select" value={form.auto_provision_role} onChange={(e) => setForm({ ...form, auto_provision_role: e.target.value })}>
-              <option value="viewer">閲覧者</option><option value="editor">編集者</option>
-            </select>
-          </div>
-          <div className="col-md-3 d-flex align-items-end">
-            <label className="form-check form-switch mb-2">
-              <input className="form-check-input" type="checkbox" checked={form.enabled}
-                onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />
-              <span className="form-check-label">SSO有効</span>
-            </label>
-          </div>
-        </div>
-        <button className="btn btn-primary mt-3" onClick={saveSso}>SSO設定を保存</button>
-      </div>
-    </div>
-  );
-}

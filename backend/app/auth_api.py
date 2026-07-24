@@ -17,7 +17,7 @@ from . import auth as A
 from .config import settings
 from .db import get_db
 from .models import AuditLog, User
-from .schema import AuthToggle, LoginRequest, SSOConfig, UserCreate, UserUpdate
+from .schema import AuthToggle, IpRestrictSave, LoginRequest, SSOConfig, UserCreate, UserUpdate
 
 router = APIRouter(prefix="/api")
 
@@ -58,6 +58,29 @@ def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
     token = A.create_session(db, u)
     A.audit(db, action="login", status="success", user=u, method="POST",
             path="/api/auth/login", ip=ip)
+    return {"token": token, "user": _user_dict(u)}
+
+
+@router.post("/auth/admin-login")
+def admin_login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
+    """通常ログインとは別の入口。管理者(admin)ロール以外は、パスワードが正しくてもここでは
+    ログインさせない（『ログイン後の通常画面』とは分離した管理パネル専用の入口のため）。"""
+    ip = A.client_ip(request)
+    u = db.execute(select(User).where(User.username == body.username)).scalar_one_or_none()
+    if not u or not u.enabled or not A.verify_password(body.password, u.password_hash):
+        A.audit(db, action="login.admin", status="failure", username=body.username,
+                method="POST", path="/api/auth/admin-login", ip=ip,
+                detail="認証失敗（ユーザー名またはパスワード不一致）")
+        return Response(status_code=401, content='{"error":"ユーザー名またはパスワードが違います"}',
+                        media_type="application/json")
+    if u.role != "admin":
+        A.audit(db, action="login.admin", status="failure", user=u, method="POST",
+                path="/api/auth/admin-login", ip=ip, detail="role不足（管理者(admin)以外は拒否）")
+        return Response(status_code=403, content='{"error":"この画面は管理者(admin)アカウントのみ利用できます"}',
+                        media_type="application/json")
+    token = A.create_session(db, u)
+    A.audit(db, action="login.admin", status="success", user=u, method="POST",
+            path="/api/auth/admin-login", ip=ip)
     return {"token": token, "user": _user_dict(u)}
 
 
@@ -248,6 +271,31 @@ def save_sso(body: SSOConfig, request: Request,
     A.audit(db, action="sso.config", user=actor, detail=f"enabled={body.enabled}, issuer={body.issuer}",
             ip=A.client_ip(request))
     return {"ok": True, "note": "設定を保存しました（実接続は現バージョン未実装。設計・保管のみ）"}
+
+
+# ---------- IPアクセス制限（admin専用） ----------
+@router.get("/admin/ip-restrict")
+def get_ip_restrict(request: Request, _: User | None = Depends(A.require_admin), db: Session = Depends(get_db)):
+    from . import ip_restrict as R
+    result = R.status(db)
+    result["your_ip"] = A.access_control_ip(request)
+    return result
+
+
+@router.put("/admin/ip-restrict")
+def save_ip_restrict(body: IpRestrictSave, request: Request,
+                     actor: User | None = Depends(A.require_admin), db: Session = Depends(get_db)):
+    from . import ip_restrict as R
+    requester_ip = A.access_control_ip(request)
+    try:
+        R.save(db, body.scopes, [e.model_dump() for e in body.allowlist], requester_ip)
+    except R.IpRestrictSaveError as e:
+        return Response(status_code=400, content=json.dumps({"error": e.message}), media_type="application/json")
+    A.audit(db, action="ip_restrict.config", user=actor,
+            detail=f"scopes={body.scopes}, allowlist={len(body.allowlist)}件", ip=requester_ip)
+    result = R.status(db)
+    result["your_ip"] = requester_ip
+    return result
 
 
 # ---------------- 監査ログ（sysadmin以上） ----------------

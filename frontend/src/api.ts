@@ -2,7 +2,7 @@ import type {
   AdminOverview, Annotation, AssetRow, AuditResponse, AuthStatus, AuthUser, CorrelationResponse, Count,
   CreateUserResult, CustomRule, CustomRulesResponse, DeadLettersResponse, EntityDetail, EntityRow,
   EventDetail, EventRow, EventsResponse, FieldInfo, FilterState, IncidentDetail, IncidentRow,
-  IngestStatus, IngestVolume, IocFeedsInfo, LicenseInfo, MappingsResponse, NotificationConfig,
+  IngestStatus, IngestVolume, IocFeedsInfo, IpRestrictStatus, LicenseInfo, MappingsResponse, NotificationConfig,
   ReleaseItem, Role, RuleDef, RuleHit, SsoStatus, Summary, Timeline,
 } from "./types";
 
@@ -167,6 +167,8 @@ export const api = {
   authStatus: () => get<AuthStatus>(`/api/auth/status`),
   login: (username: string, password: string) =>
     post<{ token: string; user: AuthUser }>(`/api/auth/login`, { username, password }),
+  adminLogin: (username: string, password: string) =>
+    post<{ token: string; user: AuthUser }>(`/api/auth/admin-login`, { username, password }),
   logout: () => post<{ ok: boolean }>(`/api/auth/logout`, {}),
   listUsers: () => get<AuthUser[]>(`/api/users`),
   createUser: (b: { username: string; display_name?: string; role: Role; email?: string; password?: string }) =>
@@ -181,6 +183,9 @@ export const api = {
   getSso: () => get<SsoStatus>(`/api/sso`),
   saveSso: (b: Partial<SsoStatus> & { client_secret?: string; enabled: boolean }) =>
     put<{ ok: boolean; note: string }>(`/api/sso`, b),
+  getIpRestrict: () => get<IpRestrictStatus>(`/api/admin/ip-restrict`),
+  saveIpRestrict: (b: { scopes: string[]; allowlist: { cidr: string; label: string }[] }) =>
+    put<IpRestrictStatus>(`/api/admin/ip-restrict`, b),
 
   // 通知設定（全ライセンスティアで使用可）
   notifConfig: () => get<NotificationConfig>(`/api/notifications`),

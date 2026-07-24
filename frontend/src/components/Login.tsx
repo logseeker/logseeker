@@ -62,6 +62,9 @@ export function Login({ onLoggedIn, sso }: {
             )}
           </div>
         </form>
+        <div className="text-center mt-3">
+          <a href="?screen=administration" className="text-secondary small">管理者用ログインはこちら</a>
+        </div>
       </div>
     </div>
   );
