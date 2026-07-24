@@ -288,11 +288,11 @@ def save_ip_restrict(body: IpRestrictSave, request: Request,
     from . import ip_restrict as R
     requester_ip = A.access_control_ip(request)
     try:
-        R.save(db, body.scopes, [e.model_dump() for e in body.allowlist], requester_ip)
+        R.save(db, body.enabled, [e.model_dump() for e in body.allowlist], requester_ip)
     except R.IpRestrictSaveError as e:
         return Response(status_code=400, content=json.dumps({"error": e.message}), media_type="application/json")
     A.audit(db, action="ip_restrict.config", user=actor,
-            detail=f"scopes={body.scopes}, allowlist={len(body.allowlist)}件", ip=requester_ip)
+            detail=f"enabled={body.enabled}, allowlist={len(body.allowlist)}件", ip=requester_ip)
     result = R.status(db)
     result["your_ip"] = requester_ip
     return result

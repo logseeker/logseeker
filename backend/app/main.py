@@ -137,7 +137,8 @@ async def enforce_auth(request: Request, call_next):
     return await call_next(request)
 
 
-# 画面ごとのIPアクセス制限（アプリ層・任意ON）。有効化されたscopeのパスだけ、許可リスト外のIPを拒否する。
+# 管理パネル(?screen=administration)へのアクセスそのもののIP制限（アプリ層・任意ON）。
+# SSHのAllowUsers/送信元制限や、WordPress管理画面のIP制限などと同じ発想。
 @app.middleware("http")
 async def enforce_ip_restrict(request: Request, call_next):
     path = request.url.path
@@ -145,15 +146,14 @@ async def enforce_ip_restrict(request: Request, call_next):
         from . import ip_restrict as R
         from .auth import access_control_ip, audit
         from .db import SessionLocal
-        scope = R.scope_for_path(path)
-        if scope:
+        if R.is_protected_path(path):
             db = SessionLocal()
             try:
-                if scope in R.enabled_scopes(db):
+                if R.is_enabled(db):
                     ip = access_control_ip(request)
                     if not R.ip_in_allowlist(db, ip):
                         audit(db, action="ip_restrict.block", method=request.method, path=path,
-                              status="403", ip=ip, detail=f"scope={scope}")
+                              status="403", ip=ip, detail="administration panel")
                         return JSONResponse(
                             {"error": "このネットワークからのアクセスは許可されていません", "your_ip": ip},
                             status_code=403,

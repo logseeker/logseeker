@@ -1,7 +1,11 @@
-"""IPアクセス制限（アプリ層）。管理系の画面ごとに、許可されたIP/CIDRからのみ
-アクセスできるように設定できる（既定は全画面OFF＝無効。有効化はAdmin画面から）。
+"""IPアクセス制限（アプリ層）。管理パネル（?screen=administration、admin専用の別ログイン）への
+アクセスそのものを、許可したIP/CIDRだけに絞れる（既定はOFF＝無効）。SSHのAllowUsers/送信元制限や
+WordPress管理画面のIP制限などと同じ発想＝「そもそもログイン試行自体をそのIP以外弾く」もの。
 
-設定はSSO設定（sso.py）と同じパターンで Setting(KV) に保存する。新しいテーブルは追加しない。
+通常のログイン後画面（ユーザー管理・監査ログ・ライセンス・通知設定・脅威インテリ等）はこの対象外。
+それらは今まで通りロール(sysadmin以上)だけで守る。
+
+設定はSSO設定（sso.py）と同じパターンでSetting(KV)に保存する。新しいテーブルは追加しない。
 
 判定に使う送信元IPは auth.access_control_ip() を使う（監査ログ用の client_ip() とは別。
 理由はそちらのdocstring参照）。
@@ -13,18 +17,11 @@ from sqlalchemy.orm import Session
 
 from .models import Setting
 
-# scope key -> (画面ラベル, 対象パスprefix群)
-# ここに挙げたprefixへの /api リクエストがIP制限の対象になる。
-SCOPES: dict[str, tuple[str, list[str]]] = {
-    "admin": ("システム状態・セキュリティ設定", ["/api/admin", "/api/auth/require", "/api/sso"]),
-    "users": ("ユーザー管理", ["/api/users"]),
-    "audit": ("監査ログ", ["/api/audit"]),
-    "license": ("ライセンス", ["/api/license"]),
-    "notifications": ("通知設定", ["/api/notifications"]),
-    "threatintel": ("脅威インテリ", ["/api/ioc"]),
-}
+# 管理パネル自身のAPI（ログイン試行そのものを含む）。
+# システム状態の読み取り専用統計（/api/admin/overview 等）はここに含めない＝対象外。
+PROTECTED_PREFIXES = ["/api/auth/admin-login", "/api/auth/require", "/api/sso", "/api/admin/ip-restrict"]
 
-_K_SCOPES = "ip_restrict_scopes"
+_K_ENABLED = "ip_restrict_enabled"
 _K_ALLOWLIST = "ip_restrict_allowlist"
 
 
@@ -42,11 +39,8 @@ def _set(db: Session, key: str, value: str) -> None:
     db.commit()
 
 
-def enabled_scopes(db: Session) -> set[str]:
-    try:
-        return {s for s in json.loads(_get(db, _K_SCOPES, "[]")) if s in SCOPES}
-    except (json.JSONDecodeError, TypeError):
-        return set()
+def is_enabled(db: Session) -> bool:
+    return _get(db, _K_ENABLED, "false") == "true"
 
 
 def allowlist(db: Session) -> list[dict]:
@@ -57,11 +51,7 @@ def allowlist(db: Session) -> list[dict]:
 
 
 def status(db: Session) -> dict:
-    scopes = enabled_scopes(db)
-    return {
-        "scopes": [{"key": k, "label": v[0], "enabled": k in scopes} for k, v in SCOPES.items()],
-        "allowlist": allowlist(db),
-    }
+    return {"enabled": is_enabled(db), "allowlist": allowlist(db)}
 
 
 def ip_in_allowlist(db: Session, ip: str | None) -> bool:
@@ -80,12 +70,8 @@ def ip_in_allowlist(db: Session, ip: str | None) -> bool:
     return False
 
 
-def scope_for_path(path: str) -> str | None:
-    for key, (_, prefixes) in SCOPES.items():
-        for p in prefixes:
-            if path.startswith(p):
-                return key
-    return None
+def is_protected_path(path: str) -> bool:
+    return any(path.startswith(p) for p in PROTECTED_PREFIXES)
 
 
 class IpRestrictSaveError(Exception):
@@ -94,12 +80,10 @@ class IpRestrictSaveError(Exception):
         self.message = message
 
 
-def save(db: Session, scopes: list[str], entries: list[dict], requester_ip: str | None) -> None:
-    """CIDRを検証して保存する。有効化しようとしているscopeがあるのに、リクエスト元のIPが
+def save(db: Session, enabled: bool, entries: list[dict], requester_ip: str | None) -> None:
+    """CIDRを検証して保存する。有効化しようとしているのに、リクエスト元のIPが
     許可リストに含まれない場合は保存を拒否する（自分自身がロックアウトされるのを防ぐため）。
     """
-    valid_scopes = [s for s in scopes if s in SCOPES]
-
     cleaned: list[dict] = []
     for e in entries:
         cidr = (e.get("cidr") or "").strip()
@@ -111,7 +95,7 @@ def save(db: Session, scopes: list[str], entries: list[dict], requester_ip: str 
             raise IpRestrictSaveError(f"'{cidr}' はIP/CIDR形式として不正です")
         cleaned.append({"cidr": cidr, "label": (e.get("label") or "").strip()})
 
-    if valid_scopes:
+    if enabled:
         if not requester_ip:
             raise IpRestrictSaveError(
                 "あなたの送信元IPを判定できませんでした（リバースプロキシがX-Forwarded-Forを"
@@ -133,7 +117,7 @@ def save(db: Session, scopes: list[str], entries: list[dict], requester_ip: str 
                 "自分自身がロックアウトされるのを防ぐため、先にこのIPを許可リストへ追加してください。"
             )
 
-    _set(db, _K_SCOPES, json.dumps(valid_scopes))
+    _set(db, _K_ENABLED, "true" if enabled else "false")
     _set(db, _K_ALLOWLIST, json.dumps(cleaned))
 
 

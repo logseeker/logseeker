@@ -184,7 +184,7 @@ export const api = {
   saveSso: (b: Partial<SsoStatus> & { client_secret?: string; enabled: boolean }) =>
     put<{ ok: boolean; note: string }>(`/api/sso`, b),
   getIpRestrict: () => get<IpRestrictStatus>(`/api/admin/ip-restrict`),
-  saveIpRestrict: (b: { scopes: string[]; allowlist: { cidr: string; label: string }[] }) =>
+  saveIpRestrict: (b: { enabled: boolean; allowlist: { cidr: string; label: string }[] }) =>
     put<IpRestrictStatus>(`/api/admin/ip-restrict`, b),
 
   // 通知設定（全ライセンスティアで使用可）
