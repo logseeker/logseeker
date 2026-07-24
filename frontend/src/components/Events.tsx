@@ -22,6 +22,16 @@ function SevBadge({ s }: { s: string | null }) {
 }
 const dash = (v: string | null) => (v ? v : <span className="text-secondary">-</span>);
 
+// ISO国コード（例: "JP"）→ 国旗絵文字（例: "🇯🇵"）。地域表示記号(Regional Indicator Symbol)への変換。
+// 画像アセット不要でOS/ブラウザのフォントが描画するため、追加リソースなしで使える。
+function flagEmoji(iso2: string | null): string | null {
+  if (!iso2 || iso2.length !== 2) return null;
+  const code = iso2.toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code)) return null;
+  const points = [...code].map((c) => 0x1f1e6 + (c.charCodeAt(0) - 65));
+  return String.fromCodePoint(...points);
+}
+
 // ページ番号一覧を生成（多い場合は省略記号「…」を挟む）。例: 1 … 4 5 [6] 7 8 … 20
 function pageNumbers(current: number, total: number): (number | "...")[] {
   if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
@@ -293,7 +303,12 @@ export function Events({
                   <td className="text-nowrap"><a role="button" className="text-reset" onClick={(ev) => { stop(ev); e.url_domain && onTax("url_domain", e.url_domain); }}>{dash(e.url_domain)}</a></td>
                   <td className="text-nowrap">
                     <a role="button" className="text-primary" onClick={(ev) => { stop(ev); e.source_ip && onTax("source_ip", e.source_ip); }}>{dash(e.source_ip)}</a>
-                    {e.source_country && <span className="badge bg-secondary-lt ms-1">{e.source_country}</span>}
+                    {e.source_country && (
+                      <a role="button" className="text-reset ms-1" title={e.source_country}
+                         onClick={(ev) => { stop(ev); onTax("source_country", e.source_country!); }}>
+                        {flagEmoji(e.source_country) ?? <span className="badge bg-secondary-lt">{e.source_country}</span>}
+                      </a>
+                    )}
                     {e.source_as_org && (
                       <a role="button" className="text-reset" onClick={(ev) => { stop(ev); onTax("source_as_org", e.source_as_org!); }}>
                         <br /><small className="text-secondary">{e.source_as_org}{e.source_asn ? ` (AS${e.source_asn})` : ""}</small>

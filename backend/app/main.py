@@ -102,14 +102,14 @@ async def audit_mutations(request: Request, call_next):
         path = request.url.path
         if (request.method in _AUDIT_METHODS and path.startswith("/api")
                 and path not in _AUDIT_SKIP_PATHS):
-            from .auth import audit, get_current_user
+            from .auth import audit, client_ip, get_current_user
             from .db import SessionLocal
             db = SessionLocal()
             try:
                 user = get_current_user(request.headers.get("authorization"), db)
                 audit(db, action="api.change", user=user, method=request.method, path=path,
                       status=str(response.status_code),
-                      ip=request.client.host if request.client else None)
+                      ip=client_ip(request))
             finally:
                 db.close()
     except Exception:  # noqa  監査失敗で本処理を壊さない

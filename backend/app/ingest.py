@@ -7,6 +7,7 @@ import secrets
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy.orm import Session
 
+from . import auth as A
 from .config import settings
 from .db import get_db
 from .ingest_stats import record_bytes
@@ -29,7 +30,7 @@ async def _ingest(request: Request, db: Session, source: str | None, source_type
     body = await request.body()
     if len(body) > settings.MAX_INGEST_BYTES:
         raise HTTPException(status_code=413, detail="payload too large")
-    client_ip = request.client.host if request.client else None
+    client_ip = A.client_ip(request)
     try:
         payload = json.loads(body)
     except json.JSONDecodeError as e:

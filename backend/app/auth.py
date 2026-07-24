@@ -12,7 +12,7 @@ import os
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -135,6 +135,35 @@ require_login = require_role("viewer")
 require_editor = require_role("editor")
 require_sysadmin = require_role("sysadmin")
 require_admin = require_role("admin")
+
+
+# ---------- 送信元IP取得 ----------
+def client_ip(request: Request) -> str | None:
+    """監査ログ等に記録する送信元IPを取得する。
+
+    リバースプロキシ経由だと request.client.host は直前のプロキシ自身のIP
+    （Apache/nginxの場合は127.0.0.1、Cloudflare Full/厳格の場合はCloudflareの
+    エッジサーバーIP）になり、実際のアクセス元ではない。以下の優先順で本来の
+    送信元を探す:
+      1. CF-Connecting-IP（Cloudflare使用時。Cloudflareが上書き不可能な形で
+         付与する真の接続元IPなので最優先）
+      2. X-Forwarded-For の先頭（＝最初にリクエストを受けたプロキシが記録した
+         オリジンの値。Apache/nginxのmod_proxy等は自分が受けた相手のIPを
+         末尾に追記していく仕様のため、先頭が一番オリジンに近い）
+      3. request.client.host（プロキシを介さない直接アクセス時。§CLAUDE.mdの
+         とおりDocker構成を変えない前提のため、この経路も残す）
+    ヘッダーはクライアントが自由に詐称できるため、信頼できるリバースプロキシ
+    （Apache/nginx/Cloudflare）を必ず前段に置く運用を前提にしている。
+    """
+    cf = request.headers.get("cf-connecting-ip")
+    if cf:
+        return cf.strip()
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        first = xff.split(",")[0].strip()
+        if first:
+            return first
+    return request.client.host if request.client else None
 
 
 # ---------- 監査ログ ----------

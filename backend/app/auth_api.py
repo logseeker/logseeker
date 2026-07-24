@@ -47,7 +47,7 @@ def auth_status(user: User | None = Depends(A.get_current_user), db: Session = D
 
 @router.post("/auth/login")
 def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
-    ip = request.client.host if request.client else None
+    ip = A.client_ip(request)
     u = db.execute(select(User).where(User.username == body.username)).scalar_one_or_none()
     if not u or not u.enabled or not A.verify_password(body.password, u.password_hash):
         A.audit(db, action="login", status="failure", username=body.username,
@@ -71,7 +71,7 @@ def logout(request: Request, authorization: str | None = None,
         A.destroy_session(db, token)
     if user:
         A.audit(db, action="logout", status="success", user=user,
-                ip=request.client.host if request.client else None)
+                ip=A.client_ip(request))
     return {"ok": True}
 
 
@@ -145,7 +145,7 @@ def create_user(body: UserCreate, request: Request,
     db.add(u)
     db.commit()
     A.audit(db, action="user.create", user=actor, target=body.username,
-            detail=f"role={body.role}", ip=request.client.host if request.client else None)
+            detail=f"role={body.role}", ip=A.client_ip(request))
 
     result = _user_dict(u)
     result["email_sent"] = email_sent
@@ -187,7 +187,7 @@ def update_user(user_id: int, body: UserUpdate, request: Request,
     db.commit()
     A.audit(db, action="user.update", user=actor, target=u.username,
             detail=", ".join(changes) or "no change",
-            ip=request.client.host if request.client else None)
+            ip=A.client_ip(request))
     return _user_dict(u)
 
 
@@ -212,7 +212,7 @@ def delete_user(user_id: int, request: Request,
     db.delete(u)
     db.commit()
     A.audit(db, action="user.delete", user=actor, target=uname,
-            ip=request.client.host if request.client else None)
+            ip=A.client_ip(request))
     return {"ok": True}
 
 
@@ -229,7 +229,7 @@ def toggle_auth(body: AuthToggle, request: Request,
                             media_type="application/json")
     A.set_auth_required(db, body.enabled)
     A.audit(db, action="auth.toggle", user=actor, detail=f"auth_required={body.enabled}",
-            ip=request.client.host if request.client else None)
+            ip=A.client_ip(request))
     return {"ok": True, "auth_required": body.enabled}
 
 
@@ -246,7 +246,7 @@ def save_sso(body: SSOConfig, request: Request,
     from .sso import save_sso_config
     save_sso_config(db, body.model_dump())
     A.audit(db, action="sso.config", user=actor, detail=f"enabled={body.enabled}, issuer={body.issuer}",
-            ip=request.client.host if request.client else None)
+            ip=A.client_ip(request))
     return {"ok": True, "note": "設定を保存しました（実接続は現バージョン未実装。設計・保管のみ）"}
 
 
@@ -280,7 +280,7 @@ def audit_csv(request: Request, actor: User | None = Depends(A.require_sysadmin)
         w.writerow([a.at.isoformat() if a.at else "", a.username or "", a.role or "", a.action,
                     a.method or "", a.path or "", a.status or "", a.target or "", a.detail or "", a.ip or ""])
     A.audit(db, action="audit.download", user=actor, detail="format=csv",
-            ip=request.client.host if request.client else None)
+            ip=A.client_ip(request))
     data = "﻿" + buf.getvalue()
     return Response(content=data, media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": "attachment; filename=logseeker_audit.csv"})
@@ -290,7 +290,7 @@ def audit_csv(request: Request, actor: User | None = Depends(A.require_sysadmin)
 def audit_json(request: Request, actor: User | None = Depends(A.require_sysadmin), db: Session = Depends(get_db)):
     rows = db.execute(select(AuditLog).order_by(AuditLog.at.desc())).scalars().all()
     A.audit(db, action="audit.download", user=actor, detail="format=json",
-            ip=request.client.host if request.client else None)
+            ip=A.client_ip(request))
     data = json.dumps([_audit_dict(a) for a in rows], ensure_ascii=False, indent=2)
     return Response(content=data, media_type="application/json; charset=utf-8",
                     headers={"Content-Disposition": "attachment; filename=logseeker_audit.json"})
