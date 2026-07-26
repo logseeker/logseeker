@@ -31,6 +31,7 @@ import { Audit } from "./components/Audit";
 import { Login } from "./components/Login";
 import { Placeholder } from "./components/Placeholder";
 import { api, setUnauthorizedHandler, tokenStore } from "./api";
+import { fieldLabel } from "./labels";
 import type { AuthStatus, FilterState, Role, Screen } from "./types";
 import "./styles.css";
 
@@ -187,7 +188,7 @@ export default function App() {
 
   // 絞り込みチップ（絞り込みを使う画面でのみ表示・解除できる）
   const chips: { label: string; clear: () => void }[] = [];
-  Object.entries(filter.tax).forEach(([k, v]) => chips.push({ label: `${k} = ${v}`, clear: () => onTax(k, v) }));
+  Object.entries(filter.tax).forEach(([k, v]) => chips.push({ label: `${fieldLabel(k)}: ${v}`, clear: () => onTax(k, v) }));
   if (filter.q) chips.push({ label: `検索 "${filter.q}"`, clear: () => { setSearch(""); setFilter((p) => ({ ...p, q: undefined })); } });
   if (filter.start || filter.end)
     chips.push({ label: `期間 ${filter.start?.slice(0, 10) ?? "…"}〜${filter.end?.slice(0, 10) ?? "…"}`, clear: () => setFilter((p) => ({ ...p, start: undefined, end: undefined })) });
@@ -286,9 +287,14 @@ export default function App() {
             {chips.length > 0 && onFilterScreen && (
               <div className="card mb-3">
                 <div className="card-body py-2 d-flex flex-wrap gap-2 align-items-center">
-                  <span className="text-secondary small">絞り込み中:</span>
+                  <span className="text-secondary small text-nowrap">絞り込み中:</span>
                   {chips.map((c, i) => (
-                    <span key={i} className="badge bg-blue" role="button" onClick={c.clear}>{c.label} ✕</span>
+                    <span key={i} className="badge bg-blue text-white text-nowrap" role="button" onClick={c.clear}
+                          style={{ maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", flexShrink: 0,
+                                   color: "#fff", display: "inline-block", verticalAlign: "middle" }}
+                          title={c.label}>
+                      {c.label} ✕
+                    </span>
                   ))}
                   <button className="btn btn-sm btn-ghost-secondary ms-auto" onClick={clearAll}>全クリア</button>
                 </div>

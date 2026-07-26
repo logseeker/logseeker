@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { FIELD_LABEL } from "../labels";
 import type { AuthStatus, CustomRule, FilterState, RuleDef, RuleHit } from "../types";
 
 const SEV: Record<string, { cls: string; label: string }> = {
@@ -7,14 +8,6 @@ const SEV: Record<string, { cls: string; label: string }> = {
   high: { cls: "warning", label: "高" },
   warning: { cls: "info", label: "警告" },
   info: { cls: "secondary", label: "情報" },
-};
-
-const FIELD_LABEL: Record<string, string> = {
-  message: "メッセージ", url_path: "URLパス", url_domain: "ドメイン", actor_user: "ユーザー",
-  source_ip: "送信元IP", device_name: "ホスト/デバイス", event_category: "カテゴリ",
-  event_action: "アクション", event_result: "結果", http_status_code: "HTTPステータス",
-  service_name: "サービス", source_country: "国コード", host_name: "ホスト名",
-  source_asn: "AS番号", source_as_org: "AS組織名",
 };
 
 const EMPTY_FORM = {
