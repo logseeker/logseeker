@@ -1,6 +1,6 @@
 """検索・集計・ダッシュボードAPI（PROJECT.md §11）。events と normalized_events を結合して扱う。"""
 import ipaddress
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import String, and_, case, cast, func, nulls_last, or_, select, text
@@ -70,6 +70,20 @@ def _threat_clause(threat: str):
 
 ATTENTION_KEYWORDS = ["fail", "error", "deny", "denied", "invalid", "unauthor", "refused",
                       "reject", "lock", "warn", "attack", "violat", "critical", "alert", "404"]
+
+# イベント一覧（/api/events, /api/events/export）専用のデフォルト期間。
+# 期間未指定のまま455,503件規模の全表スキャンが走っていたため、期間指定なし時は
+# 直近24時間に絞る（フロント側でも同じデフォルトを画面表示するが、APIを直接叩く
+# 経路の保護としてサーバー側にも入れる）。他エンドポイント（/api/sources 等）が使う
+# 共有の filters() には手を入れず、イベント一覧のみに限定する。
+EVENTS_DEFAULT_PERIOD_HOURS = 24
+
+
+def _with_events_default_period(f: dict) -> dict:
+    if f["start"] is None and f["end"] is None:
+        end = datetime.now(timezone.utc)
+        f = {**f, "start": end - timedelta(hours=EVENTS_DEFAULT_PERIOD_HOURS), "end": end}
+    return f
 
 
 def filters(request: Request, db: Session = Depends(get_db), q: str | None = None,
@@ -144,6 +158,7 @@ def _row(ev: Event, n: N) -> dict:
 def list_events(db: Session = Depends(get_db), f: dict = Depends(filters), attention: bool = False,
                 threat: str | None = None,
                 limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0)):
+    f = _with_events_default_period(f)
     stmt = apply_filters(_joined(), f)
     if attention:
         # payloadキーワード OR 正規化済みの失敗/高重大度（[preauth]等キーワードなしのSSH攻撃も捕捉）
@@ -172,6 +187,7 @@ def export_events(db: Session = Depends(get_db), f: dict = Depends(filters),
                   format: str = Query("csv", pattern="^(csv|json)$"),
                   actor=Depends(require_login)):
     """現在の絞り込みに従ってイベントをCSV/JSONで一括ダウンロード（最大 EXPORT_MAX_ROWS 件）。"""
+    f = _with_events_default_period(f)
     stmt = apply_filters(_joined(), f)
     if attention:
         payload_match = or_(*[cast(Event.payload, String).ilike(f"%{k}%") for k in ATTENTION_KEYWORDS])

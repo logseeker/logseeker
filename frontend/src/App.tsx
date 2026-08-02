@@ -167,6 +167,20 @@ export default function App() {
   };
   const onDate = (which: "start" | "end", d: string) =>
     setFilter((p) => ({ ...p, [which]: d ? `${d}T${which === "start" ? "00:00:00" : "23:59:59"}+09:00` : undefined }));
+
+  // イベント一覧は455,503件規模で期間指定なしの全表スキャンが重いため、画面表示時に
+  // 期間が未指定なら「直近24時間」をデフォルトで自動セットする（期間UIの開始日/終了日欄に
+  // その値が表示され、ユーザーはそこから明示的に拡大・変更できる）。screenの変化時のみ判定する
+  // ことで、他のフィルタ画面（ログソース等）には影響させず、Events画面で手動クリアした後は
+  // 再訪するまで再セットしない。
+  useEffect(() => {
+    if (screen === "events" && !filter.start && !filter.end) {
+      const end = new Date();
+      const start = new Date(end.getTime() - 24 * 60 * 60 * 1000);
+      setFilter((p) => ({ ...p, start: start.toISOString(), end: end.toISOString() }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [screen]);
   const onAttention = (b: boolean) => setFilter((p) => ({ ...p, attention: b }));
   const onThreat = (v: string) => setFilter((p) => ({ ...p, threat: v || undefined }));
   // ダッシュボード/ルール/エンティティ等から Events へ。現在の絞り込み文脈（logw等）は維持して追加。
