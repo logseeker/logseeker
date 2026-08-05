@@ -36,14 +36,20 @@ export function License() {
               {info.licensee && <span className="text-secondary">{info.licensee}</span>}
             </div>
             <div className="datagrid">
+              <div className="datagrid-item"><div className="datagrid-title">起点日（インストール日）</div>
+                <div className="datagrid-content">{info.started_at ? info.started_at.slice(0, 10) : "-"}</div></div>
               <div className="datagrid-item"><div className="datagrid-title">有効期限</div>
                 <div className="datagrid-content">
                   {info.expires_at ? (
                     <>
                       {info.expires_at.slice(0, 10)}{" "}
                       {info.days_left != null && (
-                        <span className={`badge ms-1 ${info.days_left < 30 ? "bg-red" : "bg-green-lt"}`}>
-                          {info.days_left >= 30 ? `残り約${Math.floor(info.days_left / 30)}ヶ月（${info.days_left}日）` : `残り${info.days_left}日`}
+                        <span className={`badge ms-1 ${info.days_left <= 30 ? "bg-red" : "bg-green-lt"}`}>
+                          {info.days_left <= 0
+                            ? "期限切れ"
+                            : info.days_left <= 30
+                              ? `残り${info.days_left}日`
+                              : `残り約${Math.round(info.days_left / 30)}ヶ月`}
                         </span>
                       )}
                     </>

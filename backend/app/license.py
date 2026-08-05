@@ -54,6 +54,7 @@ class Lic:
     expires_at: float | None  # epoch秒
     source: str               # "applied" / "default"
     retention_days: int | None = None  # None=未指定(既定90日) / -1=無制限
+    applied_at: float | None = None    # epoch秒。このインスタンスに適用（インストール）した日時＝起点日
 
 
 def retention_days(lic: Lic) -> int:
@@ -120,7 +121,8 @@ def current_license(db: Session, force: bool = False) -> Lic:
     if row and (row.expires_at is None or row.expires_at.timestamp() > now):
         lic = Lic(row.licensee, row.tier, row.api_enabled,
                   row.expires_at.timestamp() if row.expires_at else None, "applied",
-                  row.retention_days)
+                  row.retention_days,
+                  row.applied_at.timestamp() if row.applied_at else None)
     else:
         lic = Lic(None, settings.LICENSE_DEFAULT_TIER, settings.LICENSE_DEFAULT_API, None, "default", None)
     _cache["lic"], _cache["ts"] = lic, now

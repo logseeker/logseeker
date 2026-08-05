@@ -143,6 +143,7 @@ export interface CustomRulesResponse {
 export interface LicenseInfo {
   licensee: string | null;
   source: string; // applied / default
+  started_at: string | null;
   expires_at: string | null;
   days_left: number | null;
   retention_days: number;

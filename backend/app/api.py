@@ -754,6 +754,7 @@ def get_license(db: Session = Depends(get_db)):
     return {
         "licensee": lic.licensee,
         "source": lic.source,  # applied / default
+        "started_at": (datetime.fromtimestamp(lic.applied_at).isoformat() if lic.applied_at else None),
         "expires_at": (datetime.fromtimestamp(lic.expires_at).isoformat() if lic.expires_at else None),
         "days_left": days_left(lic),
         "retention_days": ret, "retention_unlimited": ret < 0,
