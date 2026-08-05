@@ -122,12 +122,12 @@ export interface IngestVolume {
 }
 
 export interface RuleHit {
-  rule_id: string; rule_name: string; severity: string;
+  rule_id: string; rule_name: string; severity: string; category: string;
   title: string; evidence: string; count: number; recommendation: string;
   pivot: { field: string; value: string } | null;
 }
 export interface RuleDef {
-  id: string; name: string; severity: string; description: string; recommendation: string;
+  id: string; name: string; severity: string; category: string; description: string; recommendation: string;
 }
 
 export interface CustomRule {

@@ -246,6 +246,28 @@ def _category_extras(source_type: str, payload: dict, norm: dict) -> None:
         else:
             norm["event_result"] = "unknown"
 
+    # Astroサイトのビルドパイプライン（Directusフロー/GitHub push/手動実行が npm run build を起動した結果）。
+    # source_ip/actor_user 等のタクソノミー項目に相当するフィールドが無いため MAPPINGS は使わず、
+    # ここで status→event_result・要約文→message を直接組み立てる。
+    elif source_type == "astro_build":
+        norm["event_category"] = "build"
+        norm["event_action"] = "build"
+        status = str(payload.get("status") or "").lower()
+        trigger = payload.get("trigger") or "unknown"
+        if status == "success":
+            norm["event_result"] = "success"
+            duration_ms = payload.get("duration_ms")
+            duration = f"{duration_ms / 1000:.1f}秒" if isinstance(duration_ms, (int, float)) else "時間不明"
+            articles = payload.get("articles_count")
+            count = f"{articles}件" if articles is not None else "件数不明"
+            norm["message"] = f"{trigger}経由のビルド成功（{count}, {duration}）"
+        elif status == "failed":
+            norm["event_result"] = "failure"
+            error = payload.get("error") or "詳細不明"
+            norm["message"] = f"{trigger}経由のビルド失敗: {error}"
+        else:
+            norm["event_result"] = "unknown"
+
 
 _RE_VHOST = re.compile(r"/var/vhost/([^/]+)/")
 _RE_WSGI = re.compile(r"wsgi:([^:\]]+)")

@@ -107,47 +107,55 @@ PAYLOAD_SIGNATURES = [
     "${jndi:",
 ]
 
-# ルール定義（画面の「監視ルール一覧」用）
+# ルール定義（画面の「監視ルール一覧」用）。
+# category: ルールの性格を表す文字列（bool等の決め打ちにせず、将来値が増える前提）。
+#   "security"   = 攻撃・不正検知系（悪意ある第三者の挙動を疑うもの）
+#   "operations" = 運用監視系（自システムの正常/異常な稼働状態を見るもの。将来SIEM化で増える想定）
 RULE_DEFS = [
-    {"id": "ioc_match", "name": "脅威情報(IOC)一致", "severity": "critical",
+    {"id": "ioc_match", "name": "脅威情報(IOC)一致", "severity": "critical", "category": "security",
      "description": "既知の不正IP/ドメインに一致する通信。",
      "recommendation": "脅威情報に登録済み。該当IP/ドメインを即時遮断し、関連イベントを調査。"},
-    {"id": "payload_injection", "name": "攻撃ペイロード検知", "severity": "critical",
+    {"id": "payload_injection", "name": "攻撃ペイロード検知", "severity": "critical", "category": "security",
      "description": "URL(パス/クエリ)にパストラバーサル・SQLi・XSS・PHPラッパー・コマンドインジェクション・Log4Shell等の既知の攻撃シグネチャを含む。",
      "recommendation": "該当IPを即時遮断し、対象アプリケーションに脆弱性がないか確認。WAFでの該当シグネチャ遮断を検討。"},
-    {"id": "web_scan", "name": "Webスキャン/探索の疑い", "severity": "high",
+    {"id": "web_scan", "name": "Webスキャン/探索の疑い", "severity": "high", "category": "security",
      "description": "同一送信元からの 4xx(404等) 失敗リクエストが多発。",
      "recommendation": "該当IPをWAF/FWで遮断。/wp-* 等の不要パスを塞ぎ、レート制限を導入。"},
-    {"id": "sensitive_path", "name": "危険パスへのアクセス", "severity": "high",
+    {"id": "sensitive_path", "name": "危険パスへのアクセス", "severity": "high", "category": "security",
      "description": "WordPress/Movable Type/Joomla/Drupal/TYPO3/EC-CUBE等の管理画面・.env/.git/phpMyAdmin等、攻撃で狙われるパスへのアクセス。",
      "recommendation": "該当IPを遮断。該当パスを公開停止/認証保護。CMS・プラグインを最新化。"},
-    {"id": "webshell_probe", "name": "Webshell探索の疑い", "severity": "high",
+    {"id": "webshell_probe", "name": "Webshell探索の疑い", "severity": "high", "category": "security",
      "description": "同一送信元が、数字のみのファイル名(例: /1.php)等ランダムな名前の.phpへ異なるパスで404を繰り返す。過去に設置されたWebshellを当てずっぽうで探る典型パターン。",
      "recommendation": "該当IPを遮断。心当たりのない.phpファイルが公開領域に無いか確認し、WAF/レート制限を導入。"},
-    {"id": "auth_bruteforce_user", "name": "認証総当たり（ユーザー単位）", "severity": "high",
+    {"id": "auth_bruteforce_user", "name": "認証総当たり（ユーザー単位）", "severity": "high", "category": "security",
      "description": "同一ユーザーへの認証失敗が多発。",
      "recommendation": "アカウントロック/パスワード強化/MFA。攻撃継続なら一時無効化。"},
-    {"id": "auth_bruteforce_ip", "name": "認証総当たり（送信元IP単位）", "severity": "high",
+    {"id": "auth_bruteforce_ip", "name": "認証総当たり（送信元IP単位）", "severity": "high", "category": "security",
      "description": "同一送信元IPからの認証失敗が多発。",
      "recommendation": "該当IPを遮断（Fail2ban等の自動遮断）。公開ポート/VPN露出を見直す。"},
-    {"id": "root_ssh_attempt", "name": "rootへのSSH試行", "severity": "high",
+    {"id": "root_ssh_attempt", "name": "rootへのSSH試行", "severity": "high", "category": "security",
      "description": "外部からrootユーザーへのSSH認証試行。root直接ログインは通常禁止すべき。",
      "recommendation": "sshd_config で PermitRootLogin no を設定。PasswordAuthentication no（公開鍵のみ）。Fail2banで自動遮断。必要なら SSH ポートを非標準ポートへ変更 or IP制限。"},
-    {"id": "ssh_invalid_user", "name": "SSH不正ユーザー試行", "severity": "warning",
+    {"id": "ssh_invalid_user", "name": "SSH不正ユーザー試行", "severity": "warning", "category": "security",
      "description": "存在しないユーザーや権限外ユーザーへのSSH認証失敗。ブルートフォース・辞書攻撃の兆候。",
      "recommendation": "Fail2banで自動遮断。AllowUsers/DenyUsersで許可ユーザーを限定。パスワード認証を無効化し公開鍵のみに。"},
-    {"id": "foreign_access", "name": "海外からのアクセス", "severity": "warning",
+    {"id": "foreign_access", "name": "海外からのアクセス", "severity": "warning", "category": "security",
      "description": "日本国外のIPからのアクセス（GeoIP設定時）。",
      "recommendation": "業務上想定外なら該当国/IPを遮断検討。"},
-    {"id": "source_silent", "name": "ログ未達（送信元の停止疑い）", "severity": "warning",
+    {"id": "source_silent", "name": "ログ未達（送信元の停止疑い）", "severity": "warning", "category": "operations",
      "description": "これまで継続的に送信していたログソースから、一定時間データが届いていない。",
      "recommendation": "対象機器/エージェントの死活・ネットワーク疎通・NXLog等の転送設定を確認。"},
+    {"id": "build_failure", "name": "ビルド失敗", "severity": "warning", "category": "operations",
+     "description": "Astroサイトのビルド（npm run build）が失敗した。",
+     "recommendation": "手動で `npm run build` を再実行し再現するか確認。error内容と直近のコンテンツ変更・依存パッケージ更新を確認。"
+                       "trigger が directus_flow/directus_activity の場合は直前のDirectus側の記事編集内容も確認。"
+                       "連続失敗が続く場合はビルド環境（Node.jsバージョン・依存関係）を疑う。"},
 ]
 
 
-def _rec(rule_id: str) -> tuple[str, str, str]:
+def _rec(rule_id: str) -> tuple[str, str, str, str]:
     d = next(r for r in RULE_DEFS if r["id"] == rule_id)
-    return d["name"], d["severity"], d["recommendation"]
+    return d["name"], d["severity"], d["recommendation"], d["category"]
 
 
 def evaluate(db: Session, conds: list | None = None) -> list[dict[str, Any]]:
@@ -156,8 +164,8 @@ def evaluate(db: Session, conds: list | None = None) -> list[dict[str, Any]]:
     hits: list[dict[str, Any]] = []
 
     def add(rule_id, title, evidence, count, pivot=None):
-        name, sev, rec = _rec(rule_id)
-        hits.append({"rule_id": rule_id, "rule_name": name, "severity": sev,
+        name, sev, rec, cat = _rec(rule_id)
+        hits.append({"rule_id": rule_id, "rule_name": name, "severity": sev, "category": cat,
                      "title": title, "evidence": evidence, "count": count,
                      "recommendation": rec, "pivot": pivot})
 
@@ -325,6 +333,19 @@ def evaluate(db: Session, conds: list | None = None) -> list[dict[str, Any]]:
                 f"最終受信から約 {hrs} 時間経過（種別={stype or '-'} / これまでの実績 {cnt} 件）", 1,
                 pivot={"field": "source", "value": source})
 
+    # --- ビルド失敗（Astro, source_type=astro_build）: 運用監視系。1件でも要対応。閾値なし ---
+    rows = db.execute(
+        select(Event.source, func.count())
+        .select_from(Event).join(N, N.event_id == Event.id)
+        .where(Event.source_type == "astro_build", N.event_result == "failure",
+               Event.source.isnot(None), *w)
+        .group_by(Event.source)
+        .order_by(func.count().desc()).limit(MAX_HITS_PER_RULE)
+    ).all()
+    for source, cnt in rows:
+        add("build_failure", f"ビルド失敗: {source}", f"ビルド失敗 {cnt} 件", cnt,
+            pivot={"field": "source", "value": source})
+
     # --- カスタムルール（ユーザー定義。DB保存分を動的評価）---
     hits.extend(_evaluate_custom(db, w))
 
@@ -357,7 +378,7 @@ def _evaluate_custom(db: Session, w: list) -> list[dict[str, Any]]:
             ).all()
             for val, cnt in rows2:
                 hits.append({
-                    "rule_id": f"custom_{r.id}", "rule_name": r.name, "severity": r.severity,
+                    "rule_id": f"custom_{r.id}", "rule_name": r.name, "severity": r.severity, "category": "custom",
                     "title": f"{r.name}: {val}", "evidence": f"{evidence_base} / {cnt} 件",
                     "count": cnt, "recommendation": rec,
                     "pivot": {"field": r.group_by, "value": str(val)} if r.group_by in GROUPBY_FIELDS else None,
@@ -369,7 +390,7 @@ def _evaluate_custom(db: Session, w: list) -> list[dict[str, Any]]:
             ) or 0
             if cnt >= r.min_count:
                 hits.append({
-                    "rule_id": f"custom_{r.id}", "rule_name": r.name, "severity": r.severity,
+                    "rule_id": f"custom_{r.id}", "rule_name": r.name, "severity": r.severity, "category": "custom",
                     "title": r.name, "evidence": f"{evidence_base} / {cnt} 件", "count": cnt,
                     "recommendation": rec, "pivot": None,
                 })

@@ -136,6 +136,17 @@ export function adviseForEvent(e: EventLike): EventAdvice | null {
     };
   }
 
+  // ビルド失敗（Astro, source_type=astro_build）: 運用監視系。攻撃系とは別トーン（「不審」ではなく「要対応」）
+  if (cat === "build" && result === "failure") {
+    return {
+      level: "warning",
+      title: "ビルド失敗（要対応）",
+      rec: "npm run build を手動で再実行して再現するか確認。errorの内容と直近のコンテンツ変更・依存パッケージ更新を確認。"
+        + "trigger が directus_flow/directus_activity ならDirectus側の記事編集内容も確認。",
+      actions: ["ビルド再実行", "error内容確認", "Directus編集確認", "ビルド環境確認"],
+    };
+  }
+
   // 高重大度（上記に当たらないが警告以上）
   if (["critical", "crit", "alert", "emerg", "error", "err", "warning", "warn"].includes(sev)) {
     return {
