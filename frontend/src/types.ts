@@ -19,6 +19,7 @@ export interface EventRow {
   source_as_org: string | null;
   actor_user: string | null;
   url_path: string | null;
+  url_query: string | null;
   http_method: string | null;
   http_status_code: string | null;
   message: string | null;

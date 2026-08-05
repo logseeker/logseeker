@@ -154,7 +154,8 @@ export function EventDetail({ id, onClose, onPivot, onEntity }:
   const advice = d ? adviseForEvent({
     event_category: n.event_category as string | null, event_result: n.event_result as string | null,
     event_severity: n.event_severity as string | null, actor_user: n.actor_user as string | null,
-    url_path: n.url_path as string | null, http_status_code: n.http_status_code as string | null,
+    url_path: n.url_path as string | null, url_query: n.url_query as string | null,
+    http_status_code: n.http_status_code as string | null,
     source_type: d.source_type,
   }) : null;
 

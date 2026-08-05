@@ -147,7 +147,7 @@ def _row(ev: Event, n: N) -> dict:
         "source_name": n.source_name, "device_name": n.device_name,
         "source_ip": n.source_ip, "source_country": n.source_country,
         "source_asn": n.source_asn, "source_as_org": n.source_as_org, "actor_user": n.actor_user,
-        "url_domain": n.url_domain, "url_path": n.url_path,
+        "url_domain": n.url_domain, "url_path": n.url_path, "url_query": n.url_query,
         "http_method": n.http_method, "http_status_code": n.http_status_code,
         "service_name": n.service_name,
         "message": n.message,

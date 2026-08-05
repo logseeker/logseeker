@@ -23,13 +23,14 @@ GROUPBY_FIELDS = ["source_ip", "actor_user", "device_name", "url_domain", "host_
                   "source_as_org"]
 
 # しきい値（必要なら調整）
-WEB_SCAN_MIN = 10      # 同一IPからの 4xx 失敗リクエスト数
-AUTH_FAIL_MIN = 10     # 同一ユーザー/IPの認証失敗数
-SENSITIVE_MIN = 3      # 同一IPからの危険パスアクセス数（単発ノイズを除く）
-MAX_HITS_PER_RULE = 50 # 1ルールあたりの表示上限（画面が埋もれないように）
-HOME_COUNTRY = "JP"    # 「海外」判定の基準国（ISOコード）。将来設定化も可能。
-SILENCE_MIN_EVENTS = 5 # ログ未達判定の対象にする最小実績件数（一度きりのテスト等のノイズを除外）
+WEB_SCAN_MIN = 10        # 同一IPからの 4xx 失敗リクエスト数
+AUTH_FAIL_MIN = 10       # 同一ユーザー/IPの認証失敗数
+SENSITIVE_MIN = 3        # 同一IPからの危険パスアクセス数（単発ノイズを除く）
+MAX_HITS_PER_RULE = 50   # 1ルールあたりの表示上限（画面が埋もれないように）
+HOME_COUNTRY = "JP"      # 「海外」判定の基準国（ISOコード）。将来設定化も可能。
+SILENCE_MIN_EVENTS = 5   # ログ未達判定の対象にする最小実績件数（一度きりのテスト等のノイズを除外）
 DEFAULT_SILENCE_HOURS = 24
+WEBSHELL_PROBE_MIN = 5   # 同一IPが異なるファイル名で数字名.phpを試行した件数（同一パスの再試行は含めない）
 
 
 def get_silence_hours(db: Session) -> int:
@@ -76,17 +77,48 @@ SENSITIVE_PATHS = [
     "eval-stdin", "/shell", "wso.php", "c99.php", "r57.php", "/cmd.php",
 ]
 
+# 数字のみのファイル名(1〜4桁).php への探索（過去に設置されたWebshellを当てずっぽうで探る典型パターン。
+# 例: /1.php /222.php /8.php。ファイル名が毎回変わるためSENSITIVE_PATHSの固定文字列一致では拾えない）
+WEBSHELL_PROBE_RE = r"(^|/)\d{1,4}\.php$"
+
+# 攻撃ペイロードのシグネチャ（URLのパス・クエリ双方に対して部分一致で検査）。
+# frontend/src/advice.ts の PAYLOAD_SIGNATURES と同期させること。今後も追加していく前提の配列。
+PAYLOAD_SIGNATURES = [
+    # パストラバーサル
+    "../", "..%2f", "%2e%2e",
+    # SQLインジェクション（union select / or 1=1 はURLエンコード(%20)・フォームエンコード(+)後の
+    # 亜種も追加。生のスペースはログの request 文字列上ではほぼ出現しないため）
+    "union select", "union%20select", "union+select",
+    "sleep(",
+    "or 1=1", "or%201=1", "or+1=1",
+    ";--",
+    # XSS
+    "<script", "onerror=", "javascript:",
+    # PHPラッパー悪用
+    "php://input", "php://filter", "data://text",
+    # コマンドインジェクション
+    "; cat ", "| id", "`id`",
+    # Log4Shell
+    "${jndi:",
+]
+
 # ルール定義（画面の「監視ルール一覧」用）
 RULE_DEFS = [
     {"id": "ioc_match", "name": "脅威情報(IOC)一致", "severity": "critical",
      "description": "既知の不正IP/ドメインに一致する通信。",
      "recommendation": "脅威情報に登録済み。該当IP/ドメインを即時遮断し、関連イベントを調査。"},
+    {"id": "payload_injection", "name": "攻撃ペイロード検知", "severity": "critical",
+     "description": "URL(パス/クエリ)にパストラバーサル・SQLi・XSS・PHPラッパー・コマンドインジェクション・Log4Shell等の既知の攻撃シグネチャを含む。",
+     "recommendation": "該当IPを即時遮断し、対象アプリケーションに脆弱性がないか確認。WAFでの該当シグネチャ遮断を検討。"},
     {"id": "web_scan", "name": "Webスキャン/探索の疑い", "severity": "high",
      "description": "同一送信元からの 4xx(404等) 失敗リクエストが多発。",
      "recommendation": "該当IPをWAF/FWで遮断。/wp-* 等の不要パスを塞ぎ、レート制限を導入。"},
     {"id": "sensitive_path", "name": "危険パスへのアクセス", "severity": "high",
      "description": "WordPress/Movable Type/Joomla/Drupal/TYPO3/EC-CUBE等の管理画面・.env/.git/phpMyAdmin等、攻撃で狙われるパスへのアクセス。",
      "recommendation": "該当IPを遮断。該当パスを公開停止/認証保護。CMS・プラグインを最新化。"},
+    {"id": "webshell_probe", "name": "Webshell探索の疑い", "severity": "high",
+     "description": "同一送信元が、数字のみのファイル名(例: /1.php)等ランダムな名前の.phpへ異なるパスで404を繰り返す。過去に設置されたWebshellを当てずっぽうで探る典型パターン。",
+     "recommendation": "該当IPを遮断。心当たりのない.phpファイルが公開領域に無いか確認し、WAF/レート制限を導入。"},
     {"id": "auth_bruteforce_user", "name": "認証総当たり（ユーザー単位）", "severity": "high",
      "description": "同一ユーザーへの認証失敗が多発。",
      "recommendation": "アカウントロック/パスワード強化/MFA。攻撃継続なら一時無効化。"},
@@ -141,6 +173,21 @@ def evaluate(db: Session, conds: list | None = None) -> list[dict[str, Any]]:
             f"脅威情報({src or '不明'})登録の{itype} / 関連イベント {cnt} 件", cnt,
             pivot={"field": field, "value": value})
 
+    # --- 攻撃ペイロード検知: URL(パス/クエリ)に既知の攻撃シグネチャ（閾値なし）---
+    rows = db.execute(
+        select(N.source_ip, func.count())
+        .select_from(Event).join(N, N.event_id == Event.id)
+        .where(N.source_ip.isnot(None),
+               or_(*[N.url_path.ilike(f"%{p}%") for p in PAYLOAD_SIGNATURES],
+                   *[N.url_query.ilike(f"%{p}%") for p in PAYLOAD_SIGNATURES]), *w)
+        .group_by(N.source_ip)
+        .order_by(func.count().desc()).limit(MAX_HITS_PER_RULE)
+    ).all()
+    for ip, cnt in rows:
+        add("payload_injection", f"攻撃ペイロード検知: {ip}",
+            f"パストラバーサル/SQLi/XSS等のシグネチャを含むリクエスト {cnt} 件", cnt,
+            pivot={"field": "source_ip", "value": ip})
+
     # --- Webスキャン: 同一IPの 4xx 失敗多発 ---
     rows = db.execute(
         select(N.source_ip, func.count())
@@ -164,6 +211,21 @@ def evaluate(db: Session, conds: list | None = None) -> list[dict[str, Any]]:
     ).all()
     for ip, cnt in rows:
         add("sensitive_path", f"危険パスへのアクセス: {ip}", f"危険パスへのアクセス {cnt} 件", cnt,
+            pivot={"field": "source_ip", "value": ip})
+
+    # --- Webshell探索の疑い: 同一IPが異なるファイル名で数字名.phpへ404を連発 ---
+    rows = db.execute(
+        select(N.source_ip, func.count(func.distinct(N.url_path)))
+        .select_from(Event).join(N, N.event_id == Event.id)
+        .where(N.event_category == "web", N.http_status_code == "404",
+               N.url_path.op("~*")(WEBSHELL_PROBE_RE),
+               N.source_ip.isnot(None), *w)
+        .group_by(N.source_ip).having(func.count(func.distinct(N.url_path)) >= WEBSHELL_PROBE_MIN)
+        .order_by(func.count(func.distinct(N.url_path)).desc()).limit(MAX_HITS_PER_RULE)
+    ).all()
+    for ip, cnt in rows:
+        add("webshell_probe", f"Webshell探索の疑い: {ip}",
+            f"異なるファイル名の数字名.phpへの探索アクセス {cnt} 件（例: /1.php等）", cnt,
             pivot={"field": "source_ip", "value": ip})
 
     # --- 認証総当たり（ユーザー単位）---

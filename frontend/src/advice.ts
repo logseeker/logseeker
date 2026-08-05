@@ -14,6 +14,7 @@ interface EventLike {
   event_severity?: string | null;
   actor_user?: string | null;
   url_path?: string | null;
+  url_query?: string | null;
   http_status_code?: string | null;
   source_type?: string | null;
 }
@@ -44,13 +45,48 @@ const SENSITIVE = [
   "eval-stdin", "/shell", "wso.php", "c99.php", "r57.php", "/cmd.php",
 ];
 
+// backend/app/rules.py の WEBSHELL_PROBE_RE と同期させること（数字のみのファイル名(1〜4桁).php への探索）。
+const WEBSHELL_PROBE_RE = /(^|\/)\d{1,4}\.php$/i;
+
+// backend/app/rules.py の PAYLOAD_SIGNATURES と同期させること。今後も追加していく前提の配列。
+const PAYLOAD_SIGNATURES = [
+  // パストラバーサル
+  "../", "..%2f", "%2e%2e",
+  // SQLインジェクション（union select / or 1=1 はURLエンコード(%20)・フォームエンコード(+)後の
+  // 亜種も追加。生のスペースはログの request 文字列上ではほぼ出現しないため）
+  "union select", "union%20select", "union+select",
+  "sleep(",
+  "or 1=1", "or%201=1", "or+1=1",
+  ";--",
+  // XSS
+  "<script", "onerror=", "javascript:",
+  // PHPラッパー悪用
+  "php://input", "php://filter", "data://text",
+  // コマンドインジェクション
+  "; cat ", "| id", "`id`",
+  // Log4Shell
+  "${jndi:",
+];
+
 export function adviseForEvent(e: EventLike): EventAdvice | null {
   const cat = (e.event_category || "").toLowerCase();
   const result = (e.event_result || "").toLowerCase();
   const user = (e.actor_user || "").toLowerCase();
   const path = e.url_path || "";
+  const query = e.url_query || "";
   const status = e.http_status_code || "";
   const sev = (e.event_severity || "").toLowerCase();
+
+  // 攻撃ペイロード検知（パストラバーサル/SQLi/XSS等。件数しきい値なし・最優先）
+  const urlCombined = `${path} ${query}`.toLowerCase();
+  if (PAYLOAD_SIGNATURES.some((p) => urlCombined.includes(p.toLowerCase()))) {
+    return {
+      level: "danger",
+      title: "攻撃ペイロード検知",
+      rec: "パストラバーサル/SQLi/XSS等の既知シグネチャを含むリクエスト。該当IPを即時遮断し、対象アプリの脆弱性有無を確認。",
+      actions: ["IP遮断", "脆弱性確認", "WAF"],
+    };
+  }
 
   // 認証失敗（root は特に危険）
   if ((cat === "authentication" || cat === "security") && result === "failure") {
@@ -77,6 +113,16 @@ export function adviseForEvent(e: EventLike): EventAdvice | null {
       title: "危険パスへのアクセス",
       rec: ".env/.git/wp-login 等への探索。該当IPを遮断し、当該パスを公開停止・認証保護。",
       actions: ["IP遮断", "該当パス公開停止", "管理画面に認証", "CMS/プラグイン更新"],
+    };
+  }
+
+  // Webshell探索の疑い（数字名.phpへの404。1件でも要注意。件数しきい値なし）
+  if (cat === "web" && status === "404" && WEBSHELL_PROBE_RE.test(path)) {
+    return {
+      level: "danger",
+      title: "Webshell探索の疑い",
+      rec: "数字名の.phpへの探索アクセス。過去に設置されたWebshellを当てずっぽうで探る典型パターン。該当IPを遮断し、心当たりのない.phpが無いか確認。",
+      actions: ["IP遮断", ".php確認", "WAF"],
     };
   }
 

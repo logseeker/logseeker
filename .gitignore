@@ -39,3 +39,6 @@ dist/
 # editor / os
 .DS_Store
 *.log
+
+# 非公開の内部ドキュメント（検知ルールの詳細仕様。フル開発ツリー側にのみ存在する想定だが念のため）
+docs/detection-rules.md
