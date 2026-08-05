@@ -165,8 +165,9 @@ export default function App() {
       return { ...p, tax };
     });
   };
-  const onDate = (which: "start" | "end", d: string) =>
-    setFilter((p) => ({ ...p, [which]: d ? `${d}T${which === "start" ? "00:00:00" : "23:59:59"}+09:00` : undefined }));
+  // Events画面の上部フィルタバーは「検索」ボタンを押すまで下書き(draft)のまま反映しない。
+  // ボタン押下時にまとめてこの関数で確定させる（毎回のドロップダウン変更で重いクエリが飛ぶのを防ぐ）
+  const onApplyFilters = (next: FilterState) => setFilter(next);
 
   // イベント一覧は455,503件規模で期間指定なしの全表スキャンが重いため、画面表示時に
   // 期間が未指定なら「直近24時間」をデフォルトで自動セットする（期間UIの開始日/終了日欄に
@@ -214,7 +215,7 @@ export default function App() {
       case "dashboard": return <Dashboard onPick={drill} changelog={changelog} onNavChangelog={() => setScreen("changelog")} />;
       case "changelog": return <Changelog />;
       case "events": return <Events filter={filter} search={search} setSearch={setSearch}
-        onTax={onTax} onDate={onDate} onAttention={onAttention} onThreat={onThreat} onEntity={navEntity} onNav={setScreen} />;
+        onTax={onTax} onApplyFilters={onApplyFilters} onAttention={onAttention} onThreat={onThreat} onEntity={navEntity} onNav={setScreen} />;
       case "sources": return <Sources filter={filter} onPick={drill} />;
       case "hosts": return <HostsDomains filter={filter} onPick={drill} />;
       case "fields": return <Fields filter={filter} />;

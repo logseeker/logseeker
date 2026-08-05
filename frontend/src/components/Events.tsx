@@ -116,14 +116,60 @@ const THREAT_INFO: Record<string, { label: string; cls: string; rec: string }> =
     rec: "Fail2ban で自動遮断。AllowUsers で許可ユーザーを限定。公開鍵のみ認証に変更（PasswordAuthentication no）。" },
 };
 
+// 期間プリセット。時間単位は「現在時刻からN時間/N日さかのぼる」ローリング窓、
+// 当月/前月は暦月の境界（当月は月初〜前日まで、前月は月初〜月末まで）。
+const DATE_PRESETS: { key: string; label: string }[] = [
+  { key: "1h", label: "1時間" },
+  { key: "3h", label: "3時間" },
+  { key: "5h", label: "5時間" },
+  { key: "8h", label: "8時間" },
+  { key: "24h", label: "24時間" },
+  { key: "3d", label: "3日" },
+  { key: "7d", label: "7日" },
+  { key: "14d", label: "14日" },
+  { key: "21d", label: "21日" },
+  { key: "30d", label: "30日" },
+  { key: "31d", label: "31日" },
+  { key: "thisMonth", label: "当月" },
+  { key: "lastMonth", label: "前月" },
+];
+const pad2 = (n: number) => String(n).padStart(2, "0");
+const fmtLocalJst = (d: Date, endOfDay = false) =>
+  `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${endOfDay ? "23:59:59" : "00:00:00"}+09:00`;
+function computePresetRange(key: string): { start: string; end: string } | null {
+  const now = new Date();
+  const hoursMap: Record<string, number> = { "1h": 1, "3h": 3, "5h": 5, "8h": 8, "24h": 24 };
+  const daysMap: Record<string, number> = { "3d": 3, "7d": 7, "14d": 14, "21d": 21, "30d": 30, "31d": 31 };
+  if (key in hoursMap) {
+    const start = new Date(now.getTime() - hoursMap[key] * 60 * 60 * 1000);
+    return { start: start.toISOString(), end: now.toISOString() };
+  }
+  if (key in daysMap) {
+    const start = new Date(now.getTime() - daysMap[key] * 24 * 60 * 60 * 1000);
+    return { start: start.toISOString(), end: now.toISOString() };
+  }
+  if (key === "thisMonth") {
+    const first = new Date(now.getFullYear(), now.getMonth(), 1);
+    let yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+    if (yesterday < first) yesterday = first; // 月初日に選択した場合は前日が存在しないため当月1日のみにする
+    return { start: fmtLocalJst(first), end: fmtLocalJst(yesterday, true) };
+  }
+  if (key === "lastMonth") {
+    const first = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const lastDay = new Date(now.getFullYear(), now.getMonth(), 0);
+    return { start: fmtLocalJst(first), end: fmtLocalJst(lastDay, true) };
+  }
+  return null;
+}
+
 export function Events({
-  filter, setSearch, search, onTax, onDate, onAttention, onThreat, onEntity, onNav,
+  filter, setSearch, search, onTax, onApplyFilters, onAttention, onThreat, onEntity, onNav,
 }: {
   filter: FilterState;
   search: string;
   setSearch: (s: string) => void;
   onTax: (k: string, v: string) => void;
-  onDate: (which: "start" | "end", d: string) => void;
+  onApplyFilters: (next: FilterState) => void;
   onAttention: (b: boolean) => void;
   onThreat: (v: string) => void;
   onEntity: (type: string, value: string) => void;
@@ -139,6 +185,30 @@ export function Events({
   const [pageSize, setPageSize] = useState(30);
   const [offset, setOffset] = useState(0);
   const [showAdvice, setShowAdvice] = useState(false);   // 「対応策」列の表示切替（既定オフ）
+  const [datePreset, setDatePreset] = useState("24h");   // 期間プルダウンの選択状態（画面初期表示のデフォルトと合わせる）
+
+  // 上部フィルタバーは「実行」ボタンを押すまで実際の検索(filter)には反映しない下書き状態。
+  // ドロップダウン選択のたびに毎回大量データへ再クエリが飛んで重くなるのを避けるため。
+  const [draft, setDraft] = useState<FilterState>(filter);
+  useEffect(() => { setDraft(filter); }, [filter]);
+
+  const setDraftTax = (k: string, v: string) => setDraft((d) => {
+    const tax = { ...d.tax };
+    if (!v) delete tax[k]; else tax[k] = v;
+    return { ...d, tax };
+  });
+  const setDraftThreat = (v: string) => setDraft((d) => ({ ...d, threat: v || undefined }));
+  const applyDatePreset = (key: string) => {
+    setDatePreset(key);
+    if (!key) return;
+    const range = computePresetRange(key);
+    if (range) setDraft((d) => ({ ...d, start: range.start, end: range.end }));
+  };
+  const handleDateChange = (which: "start" | "end", d: string) => {
+    setDatePreset("");   // 日付欄を手動編集したらプルダウンは「カスタム」扱いにする
+    setDraft((prev) => ({ ...prev, [which]: d ? `${d}T${which === "start" ? "00:00:00" : "23:59:59"}+09:00` : undefined }));
+  };
+  const applyFilters = () => onApplyFilters({ ...draft, q: search || undefined });
 
   // フィルタ変更で先頭ページに戻す
   useEffect(() => { setOffset(0); }, [filter]);
@@ -178,41 +248,41 @@ export function Events({
           <div className="row g-2 align-items-end">
             <div className="col-md">
               <label className="form-label">全文検索（payload全体）</label>
-              <input className="form-control" placeholder="Enterで検索" value={search}
+              <input className="form-control" placeholder="Enterまたは検索ボタンで実行" value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") onTax("__q__", search); }} />
+                onKeyDown={(e) => { if (e.key === "Enter") applyFilters(); }} />
             </div>
             <div className="col-md-auto">
               <label className="form-label">ログソース</label>
-              <select className="form-select" value={filter.tax.source_name ?? ""} onChange={(e) => onTax("source_name", e.target.value)}>
+              <select className="form-select" value={draft.tax.source_name ?? ""} onChange={(e) => setDraftTax("source_name", e.target.value)}>
                 <option value="">すべて</option>
                 {srcNames.map((s) => <option key={s.value ?? ""} value={s.value ?? ""}>{s.value} ({s.count})</option>)}
               </select>
             </div>
             <div className="col-md-auto">
               <label className="form-label">種別</label>
-              <select className="form-select" value={filter.tax.source_type ?? ""} onChange={(e) => onTax("source_type", e.target.value)}>
+              <select className="form-select" value={draft.tax.source_type ?? ""} onChange={(e) => setDraftTax("source_type", e.target.value)}>
                 <option value="">すべて</option>
                 {types.map((t) => <option key={t.source_type ?? ""} value={t.source_type ?? ""}>{stLabel(t.source_type)} ({t.count})</option>)}
               </select>
             </div>
             <div className="col-md-auto">
               <label className="form-label">ステータス</label>
-              <select className="form-select" value={filter.tax.http_status_code ?? ""} onChange={(e) => onTax("http_status_code", e.target.value)}>
+              <select className="form-select" value={draft.tax.http_status_code ?? ""} onChange={(e) => setDraftTax("http_status_code", e.target.value)}>
                 <option value="">すべて</option>
                 {statuses.map((s) => <option key={s.value ?? ""} value={s.value ?? ""}>{s.value} ({s.count})</option>)}
               </select>
             </div>
             <div className="col-md-auto">
               <label className="form-label">重大度</label>
-              <select className="form-select" value={filter.tax.event_severity ?? ""} onChange={(e) => onTax("event_severity", e.target.value)}>
+              <select className="form-select" value={draft.tax.event_severity ?? ""} onChange={(e) => setDraftTax("event_severity", e.target.value)}>
                 <option value="">すべて</option>
                 {severities.map((s) => <option key={s.value ?? ""} value={s.value ?? ""}>{s.value} ({s.count})</option>)}
               </select>
             </div>
             <div className="col-md-auto">
               <label className="form-label">脅威</label>
-              <select className="form-select" value={filter.threat ?? ""} onChange={(e) => onThreat(e.target.value)}>
+              <select className="form-select" value={draft.threat ?? ""} onChange={(e) => setDraftThreat(e.target.value)}>
                 <option value="">すべて</option>
                 <option value="any">危ない系（総合）</option>
                 <option value="ioc">IOC一致</option>
@@ -224,10 +294,21 @@ export function Events({
             </div>
             <div className="col-md-auto">
               <label className="form-label">期間</label>
-              <div className="input-group">
-                <input type="date" className="form-control" value={filter.start?.slice(0, 10) ?? ""} onChange={(e) => onDate("start", e.target.value)} />
-                <input type="date" className="form-control" value={filter.end?.slice(0, 10) ?? ""} onChange={(e) => onDate("end", e.target.value)} />
+              <div className="d-flex gap-1 flex-wrap">
+                <select className="form-select" style={{ width: 110 }} value={datePreset}
+                  onChange={(e) => applyDatePreset(e.target.value)}>
+                  <option value="">カスタム</option>
+                  {DATE_PRESETS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+                </select>
+                <div className="input-group" style={{ width: "auto" }}>
+                  <input type="date" className="form-control" value={draft.start?.slice(0, 10) ?? ""} onChange={(e) => handleDateChange("start", e.target.value)} />
+                  <input type="date" className="form-control" value={draft.end?.slice(0, 10) ?? ""} onChange={(e) => handleDateChange("end", e.target.value)} />
+                </div>
               </div>
+            </div>
+            <div className="col-md-auto">
+              <label className="form-label d-block">&nbsp;</label>
+              <button type="button" className="btn btn-primary" onClick={applyFilters}>🔍 検索</button>
             </div>
             <div className="col-md-auto">
               <label className="form-label d-block">表示</label>
