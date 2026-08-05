@@ -40,6 +40,17 @@ jobs:
             echo "notes<<RELEASE_NOTES_EOF"
             git log "$RANGE" --no-merges --pretty=format:"- %s"
             echo ""
+            echo ""
+            echo "## 本番サーバーへの反映手順（インストール済みの場合）"
+            echo ""
+            echo '```bash'
+            echo "cd /opt/logseeker"
+            echo "sudo -u logseeker git pull                    # origin = logseeker/logseeker"
+            echo "sudo systemctl restart logseeker-backend      # 依存を追加した場合は venv で pip install も"
+            echo "cd frontend && sudo -u logseeker env VITE_API_BASE= npm run build"
+            echo "sudo cp -a dist/. /var/www/logseeker/"
+            echo "sudo chown -R apache:apache /var/www/logseeker"
+            echo '```'
             echo "RELEASE_NOTES_EOF"
           } >> "$GITHUB_OUTPUT"
 
