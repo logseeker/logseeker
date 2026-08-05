@@ -83,6 +83,11 @@ WEBSHELL_PROBE_RE = r"(^|/)\d{1,4}\.php$"
 
 # 攻撃ペイロードのシグネチャ（URLのパス・クエリ双方に対して部分一致で検査）。
 # frontend/src/advice.ts の PAYLOAD_SIGNATURES と同期させること。今後も追加していく前提の配列。
+# 注意: "..%2f" "%2e%2e" "union%20select" "or%201=1" は文字列中の % をILIKEワイルドカードとして
+# 意図的にエスケープしていない（例: "%2e%2e" は隣接していなくても "2e" が2回出現すればヒットする）。
+# バグではなく、閾値なし・見逃さない設計のpayload_injectionにおいてこの広めの一致が有効に働くことを
+# 本番データで確認済み（docs/detection-rules.md 2節参照）。厳密な隣接一致に直す場合は
+# .ilike(pattern, escape="\\") で % / _ をエスケープすること。
 PAYLOAD_SIGNATURES = [
     # パストラバーサル
     "../", "..%2f", "%2e%2e",
