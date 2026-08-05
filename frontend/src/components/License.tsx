@@ -53,7 +53,7 @@ export function License() {
                         </span>
                       )}
                     </>
-                  ) : "無期限"}
+                  ) : info.source === "applied" ? "無期限" : "-"}
                 </div></div>
               <div className="datagrid-item"><div className="datagrid-title">データ保持期間</div>
                 <div className="datagrid-content">
