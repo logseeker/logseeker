@@ -11,11 +11,11 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .config import settings
-from .models import License, Setting
+from .models import Event, License, Setting
 
 # ティア定義（カテゴリ＝source_type を段階的に解放）
 TIERS = {
@@ -69,6 +69,9 @@ INSTALL_DATE_KEY = "install_date"
 
 def install_date(db: Session) -> float:
     """このインスタンスの設置日（epoch秒）。初回アクセス時にDBへ記録し、以後は不変。
+    本機能より前から稼働している既存インスタンスでは「初回アクセス時刻」が実際の設置日より
+    大きくずれるため、最初に受信したイベントの received_at を実際の稼働開始日の代わりに使う
+    （イベントが1件も無ければ現在時刻）。
     データ保持期間（既定90日、ライセンス未適用時でも有効）の起点として使う。"""
     row = db.get(Setting, INSTALL_DATE_KEY)
     if row and row.value:
@@ -76,7 +79,8 @@ def install_date(db: Session) -> float:
             return float(row.value)
         except (TypeError, ValueError):
             pass
-    ts = time.time()
+    earliest = db.execute(select(func.min(Event.received_at))).scalar()
+    ts = earliest.timestamp() if earliest else time.time()
     db.add(Setting(key=INSTALL_DATE_KEY, value=str(ts)))
     db.commit()
     return ts
