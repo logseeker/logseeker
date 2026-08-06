@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import settings
-from .models import License
+from .models import License, Setting
 
 # ティア定義（カテゴリ＝source_type を段階的に解放）
 TIERS = {
@@ -62,6 +62,37 @@ def retention_days(lic: Lic) -> int:
     if lic.retention_days is None:
         return DEFAULT_RETENTION_DAYS
     return lic.retention_days
+
+
+INSTALL_DATE_KEY = "install_date"
+
+
+def install_date(db: Session) -> float:
+    """このインスタンスの設置日（epoch秒）。初回アクセス時にDBへ記録し、以後は不変。
+    データ保持期間（既定90日、ライセンス未適用時でも有効）の起点として使う。"""
+    row = db.get(Setting, INSTALL_DATE_KEY)
+    if row and row.value:
+        try:
+            return float(row.value)
+        except (TypeError, ValueError):
+            pass
+    ts = time.time()
+    db.add(Setting(key=INSTALL_DATE_KEY, value=str(ts)))
+    db.commit()
+    return ts
+
+
+def retention_window(db: Session, lic: Lic) -> tuple[float, float | None, int | None]:
+    """データ保持期間の (起点=設置日, 保持期限の目安, 残日数)。無制限保持の場合は期限・残日数はNone。
+    実際の削除は各イベントの受信日時から個別に判定されるローリングウィンドウだが、
+    「いつ頃から古いデータが消え始めるか」の目安として設置日+保持日数を返す。"""
+    inst = install_date(db)
+    ret = retention_days(lic)
+    if ret < 0:
+        return inst, None, None
+    end = inst + ret * 86400
+    left = max(0, int((end - time.time()) // 86400))
+    return inst, end, left
 
 
 def required_tier(source_type: str | None) -> int:

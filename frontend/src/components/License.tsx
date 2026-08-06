@@ -2,6 +2,19 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { LicenseInfo } from "../types";
 
+function DaysLeftBadge({ daysLeft }: { daysLeft: number | null }) {
+  if (daysLeft == null) return <>-</>;
+  return (
+    <span className={`badge ${daysLeft <= 30 ? "bg-red" : "bg-green-lt"}`}>
+      {daysLeft <= 0
+        ? "期限切れ"
+        : daysLeft <= 30
+          ? `残り${daysLeft}日`
+          : `残り約${Math.round(daysLeft / 30)}ヶ月`}
+    </span>
+  );
+}
+
 export function License() {
   const [info, setInfo] = useState<LicenseInfo | null>(null);
   const [key, setKey] = useState("");
@@ -44,22 +57,25 @@ export function License() {
                 </div></div>
               <div className="datagrid-item"><div className="datagrid-title">残日数</div>
                 <div className="datagrid-content">
-                  {info.expires_at && info.days_left != null ? (
-                    <span className={`badge ${info.days_left <= 30 ? "bg-red" : "bg-green-lt"}`}>
-                      {info.days_left <= 0
-                        ? "期限切れ"
-                        : info.days_left <= 30
-                          ? `残り${info.days_left}日`
-                          : `残り約${Math.round(info.days_left / 30)}ヶ月`}
-                    </span>
-                  ) : "-"}
+                  {info.expires_at ? <DaysLeftBadge daysLeft={info.days_left} /> : "-"}
                 </div></div>
-              <div className="datagrid-item"><div className="datagrid-title">データ保持期間</div>
+            </div>
+          </div>
+          <div className="card-body border-top">
+            <h4 className="mb-2">データ保持期間</h4>
+            <div className="text-secondary small mb-2">超過分はDBから自動削除（ライセンスキーで延長可能。既定90日）</div>
+            <div className="datagrid">
+              <div className="datagrid-item"><div className="datagrid-title">保持日数</div>
                 <div className="datagrid-content">
                   {info.retention_unlimited
                     ? <span className="badge bg-green-lt">無制限</span>
                     : <>{info.retention_days} 日</>}
-                  <span className="text-secondary small ms-2">（超過分はDBから自動削除。既定90日）</span>
+                </div></div>
+              <div className="datagrid-item"><div className="datagrid-title">起点（設置日）</div>
+                <div className="datagrid-content">{info.retention_started_at.slice(0, 10)}</div></div>
+              <div className="datagrid-item"><div className="datagrid-title">残り（目安）</div>
+                <div className="datagrid-content">
+                  {info.retention_unlimited ? "-" : <DaysLeftBadge daysLeft={info.retention_days_left} />}
                 </div></div>
             </div>
           </div>

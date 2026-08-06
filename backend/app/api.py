@@ -748,9 +748,10 @@ def save_silence_settings(body: SilenceSettings, db: Session = Depends(get_db), 
 def get_license(db: Session = Depends(get_db)):
     """Tier一覧・カテゴリ別可否は撤廃済み（全ログ種別・APIオプションは常に利用可）。
     データ保持期間の情報のみ返す。"""
-    from .license import current_license, days_left, retention_days
+    from .license import current_license, days_left, retention_days, retention_window
     lic = current_license(db, force=True)
     ret = retention_days(lic)
+    r_start, r_end, r_left = retention_window(db, lic)
     return {
         "licensee": lic.licensee,
         "source": lic.source,  # applied / default
@@ -758,6 +759,9 @@ def get_license(db: Session = Depends(get_db)):
         "expires_at": (datetime.fromtimestamp(lic.expires_at).isoformat() if lic.expires_at else None),
         "days_left": days_left(lic),
         "retention_days": ret, "retention_unlimited": ret < 0,
+        "retention_started_at": datetime.fromtimestamp(r_start).isoformat(),
+        "retention_expires_at": (datetime.fromtimestamp(r_end).isoformat() if r_end else None),
+        "retention_days_left": r_left,
     }
 
 

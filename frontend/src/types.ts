@@ -148,6 +148,9 @@ export interface LicenseInfo {
   days_left: number | null;
   retention_days: number;
   retention_unlimited: boolean;
+  retention_started_at: string;
+  retention_expires_at: string | null;
+  retention_days_left: number | null;
 }
 
 export interface IocFeed {
