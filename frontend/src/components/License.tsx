@@ -36,24 +36,23 @@ export function License() {
               {info.licensee && <span className="text-secondary">{info.licensee}</span>}
             </div>
             <div className="datagrid">
-              <div className="datagrid-item"><div className="datagrid-title">起点日（インストール日）</div>
+              <div className="datagrid-item"><div className="datagrid-title">インストール日</div>
                 <div className="datagrid-content">{info.started_at ? info.started_at.slice(0, 10) : "-"}</div></div>
               <div className="datagrid-item"><div className="datagrid-title">有効期限</div>
                 <div className="datagrid-content">
-                  {info.expires_at ? (
-                    <>
-                      {info.expires_at.slice(0, 10)}{" "}
-                      {info.days_left != null && (
-                        <span className={`badge ms-1 ${info.days_left <= 30 ? "bg-red" : "bg-green-lt"}`}>
-                          {info.days_left <= 0
-                            ? "期限切れ"
-                            : info.days_left <= 30
-                              ? `残り${info.days_left}日`
-                              : `残り約${Math.round(info.days_left / 30)}ヶ月`}
-                        </span>
-                      )}
-                    </>
-                  ) : info.source === "applied" ? "無期限" : "-"}
+                  {info.expires_at ? info.expires_at.slice(0, 10) : info.source === "applied" ? "無期限" : "-"}
+                </div></div>
+              <div className="datagrid-item"><div className="datagrid-title">残日数</div>
+                <div className="datagrid-content">
+                  {info.expires_at && info.days_left != null ? (
+                    <span className={`badge ${info.days_left <= 30 ? "bg-red" : "bg-green-lt"}`}>
+                      {info.days_left <= 0
+                        ? "期限切れ"
+                        : info.days_left <= 30
+                          ? `残り${info.days_left}日`
+                          : `残り約${Math.round(info.days_left / 30)}ヶ月`}
+                    </span>
+                  ) : "-"}
                 </div></div>
               <div className="datagrid-item"><div className="datagrid-title">データ保持期間</div>
                 <div className="datagrid-content">
