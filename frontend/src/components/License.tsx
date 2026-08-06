@@ -71,7 +71,7 @@ export function License() {
                     ? <span className="badge bg-green-lt">無制限</span>
                     : <>{info.retention_days} 日</>}
                 </div></div>
-              <div className="datagrid-item"><div className="datagrid-title">起点（設置日）</div>
+              <div className="datagrid-item"><div className="datagrid-title">起点</div>
                 <div className="datagrid-content">{info.retention_started_at.slice(0, 10)}</div></div>
               <div className="datagrid-item"><div className="datagrid-title">残り（目安）</div>
                 <div className="datagrid-content">

@@ -83,10 +83,12 @@ def install_date(db: Session) -> float:
 
 
 def retention_window(db: Session, lic: Lic) -> tuple[float, float | None, int | None]:
-    """データ保持期間の (起点=設置日, 保持期限の目安, 残日数)。無制限保持の場合は期限・残日数はNone。
+    """データ保持期間の (起点, 保持期限の目安, 残日数)。無制限保持の場合は期限・残日数はNone。
+    起点は、ライセンス適用済みならその適用日（lic.applied_at。インストール日と適用日は
+    一致するとは限らない）、未適用ならこのインスタンスの設置日（install_date）。
     実際の削除は各イベントの受信日時から個別に判定されるローリングウィンドウだが、
-    「いつ頃から古いデータが消え始めるか」の目安として設置日+保持日数を返す。"""
-    inst = install_date(db)
+    「いつ頃から古いデータが消え始めるか」の目安として起点+保持日数を返す。"""
+    inst = lic.applied_at if lic.applied_at is not None else install_date(db)
     ret = retention_days(lic)
     if ret < 0:
         return inst, None, None
