@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { stLabel } from "../labels";
+import { fmtTime, stLabel } from "../labels";
 import { adviseForEvent } from "../advice";
 import type { Annotation, EventDetail as Detail, EventRow, IncidentRow } from "../types";
 
@@ -68,7 +68,7 @@ function CommentsTab({ eventId }: { eventId: number }) {
             {a.comment && <div className="text-break">{a.comment}</div>}
             {a.tags && <div className="mt-1">{a.tags.split(",").map((t) => t.trim()).filter(Boolean).map((t) => <span key={t} className="badge bg-azure-lt me-1">{t}</span>)}</div>}
             <div className="text-secondary small mt-1">
-              {a.created_by ? `${a.created_by} · ` : ""}{a.created_at ? a.created_at.replace("T", " ").slice(0, 19) : ""}
+              {a.created_by ? `${a.created_by} · ` : ""}{a.created_at ? fmtTime(a.created_at) : ""}
             </div>
           </div>
         ))}
@@ -126,7 +126,7 @@ function MiniEvents({ items }: { items: EventRow[] }) {
       <tbody>
         {items.map((e) => (
           <tr key={e.id}>
-            <td className="text-nowrap">{e.event_time ? e.event_time.replace("T", " ").slice(0, 19) : "-"}</td>
+            <td className="text-nowrap">{e.event_time ? fmtTime(e.event_time) : "-"}</td>
             <td className="text-nowrap">{e.source_name}</td>
             <td className="text-nowrap">{stLabel(e.source_type)}</td>
             <td className="text-nowrap">{e.event_action}</td>
@@ -188,7 +188,7 @@ export function EventDetail({ id, onClose, onPivot, onEntity }:
                 </div>
               )}
               <KV obj={{
-                時刻: n.event_time, ログソース: n.source_name, 種別: stLabel(d.source_type as string),
+                時刻: fmtTime(n.event_time as string | null), ログソース: n.source_name, 種別: stLabel(d.source_type as string),
                 "ホスト/デバイス": n.device_name ?? "-", "ドメイン": n.url_domain ?? "-",
                 送信元IP: n.source_ip, ユーザー: n.actor_user, イベント: n.event_action, 結果: n.event_result,
                 重大度: n.event_severity ?? "-",

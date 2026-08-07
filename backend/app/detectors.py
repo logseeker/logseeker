@@ -37,6 +37,16 @@ DEFAULT_DETECTORS: list[dict] = [
         "priority": 100,
         "weight": 1.0,
     },
+    {
+        # Windows イベントログ（NXLog im_msvistalog）。EventIDによりフィールド構成は変わるが、
+        # Channel/EventID/SourceModuleType(=im_msvistalog固定)の3つはどのイベントにも共通して付与される。
+        "source_type": "windows_event",
+        "required_keys": ["Channel", "EventID", "SourceModuleType"],
+        "optional_keys": ["Hostname", "Severity", "SubjectUserName", "TargetUserName", "IpAddress", "Message"],
+        "key_value_hints": {"SourceModuleType": ["im_msvistalog"]},
+        "priority": 100,
+        "weight": 1.0,
+    },
 ]
 
 

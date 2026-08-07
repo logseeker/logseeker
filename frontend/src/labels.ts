@@ -37,3 +37,14 @@ export const FIELD_LABEL: Record<string, string> = {
 };
 
 export const fieldLabel = (k: string): string => FIELD_LABEL[k] || k;
+
+// event_time等はAPIからUTCのISO文字列（例: "2026-08-07T11:55:00+00:00"）で届く。
+// 文字列を単純に切り出すとUTCの数字がそのまま表示され、ブラウザのローカル時刻(JST等)と
+// 9時間ズレるため、Dateとして解釈してローカルタイムゾーンで整形する。
+export const fmtTime = (iso: string | null | undefined): string => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+};

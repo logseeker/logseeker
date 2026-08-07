@@ -66,13 +66,12 @@ MAPPINGS: dict[str, dict[str, list[str]]] = {
         "message": ["Message", "message"],
         "event_severity": ["Severity"],
     },
-    # Windows イベントログ（NXLog im_msvistalog）
+    # Windows イベントログ（NXLog im_msvistalog）。EventIDによって含まれるフィールドが
+    # 異なる（例: 4672にはIpAddressが無いが4624にはある）ため、actor_user/source_ip/
+    # service_nameはここでは拾わず _category_extras 側でフィールド有無を都度チェックして導出する。
     "windows_event": {
-        "actor_user": ["TargetUserName", "SubjectUserName", "AccountName", "User"],
-        "source_ip": ["IpAddress", "ClientAddress"],
         "observer_name": ["Hostname", "HostName"],
         "host_name": ["Hostname", "HostName"],
-        "service_name": ["ProviderName", "SourceName", "Channel"],
         "message": ["Message", "message"],
         "event_severity": ["Severity"],
     },
@@ -92,6 +91,15 @@ _RE_AUTH_USER = re.compile(r"(?:authenticating user|disconnected from(?: authent
 # LiteSpeed等は PHP の stderr を [NOTICE] で包むので、本文の "PHP Warning/Fatal/Notice" から重大度を取る
 _RE_PHP = re.compile(r"PHP (Warning|Fatal error|Parse error|Notice|Deprecated|Recoverable fatal error)", re.I)
 
+# Windows: TerminalServices(RDP)のセッション接続/切断/認証イベント(EventID 21-25, 1149等)は
+# TargetUserName/SubjectUserName/IpAddressの構造化フィールドを持たず、実際のユーザー・送信元IPは
+# Message本文にしか出ない（"ユーザー: DOMAIN\user"・"ソース ネットワーク アドレス: x.x.x.x"）。
+# 構造化フィールドが無い場合のみのフォールバックとして使う。
+# コロン直後は [ \t]*（\sだと\r\nも食べて値が空の行から次の行の内容まで誤マッチする）。
+_RE_WINEVT_USER = re.compile(r"ユーザー[:：][ \t]*(?P<user>[^\r\n]+)")
+_RE_WINEVT_DOMAIN = re.compile(r"ドメイン[:：][ \t]*(?P<domain>[^\r\n]*)")
+_RE_WINEVT_SRCIP = re.compile(r"ソース\s*ネットワーク\s*アドレス[:：][ \t]*(?P<ip>[^\r\n]+)")
+
 
 def _php_level(text: str) -> tuple[str | None, str | None]:
     m = _RE_PHP.search(text or "")
@@ -108,7 +116,7 @@ def _php_level(text: str) -> tuple[str | None, str | None]:
 # device_name はログに在ればそれを優先し、ここは設定値(source_config相当)のフォールバック。
 SOURCE_CONFIG: dict[str, dict[str, str | None]] = {
     "yamaha": {"source_name": "YAMAHAルーター", "device_name": "YAMAHAルーター"},
-    "nas": {"source_name": "NAS nas-01", "device_name": "nas-01"},
+    "nas": {"source_name": "NAS nas-36-8E-D6", "device_name": "nas-36-8E-D6"},
     "litespeed": {"source_name": None, "device_name": None},  # Web: source_name=ドメイン(vhost)
     "google_workspace": {"source_name": "Google Workspace", "device_name": None},
 }
@@ -235,16 +243,61 @@ def _category_extras(source_type: str, payload: dict, norm: dict) -> None:
             norm["event_result"] = "unknown"
 
     elif source_type == "windows_event":
-        channel = str(payload.get("Channel") or "").lower()
-        norm["event_category"] = "security" if channel == "security" else "system"
+        channel = payload.get("Channel")
+        norm["event_category"] = "security" if str(channel or "").lower() == "security" else "system"
+        # イベント/サービス: Channel + EventID（event_actionにEventID、service_nameにChannelを出す）
         eid = payload.get("EventID")
-        norm["event_action"] = f"event_{eid}" if eid is not None else None
-        if str(eid) == "4624":
-            norm["event_result"] = "success"      # ログオン成功
-        elif str(eid) == "4625":
-            norm["event_result"] = "failure"      # ログオン失敗
+        norm["event_action"] = str(eid) if eid is not None else None
+        norm["service_name"] = str(channel) if channel else None
+
+        # ステータス: EventType（AUDIT_SUCCESS/AUDIT_FAILURE等）から判定。INFO等は不明のまま。
+        etype = str(payload.get("EventType") or "").upper()
+        if etype == "AUDIT_SUCCESS":
+            norm["event_result"] = "success"
+        elif etype == "AUDIT_FAILURE":
+            norm["event_result"] = "failure"
         else:
             norm["event_result"] = "unknown"
+
+        # ユーザー: ログオン先/対象(TargetUserName)を優先し、無ければ要求元(SubjectUserName)。
+        # 対応するドメインがあれば "ドメイン\ユーザー" で結合する（EventIDによりどちらも
+        # 存在しないことがあるので都度チェックする）。
+        user, domain = payload.get("TargetUserName"), payload.get("TargetDomainName")
+        if not user:
+            user, domain = payload.get("SubjectUserName"), payload.get("SubjectDomainName")
+        if user:
+            norm["actor_user"] = f"{domain}\\{user}" if domain else str(user)
+
+        # 送信元IP: IpAddress/ClientAddressが実際の値を持つ場合のみ採用。
+        # Windowsイベントログは未使用時に空文字でなく "-" を入れてくるため、それは無視する。
+        ip = payload.get("IpAddress") or payload.get("ClientAddress")
+        if ip and str(ip) != "-":
+            norm["source_ip"] = str(ip)
+
+        # フォールバック: TerminalServices(RDP)のセッション接続/切断/認証イベント等は
+        # TargetUserName/SubjectUserName/IpAddressを持たず、Message本文にしか情報が無い。
+        # 構造化フィールドで拾えなかった場合のみ、本文の "ユーザー:"/"ソース ネットワーク
+        # アドレス:" 行から抽出する（構造化フィールドがある場合はそちらを優先し上書きしない）。
+        msg_raw = str(payload.get("Message") or "")
+        if not norm.get("actor_user"):
+            m = _RE_WINEVT_USER.search(msg_raw)
+            if m:
+                mu = m.group("user").strip()
+                if mu and mu != "-":
+                    md = _RE_WINEVT_DOMAIN.search(msg_raw)
+                    mdomain = md.group("domain").strip() if md else ""
+                    # メッセージ内に既に "ドメイン\ユーザー" 形式で入っていれば二重結合しない
+                    norm["actor_user"] = f"{mdomain}\\{mu}" if mdomain and "\\" not in mu else mu
+        if not norm.get("source_ip"):
+            m = _RE_WINEVT_SRCIP.search(msg_raw)
+            if m:
+                mip = m.group("ip").strip()
+                if mip and mip != "-":
+                    norm["source_ip"] = mip
+
+        # メッセージ: \r\n を通常の改行に整形（制御文字の見た目崩れを防ぐ）
+        if msg_raw:
+            norm["message"] = msg_raw.replace("\r\n", "\n").strip()
 
     # Astroサイトのビルドパイプライン（Directusフロー/GitHub push/手動実行が npm run build を起動した結果）。
     # source_ip/actor_user 等のタクソノミー項目に相当するフィールドが無いため MAPPINGS は使わず、

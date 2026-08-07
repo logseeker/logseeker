@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { stLabel } from "../labels";
+import { fmtTime, stLabel } from "../labels";
 import { adviseForEvent } from "../advice";
 import type { Count, EventRow, EventsResponse, FilterState, Screen } from "../types";
 import { EventDetail } from "./EventDetail";
@@ -376,7 +376,7 @@ export function Events({
             <tbody>
               {data.items.map((e) => (
                 <tr key={e.id} style={{ cursor: "pointer" }} onClick={() => setSel(e.id)}>
-                  <td style={stickyStyle(0)} title={e.event_time ?? undefined}>{e.event_time ? e.event_time.replace("T", " ").slice(0, 19) : <span className="text-secondary">（時刻なし）</span>}</td>
+                  <td style={stickyStyle(0)} title={e.event_time ?? undefined}>{e.event_time ? fmtTime(e.event_time) : <span className="text-secondary">（時刻なし）</span>}</td>
                   <td style={stickyStyle(1)} title={e.source_name ?? undefined}><a role="button" className="text-primary" onClick={(ev) => { stop(ev); e.source_name && onTax("source_name", e.source_name); }}>{dash(e.source_name)}</a></td>
                   <td style={stickyStyle(2)}>{stLabel(e.source_type)}</td>
                   <td style={stickyStyle(3)}><SevBadge s={e.event_severity} /></td>

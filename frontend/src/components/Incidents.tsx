@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { stLabel } from "../labels";
+import { fmtTime, stLabel } from "../labels";
 import type { IncidentDetail, IncidentRow } from "../types";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -71,7 +71,7 @@ export function Incidents() {
                 <tbody>
                   {detail.events.map((e) => (
                     <tr key={e.id}>
-                      <td className="text-nowrap">{e.event_time ? e.event_time.replace("T", " ").slice(0, 19) : "-"}</td>
+                      <td className="text-nowrap">{e.event_time ? fmtTime(e.event_time) : "-"}</td>
                       <td className="text-nowrap">{e.source_name}</td>
                       <td className="text-nowrap">{stLabel(e.source_type)}</td>
                       <td className="text-nowrap">{e.event_action}</td>
