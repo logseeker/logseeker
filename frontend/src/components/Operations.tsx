@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api } from "../api";
+import { addDaysStr, todayJst } from "../dateUtils";
 import type { IngestStatus, IngestVolume } from "../types";
 
 // バイト数を人が読みやすい単位に変換（1024基準）。
@@ -9,20 +10,6 @@ function formatBytes(n: number): string {
   const units = ["B", "KB", "MB", "GB", "TB"];
   const i = Math.min(units.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
   return `${(n / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
-}
-
-// 現在時刻のJST日付を YYYY-MM-DD で返す（date input の初期値・上限に使う）。
-// Date.getTime()は常にUTC epochなのでブラウザのローカルタイムゾーンには依存しない
-// （getTimezoneOffset()を絡めると二重補正になり、ブラウザがJSTの場合に日付がずれるので使わない）。
-function todayJst(): string {
-  const jst = new Date(Date.now() + 9 * 3600 * 1000);
-  return jst.toISOString().slice(0, 10);
-}
-
-function addDaysStr(dateStr: string, days: number): string {
-  const d = new Date(`${dateStr}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
 }
 
 function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {

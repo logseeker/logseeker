@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { api } from "../api";
 import type { useChangelog } from "../changelog";
+import { addDaysStr, todayJst } from "../dateUtils";
 import type { FilterState, Summary, Timeline } from "../types";
 import { BarChart } from "./BarChart";
 import { PieChart } from "./PieChart";
@@ -54,12 +55,7 @@ function ChartCard({ title, children }: { title: string; children: ReactNode }) 
 // ダッシュボードは常に全体（リセット状態）を表示する。画面の絞り込み(filter)は使わない。
 const ALL: FilterState = { tax: {} };
 
-// 推移グラフの表示レンジ（相対・現在時刻基準）。デフォルト24h。
-const RANGES: Record<string, { label: string; interval: string; ms: number }> = {
-  "24h": { label: "直近24時間", interval: "hour", ms: 24 * 3600 * 1000 },
-  "7d":  { label: "直近1週間", interval: "day", ms: 7 * 24 * 3600 * 1000 },
-  "30d": { label: "直近1ヶ月", interval: "day", ms: 30 * 24 * 3600 * 1000 },
-};
+type Granularity = "hourly" | "daily";
 
 export function Dashboard({ onPick, changelog, onNavChangelog }: {
   onPick: (k: string, v: string) => void;
@@ -68,20 +64,33 @@ export function Dashboard({ onPick, changelog, onNavChangelog }: {
 }) {
   const [s, setS] = useState<Summary | null>(null);
   const [tl, setTl] = useState<Timeline>({ buckets: [], series: {} });
-  const [range, setRange] = useState("24h");
   const [err, setErr] = useState<string | null>(null);
+  const [gran, setGran] = useState<Granularity>("hourly");
+
+  const today = todayJst();
+  const [hourlyDate, setHourlyDate] = useState(today);
+  const [dailyRange, setDailyRange] = useState({ start: addDaysStr(today, -29), end: today });
+  const [dailyDraft, setDailyDraft] = useState(dailyRange);
 
   useEffect(() => {
     api.summary(ALL).then(setS).catch((e) => setErr((e as Error).message));
   }, []);
   useEffect(() => {
-    const r = RANGES[range];
-    const end = new Date();
-    const start = new Date(end.getTime() - r.ms);
-    // 常に全体（tax無し）＋レンジのみ。合計の推移。
-    api.timeline({ tax: {}, start: start.toISOString(), end: end.toISOString() }, r.interval)
-      .then(setTl).catch(() => {});
-  }, [range]);
+    const interval = gran === "hourly" ? "hour" : "day";
+    const start = gran === "hourly" ? `${hourlyDate}T00:00:00+09:00` : `${dailyRange.start}T00:00:00+09:00`;
+    const end = gran === "hourly"
+      ? `${addDaysStr(hourlyDate, 1)}T00:00:00+09:00`
+      : `${addDaysStr(dailyRange.end, 1)}T00:00:00+09:00`;
+    // 常に全体（tax無し）。選択中の粒度・期間の推移のみ。
+    api.timeline({ tax: {}, start, end }, interval).then(setTl).catch(() => {});
+  }, [gran, hourlyDate, dailyRange]);
+
+  const applyDailyRange = () => setDailyRange(dailyDraft);
+  const setDailyPreset = (days: number) => {
+    const r = { start: addDaysStr(today, -(days - 1)), end: today };
+    setDailyDraft(r);
+    setDailyRange(r);
+  };
 
   if (err) return <div className="alert alert-danger">取得失敗: {err}</div>;
   if (!s) return <div className="text-secondary">読み込み中…</div>;
@@ -124,14 +133,39 @@ export function Dashboard({ onPick, changelog, onNavChangelog }: {
         <div className="card">
           <div className="card-header">
             <h3 className="card-title">イベント件数の推移</h3>
-            <div className="card-actions btn-group">
-              {Object.entries(RANGES).map(([k, v]) => (
-                <button key={k} className={`btn btn-sm ${range === k ? "btn-primary" : "btn-outline-primary"}`}
-                  onClick={() => setRange(k)}>{v.label}</button>
-              ))}
+            <div className="card-actions d-flex align-items-center gap-2 flex-wrap">
+              <div className="btn-group">
+                <button className={`btn btn-sm ${gran === "hourly" ? "btn-primary" : "btn-outline-primary"}`}
+                  onClick={() => setGran("hourly")}>時間別</button>
+                <button className={`btn btn-sm ${gran === "daily" ? "btn-primary" : "btn-outline-primary"}`}
+                  onClick={() => setGran("daily")}>日別</button>
+              </div>
+              {gran === "hourly" ? (
+                <div className="d-flex align-items-center gap-1">
+                  <input type="date" className="form-control form-control-sm" style={{ width: 150 }}
+                    max={today} value={hourlyDate} onChange={(e) => setHourlyDate(e.target.value || today)} />
+                  <button type="button" className="btn btn-sm btn-outline-secondary"
+                    onClick={() => setHourlyDate(today)}>本日</button>
+                </div>
+              ) : (
+                <div className="d-flex align-items-center gap-1">
+                  <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => setDailyPreset(7)}>直近7日</button>
+                  <button type="button" className="btn btn-sm btn-outline-secondary" onClick={() => setDailyPreset(30)}>直近30日</button>
+                  <input type="date" className="form-control form-control-sm" style={{ width: 150 }}
+                    max={dailyDraft.end} value={dailyDraft.start}
+                    onChange={(e) => setDailyDraft((d) => ({ ...d, start: e.target.value }))} />
+                  <span className="text-secondary">〜</span>
+                  <input type="date" className="form-control form-control-sm" style={{ width: 150 }}
+                    min={dailyDraft.start} max={today} value={dailyDraft.end}
+                    onChange={(e) => setDailyDraft((d) => ({ ...d, end: e.target.value }))} />
+                  <button type="button" className="btn btn-sm btn-primary" onClick={applyDailyRange}>表示</button>
+                </div>
+              )}
             </div>
           </div>
-          <div className="card-body"><TimelineChart data={tl} type="bar" interval={RANGES[range].interval} height={200} /></div>
+          <div className="card-body">
+            <TimelineChart data={tl} type="bar" interval={gran === "hourly" ? "hour" : "day"} height={200} />
+          </div>
         </div>
       </div>
 
