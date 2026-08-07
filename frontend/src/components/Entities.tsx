@@ -51,8 +51,8 @@ export function Entities({ onPick, initial, onNav }: {
         <div className="text-secondary small mb-1 d-flex align-items-center flex-wrap gap-2">
           <span>
             このページは、ログ上で観測された全ての識別子（IP・ユーザー・ホスト等）を対象にした調査・相関用の一覧です。
-            自社の資産一覧ではなく、アクセス元IPや外部ホストのIPも区別なく含まれます。
-            ローカルIPや登録済みグローバルIPを資産として確認したい場合は「アセット」画面をご覧ください。
+            自社の資産一覧ではないため、ローカルIPや登録済みグローバルIP（アセット）はここには表示されません。
+            アクセス元IPや外部ホストのIPを調査する画面です。ローカルIPや登録済みグローバルIPを確認したい場合は「アセット」画面をご覧ください。
           </span>
           {onNav && <button className="btn btn-sm btn-outline-secondary text-nowrap" onClick={() => onNav("assets")}>アセット画面へ</button>}
         </div>

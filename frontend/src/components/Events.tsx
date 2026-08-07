@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { fmtTime, stLabel } from "../labels";
 import { adviseForEvent } from "../advice";
+import { useAssetDisplayNames, formatHost } from "../assetNames";
 import type { Count, EventRow, EventsResponse, FilterState, Screen } from "../types";
 import { EventDetail } from "./EventDetail";
 
@@ -186,6 +187,7 @@ export function Events({
   const [offset, setOffset] = useState(0);
   const [showAdvice, setShowAdvice] = useState(false);   // 「対応策」列の表示切替（既定オフ）
   const [datePreset, setDatePreset] = useState("24h");   // 期間プルダウンの選択状態（画面初期表示のデフォルトと合わせる）
+  const assetNames = useAssetDisplayNames();
 
   // 上部フィルタバーは「実行」ボタンを押すまで実際の検索(filter)には反映しない下書き状態。
   // ドロップダウン選択のたびに毎回大量データへ再クエリが飛んで重くなるのを避けるため。
@@ -380,10 +382,10 @@ export function Events({
                   <td style={stickyStyle(1)} title={e.source_name ?? undefined}><a role="button" className="text-primary" onClick={(ev) => { stop(ev); e.source_name && onTax("source_name", e.source_name); }}>{dash(e.source_name)}</a></td>
                   <td style={stickyStyle(2)}>{stLabel(e.source_type)}</td>
                   <td style={stickyStyle(3)}><SevBadge s={e.event_severity} /></td>
-                  <td className="text-nowrap"><a role="button" className="text-reset" onClick={(ev) => { stop(ev); e.device_name && onTax("device_name", e.device_name); }}>{dash(e.device_name)}</a></td>
+                  <td className="text-nowrap"><a role="button" className="text-reset" onClick={(ev) => { stop(ev); e.device_name && onTax("device_name", e.device_name); }}>{dash(e.device_name && formatHost(e.device_name, assetNames))}</a></td>
                   <td className="text-nowrap"><a role="button" className="text-reset" onClick={(ev) => { stop(ev); e.url_domain && onTax("url_domain", e.url_domain); }}>{dash(e.url_domain)}</a></td>
                   <td className="text-nowrap">
-                    <a role="button" className="text-primary" onClick={(ev) => { stop(ev); e.source_ip && onTax("source_ip", e.source_ip); }}>{dash(e.source_ip)}</a>
+                    <a role="button" className="text-primary" onClick={(ev) => { stop(ev); e.source_ip && onTax("source_ip", e.source_ip); }}>{dash(e.source_ip && formatHost(e.source_ip, assetNames))}</a>
                     {e.source_country && (
                       <a role="button" className="text-reset ms-1" title={e.source_country}
                          onClick={(ev) => { stop(ev); onTax("source_country", e.source_country!); }}>

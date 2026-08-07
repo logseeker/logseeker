@@ -12,9 +12,9 @@ from .db import get_db
 from .models import Annotation, Asset, CustomRule, DeadLetter, Event, EventEntity, IOC, Incident, IncidentEvent
 from .models import IocFeed, License, Setting, User, UserSettings
 from .models import NormalizedEvent as N
-from .schema import (AnnotationCreate, AssetCreate, AssetUpdate, CustomRuleCreate, CustomRuleUpdate,
-                     DismissedRelease, FeedUpdate, IncidentCreate, IncidentEventAdd, LicenseApply,
-                     NotificationConfig, SilenceSettings, SyncSettings)
+from .schema import (AnnotationCreate, AssetCreate, AssetDisplayNameUpdate, AssetUpdate, CustomRuleCreate,
+                     CustomRuleUpdate, DismissedRelease, FeedUpdate, IncidentCreate, IncidentEventAdd,
+                     LicenseApply, NotificationConfig, SilenceSettings, SyncSettings)
 
 router = APIRouter(prefix="/api")
 
@@ -347,6 +347,10 @@ def dashboard_summary(db: Session = Depends(get_db), f: dict = Depends(filters))
 @router.get("/entities")
 def entities(db: Session = Depends(get_db), type: str | None = None, q: str | None = None,
              limit: int = Query(100, ge=1, le=500)):
+    """観測された全識別子の調査・相関用一覧。ローカルIP・登録済みグローバルIPは
+    「アセット」画面の対象であり自社資産一覧ではないため、ここでは除外する
+    （個別調査は引き続き「アセット」画面の「詳細」から可能）。
+    除外後にlimit件になるよう、SQL側ではlimitせずPython側でフィルタしてから切り詰める。"""
     stmt = (select(EventEntity.entity_type, EventEntity.entity_value, func.count(),
                    func.min(N.event_time), func.max(N.event_time))
             .join(N, N.event_id == EventEntity.event_id)
@@ -359,10 +363,23 @@ def entities(db: Session = Depends(get_db), type: str | None = None, q: str | No
         stmt = stmt.where(EventEntity.entity_type == type)
     if q:
         stmt = stmt.where(EventEntity.entity_value.ilike(f"%{q}%"))
-    stmt = stmt.order_by(func.count().desc()).limit(limit)
-    return [{"entity_type": t, "entity_value": v, "count": c,
-             "first_seen": fs.isoformat() if fs else None, "last_seen": ls.isoformat() if ls else None}
-            for t, v, c, fs, ls in db.execute(stmt).all()]
+    stmt = stmt.order_by(func.count().desc())
+
+    registered_ips: set[str] = set()
+    if not type or type == "ip":
+        registered_ips = set(db.execute(select(Asset.ip)).scalars().all())
+
+    out = []
+    for t, v, c, fs, ls in db.execute(stmt).all():
+        if t == "ip":
+            cls = _classify_ip(v)
+            if cls and (cls[1] == "private" or v in registered_ips):
+                continue
+        out.append({"entity_type": t, "entity_value": v, "count": c,
+                     "first_seen": fs.isoformat() if fs else None, "last_seen": ls.isoformat() if ls else None})
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _entity_event_ids(db: Session, etype: str, evalue: str):
@@ -409,10 +426,10 @@ def _classify_ip(ip: str) -> tuple[str, str] | None:
 
 
 def _asset_dict(ip: str, ip_version: str, scope: str, label: str | None, description: str | None,
-                asset_id: int | None, count: int, first_seen, last_seen) -> dict:
+                display_name: str | None, asset_id: int | None, count: int, first_seen, last_seen) -> dict:
     return {
         "id": asset_id, "ip": ip, "ip_version": ip_version, "scope": scope,
-        "label": label, "description": description, "count": count,
+        "label": label, "description": description, "display_name": display_name, "count": count,
         "first_seen": first_seen.isoformat() if first_seen else None,
         "last_seen": last_seen.isoformat() if last_seen else None,
     }
@@ -420,7 +437,7 @@ def _asset_dict(ip: str, ip_version: str, scope: str, label: str | None, descrip
 
 def _asset_reg_dict(a: Asset) -> dict:
     return {"id": a.id, "ip": a.ip, "ip_version": a.ip_version, "label": a.label,
-            "description": a.description,
+            "description": a.description, "display_name": a.display_name,
             "created_at": a.created_at.isoformat() if a.created_at else None}
 
 
@@ -436,21 +453,49 @@ def list_assets(db: Session = Depends(get_db)):
         stmt = stmt.where(lc)
     stats = {v: (c, fs, ls) for v, c, fs, ls in db.execute(stmt).all()}
 
+    # ip単位のメタ情報(表示名等)。ローカルIPも表示名だけは軽量に持てるため、
+    # scopeの判定はip_version等の保存値に頼らずその場でis_privateを再判定する。
+    asset_by_ip = {a.ip: a for a in db.execute(select(Asset)).scalars().all()}
+
     out = []
     for ip, (count, fs, ls) in stats.items():
         cls = _classify_ip(ip)
         if not cls or cls[1] != "private":
             continue
-        out.append(_asset_dict(ip, cls[0], "local", None, None, None, count, fs, ls))
+        a = asset_by_ip.get(ip)
+        out.append(_asset_dict(ip, cls[0], "local", None, None, a.display_name if a else None,
+                                a.id if a else None, count, fs, ls))
 
-    registered = db.execute(select(Asset).order_by(Asset.created_at.desc())).scalars().all()
-    for a in registered:
+    for a in sorted(asset_by_ip.values(), key=lambda a: a.created_at, reverse=True):
+        cls = _classify_ip(a.ip)
+        if not cls or cls[1] != "global":
+            continue
         count, fs, ls = stats.get(a.ip, (0, None, None))
         out.append(_asset_dict(a.ip, a.ip_version, "registered_global", a.label, a.description,
-                                a.id, count, fs, ls))
+                                a.display_name, a.id, count, fs, ls))
 
     out.sort(key=lambda r: (r["scope"] != "local", -(r["count"] or 0)))
     return out
+
+
+@router.put("/assets/local/{ip}")
+def set_local_asset_display_name(ip: str, body: AssetDisplayNameUpdate, db: Session = Depends(get_db),
+                                  actor=Depends(require_editor)):
+    """ローカル(プライベート)IPは登録不要で自動判定される資産だが、表示名だけは
+    軽量に付与できるようにする（label/descriptionを持つ「登録」とは別の軽量な経路）。"""
+    cls = _classify_ip(ip)
+    if not cls or cls[1] != "private":
+        return Response(status_code=400, content='{"error":"ローカル(プライベート)IPのみ指定できます"}',
+                        media_type="application/json")
+    a = db.execute(select(Asset).where(Asset.ip == ip)).scalar_one_or_none()
+    if a is None:
+        a = Asset(ip=ip, ip_version=cls[0], display_name=body.display_name,
+                  created_by=getattr(actor, "username", None))
+        db.add(a)
+    else:
+        a.display_name = body.display_name
+    db.commit()
+    return _asset_reg_dict(a)
 
 
 @router.post("/assets")
@@ -466,7 +511,7 @@ def create_asset(body: AssetCreate, db: Session = Depends(get_db), actor=Depends
     if db.execute(select(Asset).where(Asset.ip == body.ip)).scalar_one_or_none():
         return Response(status_code=400, content='{"error":"既に登録済みです"}', media_type="application/json")
     a = Asset(ip=body.ip, ip_version=ip_version, label=body.label, description=body.description,
-             created_by=getattr(actor, "username", None))
+             display_name=body.display_name, created_by=getattr(actor, "username", None))
     db.add(a)
     db.commit()
     return _asset_reg_dict(a)

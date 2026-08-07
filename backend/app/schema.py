@@ -99,11 +99,17 @@ class AssetCreate(BaseModel):
     ip: str
     label: str | None = None
     description: str | None = None
+    display_name: str | None = None
 
 
 class AssetUpdate(BaseModel):
     label: str | None = None
     description: str | None = None
+    display_name: str | None = None
+
+
+class AssetDisplayNameUpdate(BaseModel):
+    display_name: str | None = None
 
 
 class SilenceSettings(BaseModel):

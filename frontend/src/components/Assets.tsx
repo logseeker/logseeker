@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { AssetRow, AuthStatus } from "../types";
 
-const EMPTY_FORM = { ip: "", label: "", description: "" };
+const EMPTY_FORM = { ip: "", label: "", description: "", display_name: "" };
 
 // 資産（アセット）：Entities（観測された全IP）とは別に、「自社が保有するIPかどうか」を
 // 軸にした一覧。ローカルIPは登録不要で自動判定、グローバルIPは手動登録したものだけを扱う。
@@ -14,7 +14,8 @@ export function Assets({ onEntity, auth }: {
   const [err, setErr] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
-  const [editing, setEditing] = useState<Record<number, { label: string; description: string }>>({});
+  const [editing, setEditing] = useState<Record<number, { label: string; description: string; display_name: string }>>({});
+  const [localEditing, setLocalEditing] = useState<Record<string, string>>({});
   const canManage = !auth?.auth_required
     || auth?.user?.role === "editor" || auth?.user?.role === "sysadmin" || auth?.user?.role === "admin";
 
@@ -26,19 +27,22 @@ export function Assets({ onEntity, auth }: {
   const create = async () => {
     setErr(null);
     try {
-      await api.createAsset({ ip: form.ip, label: form.label || undefined, description: form.description || undefined });
+      await api.createAsset({
+        ip: form.ip, label: form.label || undefined, description: form.description || undefined,
+        display_name: form.display_name || undefined,
+      });
       setForm(EMPTY_FORM); load(); flash("資産を登録しました");
     } catch (e) { setErr((e as Error).message); }
   };
   const startEdit = (r: AssetRow) => {
     if (r.id == null) return;
-    setEditing({ ...editing, [r.id]: { label: r.label ?? "", description: r.description ?? "" } });
+    setEditing({ ...editing, [r.id]: { label: r.label ?? "", description: r.description ?? "", display_name: r.display_name ?? "" } });
   };
   const saveEdit = async (id: number) => {
     const v = editing[id];
     if (!v) return;
     try {
-      await api.updateAsset(id, { label: v.label || undefined, description: v.description || undefined });
+      await api.updateAsset(id, { label: v.label || undefined, description: v.description || undefined, display_name: v.display_name || undefined });
       const { [id]: _drop, ...rest } = editing;
       setEditing(rest); load(); flash("更新しました");
     } catch (e) { setErr((e as Error).message); }
@@ -48,6 +52,17 @@ export function Assets({ onEntity, auth }: {
     if (!confirm(`資産「${r.ip}」の登録を削除しますか？`)) return;
     try { await api.deleteAsset(r.id); load(); flash("削除しました"); }
     catch (e) { setErr((e as Error).message); }
+  };
+
+  const startLocalEdit = (r: AssetRow) => setLocalEditing({ ...localEditing, [r.ip]: r.display_name ?? "" });
+  const saveLocalEdit = async (ip: string) => {
+    const v = localEditing[ip];
+    if (v === undefined) return;
+    try {
+      await api.setLocalAssetDisplayName(ip, v || null);
+      const { [ip]: _drop, ...rest } = localEditing;
+      setLocalEditing(rest); load(); flash("表示名を更新しました");
+    } catch (e) { setErr((e as Error).message); }
   };
 
   const ts = (s: string | null) => (s ? s.replace("T", " ").slice(0, 19) : "-");
@@ -60,6 +75,7 @@ export function Assets({ onEntity, auth }: {
         <div className="text-secondary small mb-1">
           自社が保有するIPの一覧です。プライベートIP（10.0.0.0/8 等）は自動判定して表示するため登録不要です。
           自前のVPS/クラウド/オフィス回線などのグローバルIPは、下のフォームから手動で登録してください。
+          表示名を設定すると、イベント一覧などのホスト/デバイス列に「表示名 (IPアドレス)」の形式で表示されます。
           ログ上で観測された全てのIP（アクセス元IPも含む）を調査したい場合は「エンティティ」画面を使用してください。
         </div>
       </div>
@@ -72,21 +88,31 @@ export function Assets({ onEntity, auth }: {
           <div className="card-header"><h3 className="card-title">ローカルIP（自動判定・{local.length}）</h3></div>
           <div className="table-responsive">
             <table className="table table-vcenter table-sm card-table">
-              <thead><tr><th>IP</th><th>バージョン</th><th className="text-end">件数</th><th>初回</th><th>最終</th><th></th></tr></thead>
+              <thead><tr><th>IP</th><th>バージョン</th><th>表示名</th><th className="text-end">件数</th><th>初回</th><th>最終</th><th></th></tr></thead>
               <tbody>
-                {local.map((r) => (
-                  <tr key={r.ip}>
-                    <td>{r.ip}</td>
-                    <td><span className="badge bg-secondary-lt">{r.ip_version}</span></td>
-                    <td className="text-end">{r.count.toLocaleString()}</td>
-                    <td className="text-nowrap">{ts(r.first_seen)}</td>
-                    <td className="text-nowrap">{ts(r.last_seen)}</td>
-                    <td className="text-end">
-                      <button className="btn btn-sm btn-outline-secondary" onClick={() => onEntity("ip", r.ip)}>詳細</button>
-                    </td>
-                  </tr>
-                ))}
-                {local.length === 0 && <tr><td colSpan={6} className="text-secondary text-center py-4">なし</td></tr>}
+                {local.map((r) => {
+                  const ed = localEditing[r.ip];
+                  return (
+                    <tr key={r.ip}>
+                      <td>{r.ip}</td>
+                      <td><span className="badge bg-secondary-lt">{r.ip_version}</span></td>
+                      <td>{ed !== undefined
+                        ? <input className="form-control form-control-sm" value={ed} placeholder="例: 社内DC-Server01"
+                            onChange={(e) => setLocalEditing({ ...localEditing, [r.ip]: e.target.value })} />
+                        : (r.display_name || "-")}</td>
+                      <td className="text-end">{r.count.toLocaleString()}</td>
+                      <td className="text-nowrap">{ts(r.first_seen)}</td>
+                      <td className="text-nowrap">{ts(r.last_seen)}</td>
+                      <td className="text-nowrap text-end">
+                        <button className="btn btn-sm btn-outline-secondary me-1" onClick={() => onEntity("ip", r.ip)}>詳細</button>
+                        {canManage && (ed !== undefined
+                          ? <button className="btn btn-sm btn-primary" onClick={() => saveLocalEdit(r.ip)}>保存</button>
+                          : <button className="btn btn-sm btn-outline-secondary" onClick={() => startLocalEdit(r)}>表示名を編集</button>)}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {local.length === 0 && <tr><td colSpan={7} className="text-secondary text-center py-4">なし</td></tr>}
               </tbody>
             </table>
           </div>
@@ -98,7 +124,7 @@ export function Assets({ onEntity, auth }: {
           <div className="card-header"><h3 className="card-title">登録済みグローバルIP（{registered.length}）</h3></div>
           <div className="table-responsive">
             <table className="table table-vcenter table-sm card-table">
-              <thead><tr><th>IP</th><th>バージョン</th><th>ラベル</th><th>説明</th><th className="text-end">件数</th><th>最終</th><th></th></tr></thead>
+              <thead><tr><th>IP</th><th>バージョン</th><th>ラベル</th><th>表示名</th><th>説明</th><th className="text-end">件数</th><th>最終</th><th></th></tr></thead>
               <tbody>
                 {registered.map((r) => {
                   const ed = r.id != null ? editing[r.id] : undefined;
@@ -110,6 +136,10 @@ export function Assets({ onEntity, auth }: {
                         ? <input className="form-control form-control-sm" value={ed.label}
                             onChange={(e) => setEditing({ ...editing, [r.id!]: { ...ed, label: e.target.value } })} />
                         : (r.label || "-")}</td>
+                      <td>{ed
+                        ? <input className="form-control form-control-sm" value={ed.display_name} placeholder="例: prod-vps-01"
+                            onChange={(e) => setEditing({ ...editing, [r.id!]: { ...ed, display_name: e.target.value } })} />
+                        : (r.display_name || "-")}</td>
                       <td>{ed
                         ? <input className="form-control form-control-sm" value={ed.description}
                             onChange={(e) => setEditing({ ...editing, [r.id!]: { ...ed, description: e.target.value } })} />
@@ -126,7 +156,7 @@ export function Assets({ onEntity, auth }: {
                     </tr>
                   );
                 })}
-                {registered.length === 0 && <tr><td colSpan={7} className="text-secondary text-center py-4">なし</td></tr>}
+                {registered.length === 0 && <tr><td colSpan={8} className="text-secondary text-center py-4">なし</td></tr>}
               </tbody>
             </table>
           </div>
@@ -139,7 +169,7 @@ export function Assets({ onEntity, auth }: {
             <div className="card-header"><h3 className="card-title">グローバルIPを資産として登録</h3></div>
             <div className="card-body">
               <div className="row g-2">
-                <div className="col-md-4">
+                <div className="col-md-3">
                   <label className="form-label">IPアドレス（v4/v6）</label>
                   <input className="form-control" value={form.ip} onChange={(e) => setForm({ ...form, ip: e.target.value })}
                     placeholder="例: 203.0.113.10 / 2001:db8::1" />
@@ -149,7 +179,12 @@ export function Assets({ onEntity, auth }: {
                   <input className="form-control" value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })}
                     placeholder="例: 本番VPS" />
                 </div>
-                <div className="col-md-5">
+                <div className="col-md-3">
+                  <label className="form-label">表示名（任意）</label>
+                  <input className="form-control" value={form.display_name} onChange={(e) => setForm({ ...form, display_name: e.target.value })}
+                    placeholder="例: prod-vps-01" />
+                </div>
+                <div className="col-md-3">
                   <label className="form-label">説明（任意）</label>
                   <input className="form-control" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
                 </div>

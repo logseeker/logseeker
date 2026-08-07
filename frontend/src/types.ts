@@ -85,6 +85,7 @@ export interface AssetRow {
   scope: "local" | "registered_global";
   label: string | null;
   description: string | null;
+  display_name: string | null;
   count: number;
   first_seen: string | null;
   last_seen: string | null;

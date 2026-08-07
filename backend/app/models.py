@@ -161,13 +161,15 @@ class EventEntity(Base):
 
 
 class Asset(Base):
-    """ユーザー登録のグローバルIP資産（§7.10）。ローカル(プライベート)IPは
-    ipaddress.is_private で動的判定するためここには保存しない（api.py 参照）。"""
+    """ユーザー登録のグローバルIP資産（§7.10）。ローカル(プライベート)IPはipaddress.is_private
+    で自動判定するため登録(label/description)は不要だが、表示名(display_name)のみは
+    ローカルIPにも軽量に付与できる（api.py の /assets/local/{ip} 参照）。"""
     __tablename__ = "assets"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     ip: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     ip_version: Mapped[str] = mapped_column(String(2))  # v4 / v6
     label: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

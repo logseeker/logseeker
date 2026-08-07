@@ -99,11 +99,13 @@ export const api = {
 
   // 資産（アセット）：ローカルIPは自動判定、グローバルIPは手動登録
   assets: () => get<AssetRow[]>(`/api/assets`),
-  createAsset: (b: { ip: string; label?: string; description?: string }) =>
-    post<{ id: number; ip: string; ip_version: string; label: string | null; description: string | null }>(`/api/assets`, b),
-  updateAsset: (id: number, b: { label?: string; description?: string }) =>
-    put<{ id: number; ip: string; ip_version: string; label: string | null; description: string | null }>(`/api/assets/${id}`, b),
+  createAsset: (b: { ip: string; label?: string; description?: string; display_name?: string }) =>
+    post<{ id: number; ip: string; ip_version: string; label: string | null; description: string | null; display_name: string | null }>(`/api/assets`, b),
+  updateAsset: (id: number, b: { label?: string; description?: string; display_name?: string }) =>
+    put<{ id: number; ip: string; ip_version: string; label: string | null; description: string | null; display_name: string | null }>(`/api/assets/${id}`, b),
   deleteAsset: (id: number) => del<{ ok: boolean }>(`/api/assets/${id}`),
+  setLocalAssetDisplayName: (ip: string, display_name: string | null) =>
+    put<{ id: number; ip: string; ip_version: string; label: string | null; description: string | null; display_name: string | null }>(`/api/assets/local/${ip}`, { display_name }),
 
   // MVP5: インシデント & コメント
   incidents: () => get<IncidentRow[]>(`/api/incidents`),

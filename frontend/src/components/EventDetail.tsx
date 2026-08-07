@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { fmtTime, stLabel } from "../labels";
 import { adviseForEvent } from "../advice";
+import { useAssetDisplayNames, formatHost } from "../assetNames";
 import type { Annotation, EventDetail as Detail, EventRow, IncidentRow } from "../types";
 
 const TABS = ["概要", "Payload", "正規化", "エンティティ", "相関", "コメント", "Parser"] as const;
@@ -144,6 +145,7 @@ export function EventDetail({ id, onClose, onPivot, onEntity }:
   const [d, setD] = useState<Detail | null>(null);
   const [tab, setTab] = useState<Tab>("概要");
   const [related, setRelated] = useState<{ keys: { entity_type: string; entity_value: string }[]; items: EventRow[] }>({ keys: [], items: [] });
+  const assetNames = useAssetDisplayNames();
 
   useEffect(() => {
     api.eventDetail(id).then(setD).catch(() => setD(null));
@@ -189,8 +191,8 @@ export function EventDetail({ id, onClose, onPivot, onEntity }:
               )}
               <KV obj={{
                 時刻: fmtTime(n.event_time as string | null), ログソース: n.source_name, 種別: stLabel(d.source_type as string),
-                "ホスト/デバイス": n.device_name ?? "-", "ドメイン": n.url_domain ?? "-",
-                送信元IP: n.source_ip, ユーザー: n.actor_user, イベント: n.event_action, 結果: n.event_result,
+                "ホスト/デバイス": n.device_name ? formatHost(n.device_name as string, assetNames) : "-", "ドメイン": n.url_domain ?? "-",
+                送信元IP: n.source_ip ? formatHost(n.source_ip as string, assetNames) : n.source_ip, ユーザー: n.actor_user, イベント: n.event_action, 結果: n.event_result,
                 重大度: n.event_severity ?? "-",
                 URL: n.url_path, ステータス: n.http_status_code, メッセージ: n.message,
               }} />
