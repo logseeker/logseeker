@@ -161,7 +161,14 @@ export const api = {
 
   // 管理
   adminOverview: () => get<AdminOverview>(`/api/admin/overview`),
-  ingestVolume: () => get<IngestVolume>(`/api/admin/ingest-volume`),
+  ingestVolume: (params?: { hourlyDate?: string; dailyStart?: string; dailyEnd?: string }) => {
+    const p = new URLSearchParams();
+    if (params?.hourlyDate) p.set("hourly_date", params.hourlyDate);
+    if (params?.dailyStart) p.set("daily_start", params.dailyStart);
+    if (params?.dailyEnd) p.set("daily_end", params.dailyEnd);
+    const s = p.toString();
+    return get<IngestVolume>(`/api/admin/ingest-volume${s ? `?${s}` : ""}`);
+  },
 
   // 認証・ユーザー・監査
   authStatus: () => get<AuthStatus>(`/api/auth/status`),

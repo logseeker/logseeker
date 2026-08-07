@@ -11,6 +11,20 @@ function formatBytes(n: number): string {
   return `${(n / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
+// 現在時刻のJST日付を YYYY-MM-DD で返す（date input の初期値・上限に使う）。
+// Date.getTime()は常にUTC epochなのでブラウザのローカルタイムゾーンには依存しない
+// （getTimezoneOffset()を絡めると二重補正になり、ブラウザがJSTの場合に日付がずれるので使わない）。
+function todayJst(): string {
+  const jst = new Date(Date.now() + 9 * 3600 * 1000);
+  return jst.toISOString().slice(0, 10);
+}
+
+function addDaysStr(dateStr: string, days: number): string {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div className="col-sm-6 col-lg-3">
@@ -50,25 +64,38 @@ function VolumeChart({ labels, bytes }: { labels: string[]; bytes: number[] }) {
 type Granularity = "hourly" | "daily";
 
 // 運用：受信ログの転送量（バイト）・取り込み状態を把握するための画面。
-// 「時間別」は本日0時からの1時間ごと、「日別」は直近31日の1日ごと。日付/時刻表示はJST基準。
+// 「時間別」はカレンダーで選んだ1日の1時間ごと、「日別」はカレンダーで選んだ期間の1日ごと（両方とも過去に遡って参照可）。
+// 日付/時刻表示はJST基準。
 export function Operations() {
   const [v, setV] = useState<IngestVolume | null>(null);
   const [st, setSt] = useState<IngestStatus | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [gran, setGran] = useState<Granularity>("hourly");
 
+  const today = todayJst();
+  const [hourlyDate, setHourlyDate] = useState(today);
+  const [dailyRange, setDailyRange] = useState({ start: addDaysStr(today, -30), end: today });
+  const [dailyDraft, setDailyDraft] = useState(dailyRange);
+
   useEffect(() => {
-    api.ingestVolume().then(setV).catch((e) => setErr((e as Error).message));
     api.ingestStatus().then(setSt).catch(() => setSt(null));
   }, []);
+
+  useEffect(() => {
+    setErr(null);
+    api.ingestVolume({ hourlyDate, dailyStart: dailyRange.start, dailyEnd: dailyRange.end })
+      .then(setV).catch((e) => setErr((e as Error).message));
+  }, [hourlyDate, dailyRange]);
+
+  const applyDailyRange = () => setDailyRange(dailyDraft);
 
   if (err) return <div className="alert alert-danger">取得失敗: {err}</div>;
   if (!v) return <div className="text-secondary">読み込み中…</div>;
 
-  const hourlyLabels = v.bytes_hourly_today.map((h) => h.hour.slice(11, 16));
-  const dailyLabels = v.bytes_daily.map((d) => d.day.slice(5, 10));
+  const hourlyLabels = v.bytes_hourly.map((h) => h.hour.slice(11, 16));
+  const dailyLabels = v.bytes_daily.map((d) => d.day.slice(0, 10));
   const labels = gran === "hourly" ? hourlyLabels : dailyLabels;
-  const bytesArr = gran === "hourly" ? v.bytes_hourly_today.map((h) => h.bytes) : v.bytes_daily.map((d) => d.bytes);
+  const bytesArr = gran === "hourly" ? v.bytes_hourly.map((h) => h.bytes) : v.bytes_daily.map((d) => d.bytes);
 
   return (
     <div className="row row-cards">
@@ -89,11 +116,32 @@ export function Operations() {
         <div className="card">
           <div className="card-header">
             <h3 className="card-title">転送量の推移（JST）</h3>
-            <div className="card-actions btn-group">
-              <button className={`btn btn-sm ${gran === "hourly" ? "btn-primary" : "btn-outline-primary"}`}
-                onClick={() => setGran("hourly")}>時間別（本日0時〜）</button>
-              <button className={`btn btn-sm ${gran === "daily" ? "btn-primary" : "btn-outline-primary"}`}
-                onClick={() => setGran("daily")}>日別（直近31日）</button>
+            <div className="card-actions d-flex align-items-center gap-2 flex-wrap">
+              <div className="btn-group">
+                <button className={`btn btn-sm ${gran === "hourly" ? "btn-primary" : "btn-outline-primary"}`}
+                  onClick={() => setGran("hourly")}>時間別</button>
+                <button className={`btn btn-sm ${gran === "daily" ? "btn-primary" : "btn-outline-primary"}`}
+                  onClick={() => setGran("daily")}>日別</button>
+              </div>
+              {gran === "hourly" ? (
+                <div className="d-flex align-items-center gap-1">
+                  <input type="date" className="form-control form-control-sm" style={{ width: 150 }}
+                    max={today} value={hourlyDate} onChange={(e) => setHourlyDate(e.target.value || today)} />
+                  <button type="button" className="btn btn-sm btn-outline-secondary"
+                    onClick={() => setHourlyDate(today)}>本日</button>
+                </div>
+              ) : (
+                <div className="d-flex align-items-center gap-1">
+                  <input type="date" className="form-control form-control-sm" style={{ width: 150 }}
+                    max={dailyDraft.end} value={dailyDraft.start}
+                    onChange={(e) => setDailyDraft((d) => ({ ...d, start: e.target.value }))} />
+                  <span className="text-secondary">〜</span>
+                  <input type="date" className="form-control form-control-sm" style={{ width: 150 }}
+                    min={dailyDraft.start} max={today} value={dailyDraft.end}
+                    onChange={(e) => setDailyDraft((d) => ({ ...d, end: e.target.value }))} />
+                  <button type="button" className="btn btn-sm btn-primary" onClick={applyDailyRange}>表示</button>
+                </div>
+              )}
             </div>
           </div>
           <div className="card-body">
@@ -134,15 +182,23 @@ export function Operations() {
 
       <div className="col-12">
         <div className="card">
-          <div className="card-header"><h3 className="card-title">日別転送量（JST・直近31日）</h3></div>
+          <div className="card-header">
+            <h3 className="card-title">
+              {gran === "hourly" ? `時間別転送量（JST・${hourlyDate}）` : `日別転送量（JST・${dailyRange.start} 〜 ${dailyRange.end}）`}
+            </h3>
+          </div>
           <div className="table-responsive" style={{ maxHeight: 360 }}>
             <table className="table table-vcenter table-sm card-table">
-              <thead><tr><th>日付</th><th className="text-end">転送量</th></tr></thead>
+              <thead><tr><th>{gran === "hourly" ? "時刻" : "日付"}</th><th className="text-end">転送量</th></tr></thead>
               <tbody>
-                {v.bytes_daily.map((d) => (
-                  <tr key={d.day}><td>{d.day.slice(0, 10)}</td><td className="text-end">{formatBytes(d.bytes)}</td></tr>
-                ))}
-                {v.bytes_daily.length === 0 && (
+                {gran === "hourly"
+                  ? v.bytes_hourly.map((h) => (
+                    <tr key={h.hour}><td>{h.hour.slice(11, 16)}</td><td className="text-end">{formatBytes(h.bytes)}</td></tr>
+                  ))
+                  : v.bytes_daily.map((d) => (
+                    <tr key={d.day}><td>{d.day.slice(0, 10)}</td><td className="text-end">{formatBytes(d.bytes)}</td></tr>
+                  ))}
+                {(gran === "hourly" ? v.bytes_hourly.length : v.bytes_daily.length) === 0 && (
                   <tr><td colSpan={2} className="text-secondary text-center py-4">データがありません</td></tr>
                 )}
               </tbody>

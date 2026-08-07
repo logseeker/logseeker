@@ -4,7 +4,7 @@
 時間別/日別の区切りはJST基準（運用者向け表示に合わせる。timeparse.pyのJST定数と同じ+9:00固定、
 DST無し）。received_at自体はTIMESTAMPTZ=絶対時刻のままで、集計時の境界だけJSTで区切る。"""
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -62,31 +62,51 @@ def bytes_recent_minutes(db: Session, minutes: int = 5) -> int:
     return int(total or 0)
 
 
-def bytes_daily(db: Session, days: int = 31) -> list[dict]:
-    """直近days日分の日別(JST)合計転送バイト数。"""
-    since = datetime.now(JST) - timedelta(days=days)
+def bytes_daily(db: Session, start: date | None = None, end: date | None = None, days: int = 31) -> list[dict]:
+    """指定期間(JST日付、両端含む)の日別合計転送バイト数。start/end省略時は直近days日分（従来動作）。
+    データが無い日も0で埋める。"""
+    today = datetime.now(JST).date()
+    if end is None:
+        end = today
+    if start is None:
+        start = end - timedelta(days=days - 1)
+    if start > end:
+        start, end = end, start
+    range_start = datetime.combine(start, datetime.min.time(), tzinfo=JST)
+    range_end = datetime.combine(end, datetime.min.time(), tzinfo=JST) + timedelta(days=1)
     # date_trunc の区切りはPostgresセッションのTimeZone設定に依存するため、
     # 環境差でずれないよう明示的にJST(Asia/Tokyo)で区切る。
     day = func.date_trunc("day", IngestStat.received_at, "Asia/Tokyo")
     rows = db.execute(
         select(day.label("day"), func.sum(IngestStat.bytes))
-        .where(IngestStat.received_at >= since)
+        .where(IngestStat.received_at >= range_start, IngestStat.received_at < range_end)
         .group_by(day.label("day"))
-        .order_by(day.label("day"))
     ).all()
-    return [{"day": d.isoformat(), "bytes": int(b or 0)} for d, b in rows]
+    by_day = {d.date(): int(b or 0) for d, b in rows}
+    n_days = (end - start).days + 1
+    return [{"day": (start + timedelta(days=i)).isoformat(), "bytes": by_day.get(start + timedelta(days=i), 0)}
+            for i in range(n_days)]
 
 
-def bytes_hourly_today(db: Session) -> list[dict]:
-    """本日(JST, 0時スタート)の時間別合計転送バイト数。データが無い時間帯も0で埋める。"""
+def bytes_hourly(db: Session, day: date | None = None) -> list[dict]:
+    """指定日(JST, 0時スタート)の時間別合計転送バイト数。day省略時は本日（従来動作）。
+    本日分は現在時刻までの時間帯のみ、過去日は0時〜23時まで全て返す（データが無い時間帯も0で埋める）。
+    未来日はデータが存在し得ないため空配列を返す。"""
     now_jst = datetime.now(JST)
-    today_start = now_jst.replace(hour=0, minute=0, second=0, microsecond=0)
+    today = now_jst.date()
+    if day is None:
+        day = today
+    if day > today:
+        return []
+    day_start = datetime.combine(day, datetime.min.time(), tzinfo=JST)
+    day_end = day_start + timedelta(days=1)
     hour = func.date_trunc("hour", IngestStat.received_at, "Asia/Tokyo")
     rows = db.execute(
         select(hour.label("hour"), func.sum(IngestStat.bytes))
-        .where(IngestStat.received_at >= today_start)
+        .where(IngestStat.received_at >= day_start, IngestStat.received_at < day_end)
         .group_by(hour.label("hour"))
     ).all()
     by_hour = {h.hour: int(b or 0) for h, b in rows}
-    return [{"hour": (today_start + timedelta(hours=i)).isoformat(), "bytes": by_hour.get(i, 0)}
-            for i in range(now_jst.hour + 1)]
+    last_hour = now_jst.hour if day == today else 23
+    return [{"hour": (day_start + timedelta(hours=i)).isoformat(), "bytes": by_hour.get(i, 0)}
+            for i in range(last_hour + 1)]

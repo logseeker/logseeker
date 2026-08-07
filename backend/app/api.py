@@ -1,6 +1,6 @@
 """検索・集計・ダッシュボードAPI（PROJECT.md §11）。events と normalized_events を結合して扱う。"""
 import ipaddress
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import String, and_, case, cast, func, nulls_last, or_, select, text
@@ -881,9 +881,15 @@ def ingest_status(db: Session = Depends(get_db)):
 
 # ============================ 運用（転送量・ログ量） ============================
 @router.get("/admin/ingest-volume")
-def ingest_volume(db: Session = Depends(get_db)):
-    """転送量（バイト）の運用向け集計（JST基準）。総量・平均ログサイズ・直近の受信ペース・時間別/日別推移。"""
-    from .ingest_stats import avg_bytes, bytes_daily, bytes_hourly_today, bytes_recent_minutes, bytes_yesterday, total_bytes
+def ingest_volume(
+    db: Session = Depends(get_db),
+    hourly_date: date | None = Query(None, description="時間別グラフの対象日（JST）。省略時は本日"),
+    daily_start: date | None = Query(None, description="日別グラフの開始日（JST）。省略時は直近31日の開始"),
+    daily_end: date | None = Query(None, description="日別グラフの終了日（JST）。省略時は本日"),
+):
+    """転送量（バイト）の運用向け集計（JST基準）。総量・平均ログサイズ・直近の受信ペース・時間別/日別推移。
+    時間別はhourly_date、日別はdaily_start/daily_endで対象日・期間を指定可能（省略時は本日/直近31日）。"""
+    from .ingest_stats import avg_bytes, bytes_daily, bytes_hourly, bytes_recent_minutes, bytes_yesterday, total_bytes
 
     recent_5min = bytes_recent_minutes(db, 5)
     return {
@@ -892,8 +898,8 @@ def ingest_volume(db: Session = Depends(get_db)):
         "bytes_yesterday": bytes_yesterday(db),
         "bytes_last_5min": recent_5min,
         "avg_bytes_per_minute_last_5min": recent_5min / 5,
-        "bytes_hourly_today": bytes_hourly_today(db),
-        "bytes_daily": bytes_daily(db, 31),
+        "bytes_hourly": bytes_hourly(db, hourly_date),
+        "bytes_daily": bytes_daily(db, daily_start, daily_end),
     }
 
 
