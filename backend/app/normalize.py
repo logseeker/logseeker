@@ -88,6 +88,8 @@ MAPPINGS: dict[str, dict[str, list[str]]] = {
 
 _RE_FOR_USER = re.compile(r"for (?:invalid user )?(?P<user>[\w.\-@$]+)")
 _RE_AUTH_USER = re.compile(r"(?:authenticating user|disconnected from(?: authenticating)?|Accepted \S+ for) (?P<user>[\w.\-@$]+)")
+# auditd（type=USER_LOGIN等）は acct="root" の形でユーザーを持つ
+_RE_ACCT_USER = re.compile(r'acct="(?P<user>[^"]+)"')
 # LiteSpeed等は PHP の stderr を [NOTICE] で包むので、本文の "PHP Warning/Fatal/Notice" から重大度を取る
 _RE_PHP = re.compile(r"PHP (Warning|Fatal error|Parse error|Notice|Deprecated|Recoverable fatal error)", re.I)
 
@@ -217,22 +219,25 @@ def _category_extras(source_type: str, payload: dict, norm: dict) -> None:
         is_auth = ("sshd" in proc or "sudo" in proc or any(k in low for k in (
             "accepted ", "failed password", "invalid user", "authentication failure",
             "session opened", "session closed", "[preauth]", "authenticating user",
-            "disconnected from authenticating", "too many authentication")))
+            "disconnected from authenticating", "too many authentication",
+            # auditd（NXLog im_audit/im_file）: type=USER_LOGIN/USER_AUTH等、res=failed/success
+            "type=user_login", "type=user_auth", "res=failed", "res=success")))
         if is_auth:
             norm["event_category"] = "authentication"
             ip = extractors.extract_ip(msg)
             if ip:
                 norm.setdefault("source_ip", ip)
-            m = _RE_FOR_USER.search(msg) or _RE_AUTH_USER.search(msg)
+            m = _RE_FOR_USER.search(msg) or _RE_AUTH_USER.search(msg) or _RE_ACCT_USER.search(msg)
             if m:
                 norm.setdefault("actor_user", m.group("user"))
-            if any(k in low for k in ("accepted", "session opened")):
+            if any(k in low for k in ("accepted", "session opened", "res=success")):
                 norm["event_action"], norm["event_result"] = "login_success", "success"
             elif any(k in low for k in (
                     "failed password", "invalid user", "authentication failure",
                     "connection closed by authenticating", "[preauth]",
                     "disconnected from authenticating", "too many authentication",
-                    "no supported authentication", "connection reset by authenticating")):
+                    "no supported authentication", "connection reset by authenticating",
+                    "res=failed")):
                 norm["event_action"], norm["event_result"] = "login_failed", "failure"
                 if norm.get("actor_user") == "root":
                     norm["event_severity"] = "warning"
