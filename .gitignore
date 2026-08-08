@@ -45,3 +45,4 @@ docs/detection-rules.md
 
 # インシデント管理機能の設計書（社内検討用の非公開ドキュメント。後日Wordの基本設計書へ統合予定）
 docs/incident-management-design.md
+docs/db-schema.md

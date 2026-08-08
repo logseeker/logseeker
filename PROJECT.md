@@ -782,48 +782,73 @@ annotations
 
 ---
 
-### 7.5 incidents
+### 7.5 cases / case_events / case_comments（ケース）
 
-インシデント情報を保存する。
+ケース＝複数のイベントを束ねる調査ワークスペース。ステータス・判定結果・担当者は持たず、
+インシデントへ「昇格」する概念も持たない（ケースとインシデントは完全に独立した別概念）。
 
 ```text
-incidents
+cases
 - id
 - title
-- status
-- severity
-- summary
-- owner
+- created_at
+- updated_at
+
+case_events                       ケースとイベントの紐付け（N:N）
+- id
+- case_id      -> cases.id  (ON DELETE CASCADE)
+- event_id     -> events.id (ON DELETE CASCADE)
+- note
+- added_at
+（UNIQUE(case_id, event_id)。「注目」以外のイベントも自由に追加できる）
+
+case_comments                     ケースへの調査メモ
+- id
+- case_id      -> cases.id  (ON DELETE CASCADE)
+- body
+- created_by   -> users.id  (ON DELETE SET NULL)
 - created_at
 - updated_at
 ```
 
-status:
-
-```text
-open
-investigating
-benign
-false_positive
-resolved
-archived
-```
+> **命名の経緯（注意）**: 2026-08-08以前の本節（§7.5 incidents / §7.6 incident_events）は、
+> `status` / `severity` / `summary` / `owner` を持つ旧「調査支援」機能のテーブルを指していた。
+> ケース／インシデント管理機能の導入にあたりその旧テーブルは削除し、`incidents` という名前を
+> §7.6 のまったく別の意味で再利用している。**同名だが別物**なので、過去の資料・バックアップ・
+> 旧環境のDBを参照する際は必ず列構成を確認すること。
 
 ---
 
-### 7.6 incident_events
+### 7.6 incidents ほか（インシデント管理）
 
-インシデントとイベントの紐付けを保存する。
+インシデント＝「注目」アラート1件から直接生成される確定事案。`event_id` は UNIQUE で、
+1イベントにつき最大1件。ケースには依存しない（`case_id` を持たない）。
 
 ```text
-incident_events
+incidents
 - id
-- incident_id
-- event_id
-- added_by
-- added_at
-- note
+- event_id          -> events.id, UNIQUE（1アラート＝最大1インシデント）
+- title
+- status_id         -> incident_statuses.id
+- assignee_user_id  -> users.id (ON DELETE SET NULL)
+- verdict           unjudged / true_positive / false_positive / over_detection / other
+- created_at
+- updated_at
 ```
+
+付随テーブル:
+
+```text
+incident_statuses                 ステータスマスタ（未対応/調査中/対応中/様子見/報告/完了/再オープン）
+                                  special_type(unassigned/done/reopened) で遷移ルールを判定する
+incident_status_history           ステータス遷移履歴
+incident_audit_log                インシデント管理機能の監査ログ（システム生成のみ）
+incident_comments                 インシデントへの調査コメント
+incident_response_action_types    対応アクション種別マスタ（IPブロック/パッチ適用 等）
+incident_response_actions         構造化された対応記録（種別＋詳細＋実施者）
+```
+
+全テーブル一覧・列構成の詳細・ER図は `docs/db-schema.md`（非公開ドキュメント）を参照。
 
 ---
 
