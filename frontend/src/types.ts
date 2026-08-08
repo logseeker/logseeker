@@ -125,8 +125,9 @@ export interface CaseCommentItem {
 }
 
 // インシデント一覧の行（ケースを経由しない独立したインシデント一覧用。設計書v4 4章）
+// event_idは保持期間切れ等で元イベントが削除されるとnullになりうる（ON DELETE SET NULL）。
 export interface IncidentRow {
-  id: number; event_id: number; title: string;
+  id: number; event_id: number | null; title: string;
   status_id: number | null; status_name: string | null;
   verdict: Verdict;
   assignee_user_id: number | null; assignee_name: string | null;
@@ -135,8 +136,9 @@ export interface IncidentRow {
 }
 
 // インシデント＝アラート単位の確定事案（ケースには依存しない。設計書v4 4章）
+// event_idは保持期間切れ等で元イベントが削除されるとnullになりうる（ON DELETE SET NULL）。
 export interface IncidentDetail {
-  id: number; event_id: number; title: string;
+  id: number; event_id: number | null; title: string;
   status_id: number | null; status_name: string | null;
   verdict: Verdict;
   assignee_user_id: number | null; assignee_name: string | null;

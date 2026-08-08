@@ -833,12 +833,14 @@ def add_case_comment(case_id: int, body: CaseCommentCreate, db: Session = Depend
 # ケースには一切依存しない。「1つの注目アラート(event_id)」と1:1で対応する。
 @router.get("/incidents")
 def list_incidents(db: Session = Depends(get_db)):
-    """インシデント単体の一覧（ケースを経由せず左メニューから直接アクセスする）。"""
+    """インシデント単体の一覧（ケースを経由せず左メニューから直接アクセスする）。
+    normalized_eventsとは outerjoin（inner joinだと、元イベントが保持期間切れ等で削除され
+    event_idがNULLになったインシデントが一覧から消えてしまうため。models.py Incident参照）。"""
     rows = db.execute(
         select(Incident, IncidentStatus, User.display_name, User.username, N)
         .outerjoin(IncidentStatus, IncidentStatus.id == Incident.status_id)
         .outerjoin(User, User.id == Incident.assignee_user_id)
-        .join(N, N.event_id == Incident.event_id)
+        .outerjoin(N, N.event_id == Incident.event_id)
         .order_by(Incident.updated_at.desc())
     ).all()
     return [{
@@ -848,8 +850,8 @@ def list_incidents(db: Session = Depends(get_db)):
         "assignee_user_id": i.assignee_user_id,
         "assignee_name": (dname or uname) if i.assignee_user_id else None,
         "updated_at": i.updated_at.isoformat() if i.updated_at else None,
-        "event_source_name": n.source_name,
-        "event_action": n.event_action, "event_message": n.message,
+        "event_source_name": n.source_name if n else None,
+        "event_action": n.event_action if n else None, "event_message": n.message if n else None,
     } for i, st, dname, uname, n in rows]
 
 
@@ -860,7 +862,10 @@ def incident_detail(incident_id: int, db: Session = Depends(get_db)):
         return {"error": "not found"}
     status = db.get(IncidentStatus, inc.status_id) if inc.status_id else None
     assignee = db.get(User, inc.assignee_user_id) if inc.assignee_user_id else None
-    # 主役アラート：このインシデントの起因となった唯一のイベント（複製せず参照表示。設計書v4 5.3節）
+    # 主役アラート：このインシデントの起因となった唯一のイベント（複製せず参照表示。設計書v4 5.3節）。
+    # event_idは保持期間切れ等でNULLになりうる（ON DELETE SET NULL）。その場合 inc.event_id is
+    # None となり、Event.id == None は自動的に IS NULL 判定されるため row は None のままになる
+    # （インシデント本体は残り、主役アラート情報のみ「取得できません」表示になる。models.py参照）。
     row = db.execute(_joined().where(Event.id == inc.event_id)).first()
     event = _row(*row) if row else None
     return {

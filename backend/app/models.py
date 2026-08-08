@@ -215,10 +215,19 @@ class CaseComment(Base):
 class Incident(Base):
     """インシデント＝確定した事案（設計書v4 4章）。「1つの注目アラート(event_id)」に対して直接
     生成される、アラートと1:1の対応記録。ケースには一切依存しない（case_idは持たない）。
-    1アラートにつき最大1件（event_id にUNIQUE制約）。"""
+    1アラートにつき最大1件（event_id にUNIQUE制約）。
+
+    event_id は ON DELETE SET NULL（NOT NULLではない）: インシデントは「確定した事案の記録」
+    であり、ステータス履歴・監査ログ・コメント・対応アクションを含む対応記録そのもの。
+    保持期間切れで元イベント(生ログ)がretention.pyにより自動削除されても、インシデント本体と
+    その対応記録は失われるべきではないため、CASCADEではなくSET NULLを採用する
+    （2026-08-09、コードレビューで発見・ユーザー確認の上で対応。以前はNOT NULL+ON DELETE無指定
+    (NO ACTION)だったため、インシデント化済みイベントが1件でもあると保持期間の一括削除が
+    外部キー違反で丸ごと失敗する不具合があった）。"""
     __tablename__ = "incidents"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), unique=True, index=True)
+    event_id: Mapped[int | None] = mapped_column(ForeignKey("events.id", ondelete="SET NULL"),
+                                                  unique=True, index=True, nullable=True)
     title: Mapped[str] = mapped_column(String(255))
     status_id: Mapped[int | None] = mapped_column(ForeignKey("incident_statuses.id"), nullable=True, index=True)
     assignee_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)

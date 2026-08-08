@@ -52,13 +52,13 @@ def _init_db() -> None:
         start_tcp()
     except Exception as e:  # noqa
         log.warning("failed to start TCP listener: %s", e)
-    # 脅威インテリ：フィード行を用意し、自動同期スケジューラ起動
+    # 初期データの用意（脅威インテリのフィード行・検知ルール既定値・ライセンスseed・初回管理者seed）。
+    # 失敗してもアプリ自体は起動を続ける（後続のIOCスケジューラ起動やマイグレーションとは別に評価する）。
     try:
         from .db import SessionLocal
-        from .ioc_sync import ensure_feed_rows
-        from .ioc_scheduler import start as start_ioc
         _db = SessionLocal()
         try:
+            from .ioc_sync import ensure_feed_rows
             ensure_feed_rows(_db)
             from .detectors import ensure_default_detectors
             ensure_default_detectors(_db)
@@ -69,11 +69,32 @@ def _init_db() -> None:
             # 初回のみ管理者(root)を seed（ユーザーが1人もいない時だけ）
             from .auth import bootstrap_root
             bootstrap_root(_db)
-            # インシデント管理機能: create_allで作れない既存テーブルへのカラム追加等（migrations.py）
-            from . import migrations as incident_migrations
-            incident_migrations.run(_db)
         finally:
             _db.close()
+    except Exception as e:  # noqa
+        log.warning("failed to seed initial data (ioc feeds / detectors / license / root user): %s", e)
+
+    # ケース/インシデント管理機能のマイグレーション（migrations.py）。
+    # 以前は上のIOC初期データ用意と同じtry/exceptに同居しており、マイグレーション失敗が
+    # 「failed to start IOC scheduler」という無関係なメッセージで揉み消され、かつ後続の
+    # start_ioc()も巻き添えでスキップされていた（2026-08-09、旧§9.5/9.6のALTER文失敗で発覚）。
+    # DBスキーマの不整合はアプリ全体の信頼性に関わるため、専用のエラーメッセージで独立させる。
+    try:
+        from .db import SessionLocal
+        from . import migrations as incident_migrations
+        _mig_db = SessionLocal()
+        try:
+            incident_migrations.run(_mig_db)
+        finally:
+            _mig_db.close()
+    except Exception as e:  # noqa
+        log.error("case/incident management migration failed (schema may be inconsistent): %s", e)
+
+    # 脅威インテリの自動同期スケジューラ起動。上記の初期データ用意・マイグレーションの成否に
+    # 関わらず必ず起動を試みる（スケジューラ自身は1周ごとにtry/exceptしており、
+    # フィード行が未整備でも次回同期時に自然に解消されるため、ここで足止めする理由が無い）。
+    try:
+        from .ioc_scheduler import start as start_ioc
         start_ioc()
     except Exception as e:  # noqa
         log.warning("failed to start IOC scheduler: %s", e)

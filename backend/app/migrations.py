@@ -87,6 +87,7 @@ def run(db: Session) -> None:
     _migrate_incidents_case_to_event(db)
     _drop_case_verdict_assignee(db)
     _fix_user_fk_ondelete(db)
+    _fix_incident_event_id_nullable(db)
     log.info("case/incident management migrations: done.")
 
 
@@ -139,6 +140,30 @@ def _migrate_incidents_case_to_event(db: Session) -> None:
     )).first():
         db.execute(text(
             "ALTER TABLE incidents ADD CONSTRAINT incidents_event_id_fkey FOREIGN KEY (event_id) REFERENCES events(id)"
+        ))
+    db.commit()
+
+
+def _fix_incident_event_id_nullable(db: Session) -> None:
+    """incidents.event_id を NOT NULL から NULL許容へ、FKを ON DELETE SET NULL へ変更する
+    （models.py の Incident.event_id docstring参照。2026-08-09対応）。
+    以前は NOT NULL + ON DELETE無指定(NO ACTION)だったため、インシデント化済みイベントが
+    1件でもあると retention.py の保持期間クリーンアップ（1本のDELETE文で一括削除）が
+    外部キー違反で丸ごと失敗していた。SET NULLにすることで、元イベントが削除されても
+    インシデント本体（対応記録・監査ログ・コメント等）は残る。"""
+    if not _table_exists(db, "incidents") or not _column_exists(db, "incidents", "event_id"):
+        return
+    db.execute(text("ALTER TABLE incidents ALTER COLUMN event_id DROP NOT NULL"))
+    row = db.execute(text(
+        "SELECT confdeltype FROM pg_constraint "
+        "WHERE conname = 'incidents_event_id_fkey' AND conrelid = CAST('incidents' AS regclass)"
+    )).first()
+    if not row or row[0] != "n":  # "n" = 既に ON DELETE SET NULL 済み
+        if row:
+            db.execute(text("ALTER TABLE incidents DROP CONSTRAINT incidents_event_id_fkey"))
+        db.execute(text(
+            "ALTER TABLE incidents ADD CONSTRAINT incidents_event_id_fkey "
+            "FOREIGN KEY (event_id) REFERENCES events(id) ON DELETE SET NULL"
         ))
     db.commit()
 
