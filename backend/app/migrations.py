@@ -38,40 +38,43 @@ DEFAULT_RESPONSE_ACTION_TYPES = ["IPブロック", "パッチ適用", "ユーザ
 
 def pre_create_all(engine) -> None:
     """`Base.metadata.create_all(bind=engine)` より前に呼ぶこと（モジュールdocstring参照）。
-    v1の incidents/incident_events/incident_comments を cases/case_events/case_comments へ改名する。
-    既に改名済み、または元からv1を経験していない新規インストールなら何もしない。"""
+    本feature着手前から存在する§9.5/9.6の旧「調査ケース」機能（`status`/`severity`/`summary`/`owner`
+    列を持つ`incidents`/`incident_events`。ケース/インシデント管理機能とは無関係な別実装）が
+    残っていれば、create_all()より前に片付ける。既に片付いている、または元から
+    その旧機能を経験していない新規インストールなら何もしない。
+
+    2026-08-09、本番調査でこの旧テーブルの存在が判明し、ユーザー確認の上で「0行なら削除、
+    1行でもあれば削除せず起動を止める」方針で対応した（無条件でDROPしない）。以前はこの
+    旧`incidents`を`cases`へリネームして引き継ぐ実装だったが、無関係な別機能のデータを
+    ケース機能へ引き継ぐ意味がないため、削除に変更した。"""
     with engine.begin() as conn:
         cases_exists = conn.execute(text("SELECT to_regclass('cases')")).scalar() is not None
         if cases_exists:
             return
         incidents_exists = conn.execute(text("SELECT to_regclass('incidents')")).scalar() is not None
         if not incidents_exists:
-            return  # 新規インストール（v1未経験）。create_allが新モデル通りに作るので何もしなくてよい
-        # v1の"incidents"であることの確認（新モデルのincidentsには無いseverity列を持つ）
-        is_v1 = conn.execute(text(
+            return  # 新規インストール（旧機能未経験）。create_allが新モデル通りに作るので何もしなくてよい
+        # 旧§9.5/9.6の"incidents"であることの確認（新モデルのincidentsには無いseverity列を持つ）
+        is_legacy = conn.execute(text(
             "SELECT 1 FROM information_schema.columns WHERE table_name='incidents' AND column_name='severity'"
         )).first() is not None
-        if not is_v1:
-            return  # 想定外だが安全側に倒す
-        conn.execute(text("ALTER TABLE incidents RENAME TO cases"))
-        conn.execute(text("ALTER TABLE incident_events RENAME TO case_events"))
-        conn.execute(text("ALTER TABLE case_events RENAME COLUMN incident_id TO case_id"))
-        conn.execute(text("ALTER TABLE incident_comments RENAME TO case_comments"))
-        conn.execute(text("ALTER TABLE case_comments RENAME COLUMN incident_id TO case_id"))
-        # 索引はテーブルリネームで自動改名されず旧名のまま残るため、直後に create_all() が
-        # 新モデル通りの"incidents"/"incident_comments"テーブルを作る際、索引名の衝突
-        # （例: 旧"incidents"→"cases"に残った ix_incidents_assignee_user_id と、新incidentsが
-        # 作ろうとする同名索引）でエラーになる。ここで明示的にリネームしておく。
-        for old, new in (
-            ("ix_incidents_status_id", "ix_cases_status_id__legacy"),
-            ("ix_incidents_assignee_user_id", "ix_cases_assignee_user_id"),
-            ("ix_incident_events_incident_id", "ix_case_events_case_id"),
-            ("ix_incident_events_event_id", "ix_case_events_event_id"),
-            ("ix_incident_comments_incident_id", "ix_case_comments_case_id"),
-            ("ix_incident_comments_created_at", "ix_case_comments_created_at"),
-        ):
-            conn.execute(text(f"ALTER INDEX IF EXISTS {old} RENAME TO {new}"))
-    log.info("renamed v1 incident tables -> cases/case_events/case_comments (pre-create_all)")
+        if not is_legacy:
+            return  # 想定外だが安全側に倒す（case_id列を持つv3スキーマ等はrun()側の別関数で扱う）
+        incidents_count = conn.execute(text("SELECT count(*) FROM incidents")).scalar()
+        incident_events_exists = conn.execute(text("SELECT to_regclass('incident_events')")).scalar() is not None
+        incident_events_count = (
+            conn.execute(text("SELECT count(*) FROM incident_events")).scalar() if incident_events_exists else 0
+        )
+        if incidents_count or incident_events_count:
+            raise RuntimeError(
+                f"旧§9.5/9.6インシデント機能にデータが残っているため自動削除を中止しました"
+                f"（incidents={incidents_count}行, incident_events={incident_events_count}行）。"
+                "ケース/インシデント管理機能への移行前に、手動でデータの要否を確認してください。"
+            )
+        if incident_events_exists:
+            conn.execute(text("DROP TABLE incident_events"))
+        conn.execute(text("DROP TABLE incidents"))
+    log.info("dropped legacy pre-v1 incidents/incident_events (§9.5/9.6, 0 rows) before create_all")
 
 
 def run(db: Session) -> None:
