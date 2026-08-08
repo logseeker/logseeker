@@ -92,6 +92,15 @@ _RE_AUTH_USER = re.compile(r"(?:authenticating user|disconnected from(?: authent
 _RE_ACCT_USER = re.compile(r'acct="(?P<user>[^"]+)"')
 # LiteSpeed等は PHP の stderr を [NOTICE] で包むので、本文の "PHP Warning/Fatal/Notice" から重大度を取る
 _RE_PHP = re.compile(r"PHP (Warning|Fatal error|Parse error|Notice|Deprecated|Recoverable fatal error)", re.I)
+# H2O が自前でエラー応答を返した際の "oops! <status>" 表記（web_errorのevent_result判定用）
+_RE_OOPS_STATUS = re.compile(r"oops!\s*(?P<status>\d{3})\b")
+
+# linux/systemd: ユニットの成否ログ（"xxx.service: Succeeded." / "Failed with result..." 等）
+_RE_SYSTEMD_SUCCESS = re.compile(r": Succeeded\.?\s*$")
+_RE_SYSTEMD_FAILURE = re.compile(r"(^|: )Failed\b|/FAILURE\b")
+# linux/node（Directus等）: "[HH:MM:SS] METHOD /path status Nms" 形式のアクセスログ行のみ対象。
+# スタックトレース等の非アクセスログ行はマッチせず unknown のまま。
+_RE_NODE_ACCESS = re.compile(r"^\[\d{2}:\d{2}:\d{2}\]\s+[A-Z]+\s+\S+\s+(?P<status>\d{3})\s+\d+ms\s*$")
 
 # Windows: TerminalServices(RDP)のセッション接続/切断/認証イベント(EventID 21-25, 1149等)は
 # TargetUserName/SubjectUserName/IpAddressの構造化フィールドを持たず、実際のユーザー・送信元IPは
@@ -137,6 +146,30 @@ def _first(payload: dict, keys: list[str]) -> Any:
     return None
 
 
+def _linux_system_result(proc: str, msg: str) -> str:
+    """認証系以外のlinuxログ(systemd/node/certbot/webmin)のevent_result判定。
+    procは小文字化済み。判定できる明確な根拠が無ければ"unknown"のまま返す。"""
+    if proc == "systemd":
+        if _RE_SYSTEMD_SUCCESS.search(msg):
+            return "success"
+        if _RE_SYSTEMD_FAILURE.search(msg):
+            return "failure"
+    elif proc == "node":
+        m = _RE_NODE_ACCESS.match(msg)
+        if m:
+            return "failure" if int(m.group("status")) >= 400 else "success"
+    elif proc == "certbot":
+        if ("(failure)" in msg or "All renewals failed" in msg
+                or "Failed to renew certificate" in msg):
+            return "failure"
+    elif proc == "webmin":
+        if msg.startswith("Successful login"):
+            return "success"
+        if msg.startswith("Invalid login") or msg.startswith("Security alert"):
+            return "failure"
+    return "unknown"
+
+
 def _category_extras(source_type: str, payload: dict, norm: dict) -> None:
     """source_type ごとの category/action/result/protocol などの導出。"""
     if source_type == "web_access":
@@ -151,11 +184,23 @@ def _category_extras(source_type: str, payload: dict, norm: dict) -> None:
     elif source_type == "web_error":
         norm["event_category"] = "application"
         norm["event_type"] = "error"
-        norm["event_result"] = "unknown"
-        sev, act = _php_level(str(payload.get("message") or payload.get("raw") or ""))
+        # norm["message"]はMAPPINGSで"message"/"Message"どちらの候補キーでも埋まっている。
+        # payload.get("message")（小文字）だけを見ると、NXLog由来（"Message"大文字のみ）の
+        # 行では常に空になり本文が拾えないため、正規化済みのnorm側を参照する。
+        text = str(norm.get("message") or payload.get("raw") or "")
+        sev, act = _php_level(text)
         norm["event_action"] = act or "app_error"
         if sev:  # 本文が "PHP Warning/Fatal/Notice" なら包みの[NOTICE]より本文を優先
             norm["event_severity"] = sev
+        # event_result: ログレベル([ERROR]/[NOTICE]等の包み)だけでは判定しない
+        # （レベル表記と処理結果は別概念）。本文に明確な失敗の証拠がある場合のみfailureとする。
+        oops = _RE_OOPS_STATUS.search(text)
+        if oops and int(oops.group("status")) >= 400:
+            norm["event_result"] = "failure"          # H2Oが実際に5xx/4xxを返した
+        elif sev == "error":
+            norm["event_result"] = "failure"          # PHP Fatal error/Parse error＝処理停止
+        else:
+            norm["event_result"] = "unknown"
 
     elif source_type == "application":
         norm["event_category"] = "application"
@@ -245,7 +290,7 @@ def _category_extras(source_type: str, payload: dict, norm: dict) -> None:
                 norm["event_result"] = "unknown"
         else:
             norm["event_category"] = "system"
-            norm["event_result"] = "unknown"
+            norm["event_result"] = _linux_system_result(proc, msg)
 
     elif source_type == "windows_event":
         channel = payload.get("Channel")
