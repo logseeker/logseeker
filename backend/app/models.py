@@ -5,7 +5,7 @@ MVP1/2 範囲: events / normalized_events / dead_letters。
 """
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -33,6 +33,7 @@ class Event(Base):
     parse_status: Mapped[str] = mapped_column(String(16), default="success")  # success/partial/failed
     parse_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    resolved: Mapped[bool] = mapped_column(Boolean, default=False)  # 対応済み/未対応（ケース紐付けとは独立）
 
     normalized: Mapped["NormalizedEvent"] = relationship(
         back_populates="event", uselist=False, cascade="all, delete-orphan"
@@ -176,27 +177,129 @@ class Asset(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
-class Incident(Base):
-    """インシデント＝調査ケース（§9.5）。"""
-    __tablename__ = "incidents"
+class Case(Base):
+    """ケース＝複数イベントを束ねる調査ワークスペース（設計書v4 3章）。ステータス・判定結果・
+    担当者を持たない。インシデントに「昇格」する概念も無い（ケースとインシデントは完全に独立）。"""
+    __tablename__ = "cases"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     title: Mapped[str] = mapped_column(String(255))
-    status: Mapped[str] = mapped_column(String(24), default="open")
-    severity: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-    owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
-class IncidentEvent(Base):
-    """インシデントとイベントの紐付け（§9.6）。"""
-    __tablename__ = "incident_events"
+class CaseEvent(Base):
+    """ケースとイベントの紐付け（v1の IncidentEvent をリネーム）。「注目」以外のイベントも
+    自由に追加できる（設計書v4 3章：v3までの注目イベント限定制限は撤廃）。
+    同一ペアの多重登録を防ぐUNIQUE制約付き。"""
+    __tablename__ = "case_events"
+    __table_args__ = (UniqueConstraint("case_id", "event_id", name="uq_case_event"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id", ondelete="CASCADE"), index=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), index=True)
     event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), index=True)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class CaseComment(Base):
+    """ケースへの調査メモ（v1の IncidentComment をリネーム）。ケース側は監査ログを持たず
+    コメントのみで調査記録を残す（設計書v2 3章）。"""
+    __tablename__ = "case_comments"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    case_id: Mapped[int] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), index=True)
+    body: Mapped[str] = mapped_column(Text)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, onupdate=_now)
+
+
+class Incident(Base):
+    """インシデント＝確定した事案（設計書v4 4章）。「1つの注目アラート(event_id)」に対して直接
+    生成される、アラートと1:1の対応記録。ケースには一切依存しない（case_idは持たない）。
+    1アラートにつき最大1件（event_id にUNIQUE制約）。"""
+    __tablename__ = "incidents"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[int] = mapped_column(ForeignKey("events.id"), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    status_id: Mapped[int | None] = mapped_column(ForeignKey("incident_statuses.id"), nullable=True, index=True)
+    assignee_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    verdict: Mapped[str] = mapped_column(String(24), default="unjudged")  # unjudged/true_positive/false_positive/over_detection/other
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class IncidentStatus(Base):
+    """インシデントのステータスマスタ（指示書3-3節→設計書v2 4-2節でインシデント側に移設）。
+    special_type で未対応/完了/再オープンを識別し、名称変更・追加があっても遷移ルールの骨格が
+    崩れないようにする（incident_status.py参照）。"""
+    __tablename__ = "incident_statuses"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(64))
+    special_type: Mapped[str | None] = mapped_column(String(16), nullable=True)  # unassigned/done/reopened/None
+    is_visible: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class IncidentStatusHistory(Base):
+    """インシデントのステータス遷移履歴（指示書2章→設計書v2 4-2節）。"""
+    __tablename__ = "incident_status_history"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id", ondelete="CASCADE"), index=True)
+    from_status_id: Mapped[int | None] = mapped_column(ForeignKey("incident_statuses.id"), nullable=True)
+    to_status_id: Mapped[int] = mapped_column(ForeignKey("incident_statuses.id"))
+    changed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class IncidentAuditLog(Base):
+    """インシデント管理機能の監査ログ（指示書4-2節→設計書v2 4-3節）。システム生成のみ（コメントは
+    含まない。コメントは IncidentComment）。記録対象はインシデント側の操作のみ（ケース側の操作は
+    記録しない）。incident_id は null 可＝ステータスマスタ管理操作など単一インシデントに
+    紐付かない操作も記録できるようにするため。"""
+    __tablename__ = "incident_audit_log"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    incident_id: Mapped[int | None] = mapped_column(ForeignKey("incidents.id", ondelete="CASCADE"), nullable=True, index=True)
+    action_type: Mapped[str] = mapped_column(String(32), index=True)
+    before_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    after_value: Mapped[str | None] = mapped_column(Text, nullable=True)
+    actor: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+
+
+class IncidentComment(Base):
+    """インシデント自身の調査コメント（設計書v2 4-1節。ケースのコメントとは別物＝複製しない。
+    ケースのコメント履歴は「元ケースへのリンク」から参照する）。"""
+    __tablename__ = "incident_comments"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id", ondelete="CASCADE"), index=True)
+    body: Mapped[str] = mapped_column(Text)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, onupdate=_now)
+
+
+class IncidentResponseActionType(Base):
+    """対応アクションの種別マスタ（設計書v2 4-4節）。ステータスマスタと同様、sysadmin以上が
+    追加・非表示化できる。既定5種は migrations.py でseedする。"""
+    __tablename__ = "incident_response_action_types"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(64))
+    is_visible: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=100)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
+class IncidentResponseAction(Base):
+    """構造化された対応記録（種別＋詳細メモ＋実施者＋実施日時。設計書v2 4-4節）。"""
+    __tablename__ = "incident_response_actions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id", ondelete="CASCADE"), index=True)
+    action_type_id: Mapped[int] = mapped_column(ForeignKey("incident_response_action_types.id"))
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    actor: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)
 
 
 class License(Base):

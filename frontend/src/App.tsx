@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import {
-  IconAffiliate, IconAlertTriangle, IconArrowsExchange, IconBell, IconClipboardList, IconColumns,
-  IconFileText, IconCloudDownload, IconGauge, IconInbox, IconLayoutDashboard, IconLicense, IconList,
-  IconLogout, IconServer, IconSettings, IconShield, IconShieldCheck, IconSitemap, IconSpeakerphone,
-  IconUsers, IconWorld,
+  IconAdjustments, IconAffiliate, IconAlertTriangle, IconArrowsExchange, IconBell, IconClipboardList,
+  IconColumns, IconFileText, IconFlame, IconCloudDownload, IconGauge, IconInbox, IconLayoutDashboard,
+  IconLicense, IconList, IconLogout, IconServer, IconSettings, IconShield, IconShieldCheck, IconSitemap,
+  IconSpeakerphone, IconUsers, IconWorld,
 } from "@tabler/icons-react";
 import { useChangelog } from "./changelog";
 import { Changelog } from "./components/Changelog";
@@ -16,7 +16,10 @@ import { Assets } from "./components/Assets";
 import { Entities } from "./components/Entities";
 import { Ingest } from "./components/Ingest";
 import { Operations } from "./components/Operations";
-import { Incidents } from "./components/Incidents";
+import { Cases } from "./components/Cases";
+import { IncidentPanel } from "./components/IncidentPanel";
+import { IncidentsList } from "./components/IncidentsList";
+import { MasterSettings } from "./components/MasterSettings";
 import { Rules } from "./components/Rules";
 import { ThreatIntel } from "./components/ThreatIntel";
 import { License } from "./components/License";
@@ -39,7 +42,7 @@ const ROLE_RANK: Record<Role, number> = { viewer: 1, editor: 2, sysadmin: 3, adm
 // 画面ごとの最低ロール（未指定＝ログインすれば誰でも）。認証OFF時は全開放。
 const MIN_ROLE: Partial<Record<Screen, Role>> = {
   notifications: "sysadmin", license: "sysadmin", threatintel: "sysadmin",
-  users: "sysadmin", audit: "sysadmin",
+  users: "sysadmin", audit: "sysadmin", mastersettings: "sysadmin",
 };
 
 const EMPTY: FilterState = { tax: {} };
@@ -94,7 +97,8 @@ const MENU: { key: Screen; label: string; Icon: typeof IconList; ready: boolean 
   { key: "ingest", label: "取り込み", Icon: IconInbox, ready: true },
   { key: "operations", label: "運用", Icon: IconGauge, ready: true },
   { key: "deadletters", label: "取り込み失敗", Icon: IconAlertTriangle, ready: true },
-  { key: "incidents", label: "インシデント", Icon: IconFileText, ready: true },
+  { key: "cases", label: "ケース", Icon: IconFileText, ready: true },
+  { key: "incidents", label: "インシデント", Icon: IconFlame, ready: true },
   { key: "rules", label: "ルール / 注意喚起", Icon: IconShield, ready: true },
   { key: "threatintel", label: "脅威インテリ", Icon: IconCloudDownload, ready: true },
   { key: "notifications", label: "通知設定", Icon: IconBell, ready: true },
@@ -102,6 +106,7 @@ const MENU: { key: Screen; label: string; Icon: typeof IconList; ready: boolean 
   { key: "users", label: "ユーザー管理", Icon: IconUsers, ready: true },
   { key: "audit", label: "監査ログ", Icon: IconClipboardList, ready: true },
   { key: "admin", label: "システム状態", Icon: IconSettings, ready: true },
+  { key: "mastersettings", label: "マスタ設定", Icon: IconAdjustments, ready: true },
 ];
 
 const INIT = parseUrl(window.location.search);
@@ -193,12 +198,32 @@ export default function App() {
     setEntityInit({ type, value, nonce: Date.now() });
     setScreen("entities");
   };
+  // イベント詳細の「ケースに追加済み」リンクから、そのケースを開く
+  const [caseInit, setCaseInit] = useState<{ id: number; nonce: number } | undefined>();
+  const navCase = (id: number) => {
+    setCaseInit({ id, nonce: Date.now() });
+    setScreen("cases");
+  };
+  // イベント詳細の「インシデント化」ボタン／インシデント一覧から、独立画面としてインシデントを開く
+  // （左メニューの「インシデント」自体はIncidentsList、詳細個票はこのincident画面が担う）。
+  const [currentIncidentId, setCurrentIncidentId] = useState<number | null>(null);
+  const navIncidentDetail = (incidentId: number) => {
+    setCurrentIncidentId(incidentId);
+    setScreen("incident");
+  };
+  // URL直打ち等でincident画面に来たがidを持っていない場合はインシデント一覧へ退避
+  useEffect(() => {
+    if (authLoaded && screen === "incident" && currentIncidentId == null) setScreen("incidents");
+  }, [screen, currentIncidentId, authLoaded]);
 
   // 通常のログイン後画面とは完全に切り離した管理パネル。左メニューには出さず、
   // 認証状態(auth)やログイン画面のチェックより前段でURLだけを見て振り分ける。
   if (screen === "administration") return <Administration />;
 
-  const cur = MENU.find((m) => m.key === screen)!;
+  // "incident" は左メニューに項目を持たない画面のためMENUには無い。ページヘッダーの
+  // ラベルだけ個別に用意する（cur は他の画面のフォールバック表示にのみ使う）。
+  const cur = MENU.find((m) => m.key === screen);
+  const headerLabel = screen === "incident" ? "インシデント" : (cur?.label ?? "");
   const onFilterScreen = FILTER_SCREENS.has(screen);
 
   // 絞り込みチップ（絞り込みを使う画面でのみ表示・解除できる）
@@ -215,7 +240,7 @@ export default function App() {
       case "dashboard": return <Dashboard onPick={drill} changelog={changelog} onNavChangelog={() => setScreen("changelog")} />;
       case "changelog": return <Changelog />;
       case "events": return <Events filter={filter} search={search} setSearch={setSearch}
-        onTax={onTax} onApplyFilters={onApplyFilters} onAttention={onAttention} onThreat={onThreat} onEntity={navEntity} onNav={setScreen} />;
+        onTax={onTax} onApplyFilters={onApplyFilters} onAttention={onAttention} onThreat={onThreat} onEntity={navEntity} onNav={setScreen} onOpenCase={navCase} onOpenIncident={navIncidentDetail} />;
       case "sources": return <Sources filter={filter} onPick={drill} />;
       case "hosts": return <HostsDomains filter={filter} onPick={drill} />;
       case "fields": return <Fields filter={filter} />;
@@ -223,7 +248,12 @@ export default function App() {
       case "entities": return <Entities onPick={drill} initial={entityInit} onNav={setScreen} />;
       case "ingest": return <Ingest />;
       case "operations": return <Operations />;
-      case "incidents": return <Incidents />;
+      case "cases": return <Cases auth={auth ?? undefined} initial={caseInit} onOpenIncident={navIncidentDetail} />;
+      case "incidents": return <IncidentsList onOpenIncident={navIncidentDetail} />;
+      case "incident": return currentIncidentId != null
+        ? <IncidentPanel incidentId={currentIncidentId} effRole={effRole} />
+        : null;
+      case "mastersettings": return <MasterSettings />;
       case "rules": return <Rules filter={filter} onPick={drill} auth={auth ?? undefined} />;
       case "threatintel": return <ThreatIntel />;
       case "notifications": return <Notifications />;
@@ -234,7 +264,7 @@ export default function App() {
       case "users": return auth ? <Users auth={auth} onChanged={loadAuth} /> : null;
       case "audit": return <Audit />;
       case "license": return <License />;
-      default: return <Placeholder title={cur.label} />;
+      default: return <Placeholder title={cur?.label ?? ""} />;
     }
   };
 
@@ -279,7 +309,7 @@ export default function App() {
       <div className="page-wrapper">
         <div className="page-header d-print-none">
           <div className="container-fluid d-flex align-items-center">
-            <h2 className="page-title mb-0">{cur.label}</h2>
+            <h2 className="page-title mb-0">{headerLabel}</h2>
             <div className="ms-auto d-flex align-items-center gap-2">
               {auth?.user ? (
                 <>

@@ -1,9 +1,10 @@
 import type {
-  AdminOverview, Annotation, AssetRow, AuditResponse, AuthStatus, AuthUser, CorrelationResponse, Count,
-  CreateUserResult, CustomRule, CustomRulesResponse, DeadLettersResponse, EntityDetail, EntityRow,
-  EventDetail, EventRow, EventsResponse, FieldInfo, FilterState, IncidentDetail, IncidentRow,
+  AdminOverview, Annotation, AssetRow, AssignableUser, AuditResponse, AuthStatus, AuthUser, CaseCommentItem,
+  CaseDetail, CaseRow, CorrelationResponse, Count, CreateUserResult, CustomRule, CustomRulesResponse,
+  DeadLettersResponse, EntityDetail, EntityRow, EventDetail, EventRow, EventsResponse, FieldInfo, FilterState,
+  IncidentActivityItem, IncidentDetail, IncidentResponseActionTypeDef, IncidentRow, IncidentStatusDef,
   IngestStatus, IngestVolume, IocFeedsInfo, IpRestrictStatus, LicenseInfo, MappingsResponse, NotificationConfig,
-  ReleaseItem, Role, RuleDef, RuleHit, SsoStatus, Summary, Timeline,
+  ReleaseItem, Role, RuleDef, RuleHit, SsoStatus, Summary, Timeline, Verdict,
 } from "./types";
 
 const BASE = (import.meta.env.VITE_API_BASE as string) || "";
@@ -107,16 +108,57 @@ export const api = {
   setLocalAssetDisplayName: (ip: string, display_name: string | null) =>
     put<{ id: number; ip: string; ip_version: string; label: string | null; description: string | null; display_name: string | null }>(`/api/assets/local/${ip}`, { display_name }),
 
-  // MVP5: インシデント & コメント
-  incidents: () => get<IncidentRow[]>(`/api/incidents`),
-  createIncident: (b: { title: string; severity?: string; summary?: string; owner?: string }) =>
-    post<{ id: number }>(`/api/incidents`, b),
-  incident: (id: number) => get<IncidentDetail>(`/api/incidents/${id}`),
-  addIncidentEvent: (id: number, b: { event_id: number; note?: string }) =>
-    post<{ ok: boolean }>(`/api/incidents/${id}/events`, b),
   annotations: (id: number) => get<Annotation[]>(`/api/events/${id}/annotations`),
   addAnnotation: (id: number, b: { comment?: string; tags?: string }) =>
     post<{ id: number }>(`/api/events/${id}/annotations`, b),
+  setEventResolved: (id: number, resolved: boolean) =>
+    put<{ ok: boolean; resolved: boolean }>(`/api/events/${id}/resolved`, { resolved }),
+
+  // ケース（設計書v4 3章）：複数イベントを束ねる調査ワークスペース。ステータス・判定結果・
+  // 担当者は持たず、インシデントへの「昇格」概念も無い（インシデントとは完全に独立）
+  cases: () => get<CaseRow[]>(`/api/cases`),
+  createCase: (title: string) => post<{ id: number }>(`/api/cases`, { title }),
+  case: (id: number) => get<CaseDetail>(`/api/cases/${id}`),
+  updateCaseTitle: (id: number, title: string) => put<{ ok: boolean; title: string }>(`/api/cases/${id}`, { title }),
+  addCaseEvent: (id: number, b: { event_id: number; note?: string }) =>
+    post<{ ok: boolean }>(`/api/cases/${id}/events`, b),
+  updateCaseEventNote: (id: number, eventId: number, note: string | null) =>
+    put<{ ok: boolean }>(`/api/cases/${id}/events/${eventId}`, { note }),
+  removeCaseEvent: (id: number, eventId: number) => del<{ ok: boolean }>(`/api/cases/${id}/events/${eventId}`),
+  caseComments: (id: number) => get<CaseCommentItem[]>(`/api/cases/${id}/comments`),
+  addCaseComment: (id: number, body: string) => post<{ id: number }>(`/api/cases/${id}/comments`, { body }),
+
+  // インシデント（設計書v4 4章）：「注目」イベント単体から直接生成される、アラートと1:1の確定事案
+  createIncidentFromEvent: (eventId: number) => post<{ id: number }>(`/api/events/${eventId}/incident`, {}),
+  incidents: () => get<IncidentRow[]>(`/api/incidents`),
+  incident: (id: number) => get<IncidentDetail>(`/api/incidents/${id}`),
+  updateIncidentStatus: (id: number, status_id: number) =>
+    put<{ ok: boolean; status_id: number; assignee_user_id: number | null }>(`/api/incidents/${id}/status`, { status_id }),
+  updateIncidentAssignee: (id: number, assignee_user_id: number | null) =>
+    put<{ ok: boolean; assignee_user_id: number | null }>(`/api/incidents/${id}/assignee`, { assignee_user_id }),
+  updateIncidentVerdict: (id: number, verdict: Verdict) =>
+    put<{ ok: boolean; verdict: string }>(`/api/incidents/${id}/verdict`, { verdict }),
+  addIncidentComment: (id: number, body: string) =>
+    post<{ id: number }>(`/api/incidents/${id}/comments`, { body }),
+  addIncidentResponseAction: (id: number, b: { action_type_id: number; detail?: string }) =>
+    post<{ id: number }>(`/api/incidents/${id}/response-actions`, b),
+  incidentActivity: (id: number) => get<IncidentActivityItem[]>(`/api/incidents/${id}/activity`),
+  incidentAssignableUsers: () => get<AssignableUser[]>(`/api/incident-assignable-users`),
+
+  // ステータスマスタ（sysadmin以上のみ追加・非表示化）
+  incidentStatuses: (showHidden = false) =>
+    get<IncidentStatusDef[]>(`/api/incident-statuses${showHidden ? "?show_hidden=true" : ""}`),
+  createIncidentStatus: (name: string) => post<IncidentStatusDef>(`/api/incident-statuses`, { name }),
+  setIncidentStatusVisibility: (id: number, is_visible: boolean) =>
+    put<IncidentStatusDef>(`/api/incident-statuses/${id}/visibility`, { is_visible }),
+
+  // 対応アクション種別マスタ（sysadmin以上のみ追加・非表示化）
+  responseActionTypes: (showHidden = false) =>
+    get<IncidentResponseActionTypeDef[]>(`/api/incident-response-action-types${showHidden ? "?show_hidden=true" : ""}`),
+  createResponseActionType: (name: string) =>
+    post<IncidentResponseActionTypeDef>(`/api/incident-response-action-types`, { name }),
+  setResponseActionTypeVisibility: (id: number, is_visible: boolean) =>
+    put<IncidentResponseActionTypeDef>(`/api/incident-response-action-types/${id}/visibility`, { is_visible }),
 
   ingestStatus: () => get<IngestStatus>(`/api/admin/ingest-status`),
 

@@ -23,6 +23,7 @@ export interface EventRow {
   http_method: string | null;
   http_status_code: string | null;
   message: string | null;
+  resolved: boolean;
 }
 
 export interface EventsResponse {
@@ -42,6 +43,10 @@ export interface EventDetail {
   parse_error: string | null;
   payload: Record<string, unknown>;
   normalized: Record<string, unknown>;
+  resolved: boolean;
+  is_attention: boolean;
+  linked_case: { id: number; title: string } | null;
+  linked_incident: { id: number; title: string } | null;
 }
 
 export interface Timeline { buckets: string[]; series: Record<string, number[]>; }
@@ -95,13 +100,54 @@ export interface EntityDetail {
   first_seen: string | null; last_seen: string | null;
   source_names: string[]; source_types: string[];
 }
-export interface IncidentRow {
-  id: number; title: string; status: string; severity: string | null;
-  owner: string | null; summary: string | null; updated_at: string | null; event_count: number;
+export type IncidentSpecialType = "unassigned" | "done" | "reopened" | null;
+export interface IncidentStatusDef {
+  id: number; name: string; special_type: IncidentSpecialType;
+  is_visible: boolean; sort_order: number;
 }
-export interface IncidentDetail extends Omit<IncidentRow, "event_count" | "updated_at"> {
-  created_at: string | null;
+export interface IncidentResponseActionTypeDef {
+  id: number; name: string; is_visible: boolean; sort_order: number;
+}
+export type Verdict = "unjudged" | "true_positive" | "false_positive" | "over_detection" | "other";
+
+// ケース＝複数イベントを束ねる調査ワークスペース（ステータス・判定結果・担当者を持たない。
+// インシデントへの「昇格」概念も無い。設計書v4 3章）
+export interface CaseRow {
+  id: number; title: string;
+  updated_at: string | null; event_count: number;
+}
+export interface CaseDetail extends Omit<CaseRow, "event_count" | "updated_at"> {
+  created_at: string | null; updated_at: string | null;
   events: (EventRow & { note: string | null })[];
+}
+export interface CaseCommentItem {
+  id: number; body: string; actor_name: string | null; created_at: string | null;
+}
+
+// インシデント一覧の行（ケースを経由しない独立したインシデント一覧用。設計書v4 4章）
+export interface IncidentRow {
+  id: number; event_id: number; title: string;
+  status_id: number | null; status_name: string | null;
+  verdict: Verdict;
+  assignee_user_id: number | null; assignee_name: string | null;
+  updated_at: string | null;
+  event_source_name: string | null; event_action: string | null; event_message: string | null;
+}
+
+// インシデント＝アラート単位の確定事案（ケースには依存しない。設計書v4 4章）
+export interface IncidentDetail {
+  id: number; event_id: number; title: string;
+  status_id: number | null; status_name: string | null;
+  verdict: Verdict;
+  assignee_user_id: number | null; assignee_name: string | null;
+  created_at: string | null; updated_at: string | null;
+  event: EventRow | null;   // 起因となった唯一のアラート（主役アラート情報）
+}
+export interface AssignableUser { id: number; username: string; display_name: string | null; }
+export interface IncidentActivityItem {
+  id: string; type: string; body: string | null;
+  before_value: string | null; after_value: string | null;
+  actor_name: string | null; created_at: string | null;
 }
 export interface Annotation {
   id: number; comment: string | null; tags: string | null;
@@ -250,7 +296,8 @@ export interface NotificationConfig {
 
 export type Screen =
   | "dashboard" | "events" | "sources" | "hosts" | "assets" | "entities" | "correlations"
-  | "fields" | "mappings" | "ingest" | "operations" | "deadletters" | "incidents" | "rules"
+  | "fields" | "mappings" | "ingest" | "operations" | "deadletters" | "cases" | "incident" | "incidents"
+  | "mastersettings" | "rules"
   | "threatintel" | "notifications" | "license" | "admin" | "users" | "audit" | "changelog"
   | "administration";
 

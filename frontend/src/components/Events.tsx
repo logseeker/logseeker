@@ -164,7 +164,7 @@ function computePresetRange(key: string): { start: string; end: string } | null 
 }
 
 export function Events({
-  filter, setSearch, search, onTax, onApplyFilters, onAttention, onThreat, onEntity, onNav,
+  filter, setSearch, search, onTax, onApplyFilters, onAttention, onThreat, onEntity, onNav, onOpenCase, onOpenIncident,
 }: {
   filter: FilterState;
   search: string;
@@ -175,6 +175,8 @@ export function Events({
   onThreat: (v: string) => void;
   onEntity: (type: string, value: string) => void;
   onNav: (s: Screen) => void;
+  onOpenCase?: (caseId: number) => void;
+  onOpenIncident?: (incidentId: number) => void;
 }) {
   const [data, setData] = useState<EventsResponse>({ total: 0, limit: 100, offset: 0, items: [] });
   const [srcNames, setSrcNames] = useState<Count[]>([]);
@@ -235,6 +237,14 @@ export function Events({
   }, [filter]);
 
   const stop = (e: React.MouseEvent) => e.stopPropagation();
+  // イベント単体の対応済み/未対応トグル（ケースへの追加有無とは独立。設計書v2 2章）。
+  // 一覧を再取得せず楽観的に更新し、失敗時のみ元に戻す。
+  const toggleResolved = (id: number, next: boolean) => {
+    setData((p) => ({ ...p, items: p.items.map((it) => (it.id === id ? { ...it, resolved: next } : it)) }));
+    api.setEventResolved(id, next).catch(() => {
+      setData((p) => ({ ...p, items: p.items.map((it) => (it.id === id ? { ...it, resolved: !next } : it)) }));
+    });
+  };
   const from = data.total === 0 ? 0 : offset + 1;
   const to = offset + data.items.length;
   const hasPrev = offset > 0;
@@ -373,6 +383,7 @@ export function Events({
               <th style={stickyStyle(3, true)}>重大度</th>
               <th>ホスト/デバイス</th><th>ドメイン</th>
               <th>送信元IP</th><th>ユーザー</th><th>イベント/サービス</th><th>対象</th><th>ステータス</th><th>メッセージ</th>
+              <th className="text-center">対応</th>
               {showAdvice && <th>対応策</th>}
             </tr></thead>
             <tbody>
@@ -406,10 +417,15 @@ export function Events({
                   <td className="text-truncate" style={{ maxWidth: 220 }}>{e.url_path || <span className="text-secondary">-</span>}</td>
                   <td>{e.http_status_code ? <span className="badge bg-azure-lt">{e.http_status_code}</span> : <Badge r={e.event_result} />}</td>
                   <td className="text-truncate" style={{ maxWidth: 320 }}>{dash(e.message)}</td>
+                  <td className="text-center" onClick={stop}>
+                    <input type="checkbox" className="form-check-input" checked={e.resolved}
+                      title={e.resolved ? "対応済み" : "未対応"}
+                      onChange={(ev) => toggleResolved(e.id, ev.target.checked)} />
+                  </td>
                   {showAdvice && <td className="text-nowrap"><AdviceCell e={e} onPick={(k, v) => onTax(k, v)} /></td>}
                 </tr>
               ))}
-              {data.items.length === 0 && <tr><td colSpan={showAdvice ? 13 : 12} className="text-secondary text-center py-4">該当なし</td></tr>}
+              {data.items.length === 0 && <tr><td colSpan={showAdvice ? 14 : 13} className="text-secondary text-center py-4">該当なし</td></tr>}
             </tbody>
           </table>
           </div>
@@ -450,7 +466,7 @@ export function Events({
         </div>
       </div>
 
-      {sel != null && <EventDetail id={sel} onClose={() => setSel(null)} onPivot={onTax} onEntity={onEntity} />}
+      {sel != null && <EventDetail id={sel} onClose={() => setSel(null)} onPivot={onTax} onEntity={onEntity} onOpenCase={onOpenCase} onOpenIncident={onOpenIncident} />}
     </div>
   );
 }

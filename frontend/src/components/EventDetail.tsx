@@ -3,27 +3,23 @@ import { api } from "../api";
 import { fmtTime, stLabel } from "../labels";
 import { adviseForEvent } from "../advice";
 import { useAssetDisplayNames, formatHost } from "../assetNames";
-import type { Annotation, EventDetail as Detail, EventRow, IncidentRow } from "../types";
+import type { Annotation, CaseRow, EventDetail as Detail, EventRow } from "../types";
 
 const TABS = ["概要", "Payload", "正規化", "エンティティ", "相関", "コメント", "Parser"] as const;
 type Tab = (typeof TABS)[number];
 
-// コメント・タグの付与＋インシデントへの紐付け（PROJECT.md §10.4）。
-// 既存の annotations / incidents API を結線する。editor 以上（認証OFF時は誰でも）で操作可。
+// このイベント単体に対する調査メモ・気づきの記録のみ（ケースへの紐付けは
+// 独立した「ケースに追加」ボタンに分離している）。
 function CommentsTab({ eventId }: { eventId: number }) {
   const [notes, setNotes] = useState<Annotation[]>([]);
-  const [incidents, setIncidents] = useState<IncidentRow[]>([]);
   const [comment, setComment] = useState("");
   const [tags, setTags] = useState("");
-  const [incidentId, setIncidentId] = useState<number | "">("");
-  const [note, setNote] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const loadNotes = () => api.annotations(eventId).then(setNotes).catch(() => {});
   useEffect(() => {
     loadNotes();
-    api.incidents().then(setIncidents).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventId]);
 
@@ -36,14 +32,6 @@ function CommentsTab({ eventId }: { eventId: number }) {
       setComment(""); setTags(""); loadNotes(); flash("コメントを追加しました");
     } catch (e) { setErr((e as Error).message); }
   };
-  const attach = async () => {
-    if (incidentId === "") return;
-    setErr(null);
-    try {
-      await api.addIncidentEvent(Number(incidentId), { event_id: eventId, note: note.trim() || undefined });
-      setNote(""); setIncidentId(""); flash("インシデントに追加しました");
-    } catch (e) { setErr((e as Error).message); }
-  };
 
   return (
     <div>
@@ -51,6 +39,7 @@ function CommentsTab({ eventId }: { eventId: number }) {
       {msg && <div className="alert alert-success py-2">{msg}</div>}
 
       <div className="mb-3">
+        <div className="text-secondary small mb-2">このイベント単体に対する調査メモ・気づいたことを記録します。</div>
         <label className="form-label">コメント</label>
         <textarea className="form-control mb-2" rows={2} placeholder="調査メモ・気づいたことなど"
           value={comment} onChange={(e) => setComment(e.target.value)} />
@@ -74,27 +63,128 @@ function CommentsTab({ eventId }: { eventId: number }) {
           </div>
         ))}
       </div>
-
-      <div className="border-top pt-3">
-        <label className="form-label">インシデントに追加</label>
-        {incidents.length === 0 ? (
-          <div className="text-secondary small">インシデントがありません。「インシデント」画面で作成してください。</div>
-        ) : (
-          <>
-            <select className="form-select mb-2" value={incidentId}
-              onChange={(e) => setIncidentId(e.target.value ? Number(e.target.value) : "")}>
-              <option value="">インシデントを選択…</option>
-              {incidents.map((i) => <option key={i.id} value={i.id}>{i.title}</option>)}
-            </select>
-            <input className="form-control mb-2" placeholder="メモ（任意）"
-              value={note} onChange={(e) => setNote(e.target.value)} />
-            <button className="btn btn-outline-primary btn-sm" disabled={incidentId === ""} onClick={attach}>
-              このイベントを追加
-            </button>
-          </>
-        )}
-      </div>
     </div>
+  );
+}
+
+// 独立した「ケースに追加」ボタン（v1「インシデントに追加」から改称）。既にいずれかのケースに
+// 紐付いている場合はリンクに変わりクリックでそのケースを開く（v1は非活性テキスト止まりだった実装漏れの修正）。
+// ケースは「注目」以外のイベントも自由に保持できるため、注目判定によるボタンの出し分けはしない
+// （設計書v4 3章：v3までの注目イベント限定制限は撤廃）。
+function AddToCase({ eventId, linked, onLinked, onOpenCase }: {
+  eventId: number; linked: { id: number; title: string } | null;
+  onLinked: () => void; onOpenCase: (id: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [cases, setCases] = useState<CaseRow[]>([]);
+  const [caseId, setCaseId] = useState<number | "">("");
+  const [note, setNote] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const openPicker = () => {
+    setErr(null);
+    api.cases().then(setCases).catch(() => setCases([]));
+    setOpen(true);
+  };
+
+  const attach = async () => {
+    if (caseId === "") return;
+    setErr(null);
+    setBusy(true);
+    try {
+      await api.addCaseEvent(Number(caseId), { event_id: eventId, note: note.trim() || undefined });
+      setOpen(false); setNote(""); setCaseId("");
+      onLinked();
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+
+  if (linked) {
+    return (
+      <button className="btn btn-outline-secondary btn-sm w-100 mb-3" onClick={() => onOpenCase(linked.id)}>
+        ケース #{linked.id} に追加済み
+      </button>
+    );
+  }
+
+  return (
+    <div className="mb-3">
+      {!open ? (
+        <button className="btn btn-outline-primary btn-sm w-100" onClick={openPicker}>ケースに追加</button>
+      ) : (
+        <div className="border rounded p-2">
+          {err && <div className="alert alert-danger py-2">{err}</div>}
+          {cases.length === 0 ? (
+            <div className="text-secondary small">ケースがありません。「ケース」画面で作成してください。</div>
+          ) : (
+            <>
+              <select className="form-select form-select-sm mb-2" value={caseId}
+                onChange={(e) => setCaseId(e.target.value ? Number(e.target.value) : "")}>
+                <option value="">ケースを選択…</option>
+                {cases.map((c) => <option key={c.id} value={c.id}>{c.title}</option>)}
+              </select>
+              <input className="form-control form-control-sm mb-2" placeholder="メモ（任意）"
+                value={note} onChange={(e) => setNote(e.target.value)} />
+              <div className="d-flex gap-2">
+                <button className="btn btn-primary btn-sm" disabled={caseId === "" || busy} onClick={attach}>
+                  このイベントを追加
+                </button>
+                <button className="btn btn-link btn-sm text-secondary" onClick={() => setOpen(false)}>キャンセル</button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 独立した「インシデント化」ボタン（既存の「ケースに追加」とは別の独立ボタン。設計書v4 5-1節）。
+// 「注目」イベントの時のみ表示する（インシデントは注目アラートから直接生成する。設計書v4 4章）。
+// 既にインシデント化済みなら、そのインシデントを開くボタンに変わる。
+function CreateIncident({ eventId, isAttention, linked, onCreated, onOpenIncident }: {
+  eventId: number; isAttention: boolean; linked: { id: number; title: string } | null;
+  onCreated: () => void; onOpenIncident: (incidentId: number) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  if (!isAttention && !linked) return null;
+
+  if (linked) {
+    return (
+      <button className="btn btn-outline-danger btn-sm w-100 mb-3" onClick={() => onOpenIncident(linked.id)}>
+        インシデント #{linked.id} で対応中
+      </button>
+    );
+  }
+
+  const create = async () => {
+    setErr(null);
+    setBusy(true);
+    try {
+      const { id } = await api.createIncidentFromEvent(eventId);
+      onCreated();
+      onOpenIncident(id);
+    } catch (e) { setErr((e as Error).message); } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="mb-3">
+      {err && <div className="alert alert-danger py-2">{err}</div>}
+      <button className="btn btn-danger btn-sm w-100" disabled={busy} onClick={create}>インシデント化</button>
+    </div>
+  );
+}
+
+// イベント単体の対応済み/未対応トグル（ケースへの追加有無とは独立。設計書v2 2章）
+function ResolvedToggle({ resolved, onChange }: { resolved: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label className="form-check form-switch mb-3">
+      <input className="form-check-input" type="checkbox" checked={resolved}
+        onChange={(e) => onChange(e.target.checked)} />
+      <span className="form-check-label">{resolved ? "対応済み" : "未対応"}</span>
+    </label>
   );
 }
 
@@ -139,17 +229,20 @@ function MiniEvents({ items }: { items: EventRow[] }) {
   );
 }
 
-export function EventDetail({ id, onClose, onPivot, onEntity }:
+export function EventDetail({ id, onClose, onPivot, onEntity, onOpenCase, onOpenIncident }:
   { id: number; onClose: () => void; onPivot: (taxKey: string, value: string) => void;
-    onEntity?: (entityType: string, value: string) => void }) {
+    onEntity?: (entityType: string, value: string) => void; onOpenCase?: (caseId: number) => void;
+    onOpenIncident?: (incidentId: number) => void }) {
   const [d, setD] = useState<Detail | null>(null);
   const [tab, setTab] = useState<Tab>("概要");
   const [related, setRelated] = useState<{ keys: { entity_type: string; entity_value: string }[]; items: EventRow[] }>({ keys: [], items: [] });
   const assetNames = useAssetDisplayNames();
 
+  const loadDetail = () => api.eventDetail(id).then(setD).catch(() => setD(null));
   useEffect(() => {
-    api.eventDetail(id).then(setD).catch(() => setD(null));
+    loadDetail();
     api.related(id).then(setRelated).catch(() => setRelated({ keys: [], items: [] }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   const n = (d?.normalized ?? {}) as Record<string, unknown>;
@@ -169,6 +262,15 @@ export function EventDetail({ id, onClose, onPivot, onEntity }:
           <button type="button" className="btn-close" onClick={onClose}></button>
         </div>
         <div className="offcanvas-body">
+          {d && (
+            <>
+              <ResolvedToggle resolved={d.resolved} onChange={(v) => api.setEventResolved(id, v).then(loadDetail)} />
+              <AddToCase eventId={id} linked={d.linked_case} onLinked={loadDetail}
+                onOpenCase={(caseId) => { onOpenCase?.(caseId); onClose(); }} />
+              <CreateIncident eventId={id} isAttention={d.is_attention} linked={d.linked_incident} onCreated={loadDetail}
+                onOpenIncident={(incidentId) => { onOpenIncident?.(incidentId); onClose(); }} />
+            </>
+          )}
           <ul className="nav nav-tabs mb-3 flex-nowrap overflow-auto">
             {TABS.map((t) => (
               <li className="nav-item" key={t}>

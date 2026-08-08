@@ -9,12 +9,20 @@ from sqlalchemy.orm import Session
 from .auth import get_current_user, require_editor, require_login, require_sysadmin
 from .config import settings
 from .db import get_db
-from .models import Annotation, Asset, CustomRule, DeadLetter, Event, EventEntity, IOC, Incident, IncidentEvent
+from .incident_status import can_transition
+from .models import Annotation, Asset, Case, CaseComment, CaseEvent, CustomRule, DeadLetter, Event, EventEntity, IOC
+from .models import Incident, IncidentAuditLog, IncidentComment, IncidentResponseAction, IncidentResponseActionType
+from .models import IncidentStatus, IncidentStatusHistory
 from .models import IocFeed, License, Setting, User, UserSettings
 from .models import NormalizedEvent as N
 from .schema import (AnnotationCreate, AssetCreate, AssetDisplayNameUpdate, AssetUpdate, CustomRuleCreate,
-                     CustomRuleUpdate, DismissedRelease, FeedUpdate, IncidentCreate, IncidentEventAdd,
+                     CustomRuleUpdate, DismissedRelease, FeedUpdate,
                      LicenseApply, NotificationConfig, SilenceSettings, SyncSettings)
+from .incident_schema import (CaseCommentCreate, CaseCreate, CaseEventAdd, CaseEventNoteUpdate,
+                              CaseTitleUpdate, EventResolvedUpdate, IncidentAssigneeUpdate,
+                              IncidentCommentCreate, IncidentResponseActionCreate, IncidentResponseActionTypeCreate,
+                              IncidentResponseActionTypeVisibilityUpdate, IncidentStatusCreate, IncidentStatusUpdate,
+                              IncidentStatusVisibilityUpdate, IncidentVerdictUpdate)
 
 router = APIRouter(prefix="/api")
 
@@ -70,6 +78,27 @@ def _threat_clause(threat: str):
 
 ATTENTION_KEYWORDS = ["fail", "error", "deny", "denied", "invalid", "unauthor", "refused",
                       "reject", "lock", "warn", "attack", "violat", "critical", "alert", "404"]
+
+
+def _attention_clause():
+    """「注目」＝ルール合致相当の動的判定（payloadキーワード一致 or 失敗/高重大度）。
+    list_events の attention フィルタと、ケースへ追加できるイベントの判定
+    （is_event_attention。ケース管理機能設計書v2 2章）の両方から使う共通ロジック。"""
+    payload_match = or_(*[cast(Event.payload, String).ilike(f"%{k}%") for k in ATTENTION_KEYWORDS])
+    norm_match = or_(
+        N.event_result == "failure",
+        N.event_severity.in_(["warning", "error", "critical", "crit", "alert", "emerg"]),
+    )
+    return or_(payload_match, norm_match)
+
+
+def is_event_attention(db: Session, event_id: int) -> bool:
+    # _joined() は完成済みの select(Event, N).join(...) を返すため、select_from() で包まず
+    # そのまま .where() を重ねる（list_events/export_events と同じ使い方）。select_from(_joined())
+    # は Select を素の FROM 要素として扱おうとして events×normalized_events のカルテシアン積を
+    # 生んでしまい、実運用データで検証した際にバックエンド全体が長時間ハングする実害が出た。
+    stmt = _joined().where(Event.id == event_id, _attention_clause())
+    return db.execute(stmt).first() is not None
 
 # イベント一覧（/api/events, /api/events/export）専用のデフォルト期間。
 # 期間未指定のまま455,503件規模の全表スキャンが走っていたため、期間指定なし時は
@@ -151,6 +180,7 @@ def _row(ev: Event, n: N) -> dict:
         "http_method": n.http_method, "http_status_code": n.http_status_code,
         "service_name": n.service_name,
         "message": n.message,
+        "resolved": ev.resolved,
     }
 
 
@@ -161,13 +191,7 @@ def list_events(db: Session = Depends(get_db), f: dict = Depends(filters), atten
     f = _with_events_default_period(f)
     stmt = apply_filters(_joined(), f)
     if attention:
-        # payloadキーワード OR 正規化済みの失敗/高重大度（[preauth]等キーワードなしのSSH攻撃も捕捉）
-        payload_match = or_(*[cast(Event.payload, String).ilike(f"%{k}%") for k in ATTENTION_KEYWORDS])
-        norm_match = or_(
-            N.event_result == "failure",
-            N.event_severity.in_(["warning", "error", "critical", "crit", "alert", "emerg"]),
-        )
-        stmt = stmt.where(or_(payload_match, norm_match))
+        stmt = stmt.where(_attention_clause())
     if threat:
         clause = _threat_clause(threat)
         if clause is not None:
@@ -190,10 +214,7 @@ def export_events(db: Session = Depends(get_db), f: dict = Depends(filters),
     f = _with_events_default_period(f)
     stmt = apply_filters(_joined(), f)
     if attention:
-        payload_match = or_(*[cast(Event.payload, String).ilike(f"%{k}%") for k in ATTENTION_KEYWORDS])
-        norm_match = or_(N.event_result == "failure",
-                         N.event_severity.in_(["warning", "error", "critical", "crit", "alert", "emerg"]))
-        stmt = stmt.where(or_(payload_match, norm_match))
+        stmt = stmt.where(_attention_clause())
     if threat:
         clause = _threat_clause(threat)
         if clause is not None:
@@ -236,6 +257,12 @@ def event_detail(event_id: int, db: Session = Depends(get_db)):
     for k, v in norm.items():
         if isinstance(v, datetime):
             norm[k] = v.isoformat()
+    link = db.execute(
+        select(CaseEvent.case_id, Case.title)
+        .join(Case, Case.id == CaseEvent.case_id)
+        .where(CaseEvent.event_id == event_id)
+    ).first()
+    incident = db.execute(select(Incident.id, Incident.title).where(Incident.event_id == event_id)).first()
     return {
         "id": ev.id, "source": ev.source, "source_type": ev.source_type,
         "ingest_channel": ev.ingest_channel, "receiver_ip": ev.receiver_ip,
@@ -243,7 +270,55 @@ def event_detail(event_id: int, db: Session = Depends(get_db)):
         "parser_name": ev.parser_name, "parser_version": ev.parser_version,
         "parse_status": ev.parse_status, "parse_error": ev.parse_error,
         "payload": ev.payload, "normalized": norm,
+        "resolved": ev.resolved,
+        "is_attention": is_event_attention(db, event_id),
+        "linked_case": {"id": link[0], "title": link[1]} if link else None,
+        "linked_incident": {"id": incident[0], "title": incident[1]} if incident else None,
     }
+
+
+@router.put("/events/{event_id}/resolved")
+def update_event_resolved(event_id: int, body: EventResolvedUpdate, db: Session = Depends(get_db),
+                          _a=Depends(require_login)):
+    """イベント単体の対応済み/未対応フラグ。ケースへの追加有無とは独立して切り替え可能
+    （設計書v2 2章。単発のアラートをケース化せずに処理できるようにするため）。"""
+    ev = db.get(Event, event_id)
+    if not ev:
+        return _err(404, "イベントが見つかりません")
+    ev.resolved = body.resolved
+    db.commit()
+    return {"ok": True, "resolved": ev.resolved}
+
+
+def _auto_incident_title(ev: Event, n: N) -> str:
+    """インシデントのタイトルを起因イベントから自動生成する（設計書v4 4.1節。手動編集は今回スコープ外）。"""
+    base = n.event_action or n.message or n.source_name or ev.source or f"イベント #{ev.id}"
+    base = base.strip().splitlines()[0] if base else f"イベント #{ev.id}"
+    return base[:255]
+
+
+@router.post("/events/{event_id}/incident")
+def create_incident_from_event(event_id: int, db: Session = Depends(get_db), user=Depends(require_editor)):
+    """「注目」アラートに対して直接インシデントを生成する（設計書v4 4章。ケースには依存しない）。
+    1アラートにつき最大1件（event_id にUNIQUE制約。事前チェック＋DB制約の二重防御）。"""
+    row = db.execute(_joined().where(Event.id == event_id)).first()
+    if not row:
+        return _err(404, "イベントが見つかりません")
+    ev, n = row
+    if not is_event_attention(db, event_id):
+        return _err(400, "「注目」イベントのみインシデント化できます")
+    existing = db.execute(select(Incident.id).where(Incident.event_id == event_id)).scalar_one_or_none()
+    if existing:
+        return _err(409, "このイベントは既にインシデント化されています")
+    default_status = _default_status(db)
+    inc = Incident(event_id=event_id, title=_auto_incident_title(ev, n),
+                   status_id=default_status.id if default_status else None)
+    db.add(inc)
+    db.flush()
+    _incident_audit(db, incident_id=inc.id, action_type="incident.create",
+                    before=None, after=f"イベント #{event_id} から生成", user=user)
+    db.commit()
+    return {"id": inc.id}
 
 
 @router.get("/events/{event_id}/payload")
@@ -596,27 +671,186 @@ def correlations(db: Session = Depends(get_db), entity_type: str = "ip",
     return {"entity_type": entity_type, "min_sources": min_sources, "items": items}
 
 
-# ============================ MVP5: インシデント & コメント ============================
+# ============================ ケース／インシデント管理機能（設計書v2） ============================
+def _err(status: int, message: str) -> Response:
+    import json
+    return Response(status_code=status, content=json.dumps({"error": message}, ensure_ascii=False),
+                    media_type="application/json")
+
+
+def _incident_audit(db: Session, *, incident_id: int | None, action_type: str,
+                    before: str | None, after: str | None, user: User | None) -> None:
+    """記録対象はインシデント側の操作のみ（ケース側の操作は記録しない。設計書v2 3章/4-3節）。"""
+    db.add(IncidentAuditLog(incident_id=incident_id, action_type=action_type,
+                            before_value=before, after_value=after,
+                            actor=user.id if user else None))
+
+
+def _status_row(s: IncidentStatus) -> dict:
+    return {"id": s.id, "name": s.name, "special_type": s.special_type,
+            "is_visible": s.is_visible, "sort_order": s.sort_order}
+
+
+def _response_action_type_row(t: IncidentResponseActionType) -> dict:
+    return {"id": t.id, "name": t.name, "is_visible": t.is_visible, "sort_order": t.sort_order}
+
+
+def _default_status(db: Session) -> IncidentStatus | None:
+    return db.execute(select(IncidentStatus).where(IncidentStatus.special_type == "unassigned")).scalars().first()
+
+
+def _case_row(c: Case, event_count: int) -> dict:
+    return {
+        "id": c.id, "title": c.title,
+        "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+        "event_count": event_count,
+    }
+
+
+# ---------------------------- ケース（複数イベントの調査ワークスペース。設計書v4 3章） ----------------------------
+# ステータス・判定結果・担当者・インシデントへの「昇格」概念は持たない。インシデントとは
+# 完全に独立している（4章参照）。
+@router.get("/cases")
+def list_cases(db: Session = Depends(get_db)):
+    cnt = (select(CaseEvent.case_id, func.count().label("c")).group_by(CaseEvent.case_id)).subquery()
+    rows = db.execute(
+        select(Case, cnt.c.c)
+        .outerjoin(cnt, cnt.c.case_id == Case.id)
+        .order_by(Case.updated_at.desc())
+    ).all()
+    return [_case_row(c, cnt or 0) for c, cnt in rows]
+
+
+@router.post("/cases")
+def create_case(body: CaseCreate, db: Session = Depends(get_db), _a=Depends(require_editor)):
+    c = Case(title=body.title)
+    db.add(c)
+    db.commit()
+    return {"id": c.id}
+
+
+@router.get("/cases/{case_id}")
+def case_detail(case_id: int, db: Session = Depends(get_db)):
+    c = db.get(Case, case_id)
+    if not c:
+        return {"error": "not found"}
+    links = db.execute(
+        select(CaseEvent, Event, N)
+        .join(Event, Event.id == CaseEvent.event_id)
+        .join(N, N.event_id == Event.id)
+        .where(CaseEvent.case_id == case_id)
+        .order_by(nulls_last(N.event_time.desc()))
+    ).all()
+    events = [{**_row(e, n), "note": le.note} for le, e, n in links]
+    return {
+        "id": c.id, "title": c.title,
+        "created_at": c.created_at.isoformat() if c.created_at else None,
+        "updated_at": c.updated_at.isoformat() if c.updated_at else None,
+        "events": events,
+    }
+
+
+@router.put("/cases/{case_id}")
+def update_case_title(case_id: int, body: CaseTitleUpdate, db: Session = Depends(get_db), _a=Depends(require_login)):
+    c = db.get(Case, case_id)
+    if not c:
+        return _err(404, "ケースが見つかりません")
+    c.title = body.title
+    c.updated_at = datetime.now().astimezone()
+    db.commit()
+    return {"ok": True, "title": c.title}
+
+
+@router.post("/cases/{case_id}/events")
+def add_case_event(case_id: int, body: CaseEventAdd, db: Session = Depends(get_db), _a=Depends(require_editor)):
+    """設計書v4 3章：「注目」以外のイベントも自由に追加できる（v3までの注目限定制限は撤廃）。"""
+    c = db.get(Case, case_id)
+    if not c:
+        return _err(404, "ケースが見つかりません")
+    if not db.get(Event, body.event_id):
+        return _err(404, "イベントが見つかりません")
+    existing = db.execute(select(CaseEvent.id).where(
+        CaseEvent.case_id == case_id, CaseEvent.event_id == body.event_id)).first()
+    if existing:
+        return _err(409, "このイベントは既にこのケースに追加されています")
+    db.add(CaseEvent(case_id=case_id, event_id=body.event_id, note=body.note))
+    c.updated_at = datetime.now().astimezone()
+    db.commit()
+    return {"ok": True}
+
+
+@router.put("/cases/{case_id}/events/{event_id}")
+def update_case_event_note(case_id: int, event_id: int, body: CaseEventNoteUpdate,
+                           db: Session = Depends(get_db), _a=Depends(require_login)):
+    link = db.execute(select(CaseEvent).where(
+        CaseEvent.case_id == case_id, CaseEvent.event_id == event_id)).scalar_one_or_none()
+    if not link:
+        return _err(404, "紐付けが見つかりません")
+    link.note = body.note
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/cases/{case_id}/events/{event_id}")
+def remove_case_event(case_id: int, event_id: int, db: Session = Depends(get_db), _a=Depends(require_login)):
+    """イベント自体は削除せず、ケースとの紐付け(リレーション)のみ解除する。"""
+    link = db.execute(select(CaseEvent).where(
+        CaseEvent.case_id == case_id, CaseEvent.event_id == event_id)).scalar_one_or_none()
+    if not link:
+        return _err(404, "紐付けが見つかりません")
+    db.delete(link)
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/cases/{case_id}/comments")
+def list_case_comments(case_id: int, db: Session = Depends(get_db)):
+    rows = db.execute(
+        select(CaseComment, User.display_name, User.username)
+        .outerjoin(User, User.id == CaseComment.created_by)
+        .where(CaseComment.case_id == case_id)
+        .order_by(CaseComment.created_at.desc())
+    ).all()
+    return [{"id": c.id, "body": c.body, "actor_name": dname or uname,
+             "created_at": c.created_at.isoformat() if c.created_at else None} for c, dname, uname in rows]
+
+
+@router.post("/cases/{case_id}/comments")
+def add_case_comment(case_id: int, body: CaseCommentCreate, db: Session = Depends(get_db),
+                     _a=Depends(require_login)):
+    c = db.get(Case, case_id)
+    if not c:
+        return _err(404, "ケースが見つかりません")
+    if not body.body.strip():
+        return _err(400, "コメントを入力してください")
+    cm = CaseComment(case_id=case_id, body=body.body.strip(), created_by=_a.id if _a else None)
+    db.add(cm)
+    db.commit()
+    return {"id": cm.id}
+
+
+# ---------------------------- インシデント（アラート単位の確定事案。設計書v4 4章） ----------------------------
+# ケースには一切依存しない。「1つの注目アラート(event_id)」と1:1で対応する。
 @router.get("/incidents")
 def list_incidents(db: Session = Depends(get_db)):
-    cnt = (select(IncidentEvent.incident_id, func.count().label("c"))
-           .group_by(IncidentEvent.incident_id)).subquery()
+    """インシデント単体の一覧（ケースを経由せず左メニューから直接アクセスする）。"""
     rows = db.execute(
-        select(Incident, cnt.c.c).outerjoin(cnt, cnt.c.incident_id == Incident.id)
+        select(Incident, IncidentStatus, User.display_name, User.username, N)
+        .outerjoin(IncidentStatus, IncidentStatus.id == Incident.status_id)
+        .outerjoin(User, User.id == Incident.assignee_user_id)
+        .join(N, N.event_id == Incident.event_id)
         .order_by(Incident.updated_at.desc())
     ).all()
-    return [{"id": i.id, "title": i.title, "status": i.status, "severity": i.severity,
-             "owner": i.owner, "summary": i.summary,
-             "updated_at": i.updated_at.isoformat() if i.updated_at else None,
-             "event_count": c or 0} for i, c in rows]
-
-
-@router.post("/incidents")
-def create_incident(body: IncidentCreate, db: Session = Depends(get_db), _a=Depends(require_editor)):
-    inc = Incident(title=body.title, severity=body.severity, summary=body.summary, owner=body.owner)
-    db.add(inc)
-    db.commit()
-    return {"id": inc.id}
+    return [{
+        "id": i.id, "event_id": i.event_id, "title": i.title,
+        "status_id": i.status_id, "status_name": st.name if st else None,
+        "verdict": i.verdict,
+        "assignee_user_id": i.assignee_user_id,
+        "assignee_name": (dname or uname) if i.assignee_user_id else None,
+        "updated_at": i.updated_at.isoformat() if i.updated_at else None,
+        "event_source_name": n.source_name,
+        "event_action": n.event_action, "event_message": n.message,
+    } for i, st, dname, uname, n in rows]
 
 
 @router.get("/incidents/{incident_id}")
@@ -624,34 +858,241 @@ def incident_detail(incident_id: int, db: Session = Depends(get_db)):
     inc = db.get(Incident, incident_id)
     if not inc:
         return {"error": "not found"}
-    links = db.execute(
-        select(IncidentEvent, Event, N)
-        .join(Event, Event.id == IncidentEvent.event_id)
-        .join(N, N.event_id == Event.id)
-        .where(IncidentEvent.incident_id == incident_id)
-        .order_by(nulls_last(N.event_time.desc()))
-    ).all()
-    events = [{**_row(e, n), "note": le.note} for le, e, n in links]
-    return {"id": inc.id, "title": inc.title, "status": inc.status, "severity": inc.severity,
-            "owner": inc.owner, "summary": inc.summary,
-            "created_at": inc.created_at.isoformat() if inc.created_at else None,
-            "events": events}
+    status = db.get(IncidentStatus, inc.status_id) if inc.status_id else None
+    assignee = db.get(User, inc.assignee_user_id) if inc.assignee_user_id else None
+    # 主役アラート：このインシデントの起因となった唯一のイベント（複製せず参照表示。設計書v4 5.3節）
+    row = db.execute(_joined().where(Event.id == inc.event_id)).first()
+    event = _row(*row) if row else None
+    return {
+        "id": inc.id, "event_id": inc.event_id, "title": inc.title,
+        "status_id": inc.status_id, "status_name": status.name if status else None,
+        "verdict": inc.verdict,
+        "assignee_user_id": inc.assignee_user_id,
+        "assignee_name": (assignee.display_name or assignee.username) if assignee else None,
+        "created_at": inc.created_at.isoformat() if inc.created_at else None,
+        "updated_at": inc.updated_at.isoformat() if inc.updated_at else None,
+        "event": event,
+    }
 
 
-@router.post("/incidents/{incident_id}/events")
-def add_incident_event(incident_id: int, body: IncidentEventAdd, db: Session = Depends(get_db),
-                       _a=Depends(require_editor)):
+@router.put("/incidents/{incident_id}/status")
+def update_incident_status(incident_id: int, body: IncidentStatusUpdate, db: Session = Depends(get_db),
+                           user=Depends(require_login)):
     inc = db.get(Incident, incident_id)
     if not inc:
-        return Response(status_code=404, content='{"error":"インシデントが見つかりません"}',
-                        media_type="application/json")
-    if not db.get(Event, body.event_id):
-        return Response(status_code=404, content='{"error":"イベントが見つかりません"}',
-                        media_type="application/json")
-    db.add(IncidentEvent(incident_id=incident_id, event_id=body.event_id, note=body.note))
+        return _err(404, "インシデントが見つかりません")
+    to_status = db.get(IncidentStatus, body.status_id)
+    if not to_status:
+        return _err(404, "ステータスが見つかりません")
+    from_status = db.get(IncidentStatus, inc.status_id) if inc.status_id else None
+    role = user.role if user else "admin"  # 認証OFF時は従来どおり全権
+    if not can_transition(from_status.special_type if from_status else None, to_status.special_type, role):
+        return _err(403, "この遷移を行う権限がありません（システム管理者以上が必要です）")
+    old_status_id = inc.status_id
+    inc.status_id = to_status.id
     inc.updated_at = datetime.now().astimezone()
+    # 「未対応」以外へ変更し、かつ担当者が未割り当てなら操作者を自動アサイン（UX向上策。v1から継続）。
+    if to_status.special_type != "unassigned" and inc.assignee_user_id is None and user:
+        inc.assignee_user_id = user.id
+    db.add(IncidentStatusHistory(incident_id=incident_id, from_status_id=old_status_id,
+                                 to_status_id=to_status.id, changed_by=user.id if user else None))
+    _incident_audit(db, incident_id=incident_id, action_type="status_change",
+                    before=from_status.name if from_status else None, after=to_status.name, user=user)
     db.commit()
-    return {"ok": True}
+    return {"ok": True, "status_id": inc.status_id, "assignee_user_id": inc.assignee_user_id}
+
+
+@router.put("/incidents/{incident_id}/assignee")
+def update_incident_assignee(incident_id: int, body: IncidentAssigneeUpdate, db: Session = Depends(get_db),
+                             user=Depends(require_login)):
+    inc = db.get(Incident, incident_id)
+    if not inc:
+        return _err(404, "インシデントが見つかりません")
+    if body.assignee_user_id is not None and not db.get(User, body.assignee_user_id):
+        return _err(404, "ユーザーが見つかりません")
+    before = inc.assignee_user_id
+    inc.assignee_user_id = body.assignee_user_id
+    inc.updated_at = datetime.now().astimezone()
+    _incident_audit(db, incident_id=incident_id, action_type="assignee_change",
+                    before=str(before) if before else None,
+                    after=str(body.assignee_user_id) if body.assignee_user_id else None, user=user)
+    db.commit()
+    return {"ok": True, "assignee_user_id": inc.assignee_user_id}
+
+
+@router.put("/incidents/{incident_id}/verdict")
+def update_incident_verdict(incident_id: int, body: IncidentVerdictUpdate, db: Session = Depends(get_db),
+                            user=Depends(require_login)):
+    inc = db.get(Incident, incident_id)
+    if not inc:
+        return _err(404, "インシデントが見つかりません")
+    before = inc.verdict
+    inc.verdict = body.verdict
+    inc.updated_at = datetime.now().astimezone()
+    _incident_audit(db, incident_id=incident_id, action_type="verdict_change", before=before, after=body.verdict, user=user)
+    db.commit()
+    return {"ok": True, "verdict": inc.verdict}
+
+
+@router.post("/incidents/{incident_id}/comments")
+def add_incident_comment(incident_id: int, body: IncidentCommentCreate, db: Session = Depends(get_db),
+                         user=Depends(require_login)):
+    inc = db.get(Incident, incident_id)
+    if not inc:
+        return _err(404, "インシデントが見つかりません")
+    if not body.body.strip():
+        return _err(400, "コメントを入力してください")
+    c = IncidentComment(incident_id=incident_id, body=body.body.strip(), created_by=user.id if user else None)
+    db.add(c)
+    db.commit()
+    return {"id": c.id}
+
+
+@router.post("/incidents/{incident_id}/response-actions")
+def add_incident_response_action(incident_id: int, body: IncidentResponseActionCreate,
+                                 db: Session = Depends(get_db), user=Depends(require_login)):
+    inc = db.get(Incident, incident_id)
+    if not inc:
+        return _err(404, "インシデントが見つかりません")
+    at = db.get(IncidentResponseActionType, body.action_type_id)
+    if not at:
+        return _err(404, "対応アクション種別が見つかりません")
+    ra = IncidentResponseAction(incident_id=incident_id, action_type_id=body.action_type_id,
+                                detail=body.detail, actor=user.id if user else None)
+    db.add(ra)
+    db.flush()
+    _incident_audit(db, incident_id=incident_id, action_type="response_action.add",
+                    before=None, after=at.name, user=user)
+    db.commit()
+    return {"id": ra.id}
+
+
+@router.get("/incidents/{incident_id}/activity")
+def incident_activity(incident_id: int, db: Session = Depends(get_db), _a=Depends(require_login)):
+    """コメント(incident_comments)・対応アクション(incident_response_actions)・
+    システム監査ログ(incident_audit_log)を時系列マージしたアクティビティタイムライン（設計書v2 4-4節）。"""
+    comments = db.execute(
+        select(IncidentComment, User.display_name, User.username)
+        .outerjoin(User, User.id == IncidentComment.created_by)
+        .where(IncidentComment.incident_id == incident_id)
+    ).all()
+    actions = db.execute(
+        select(IncidentResponseAction, IncidentResponseActionType.name, User.display_name, User.username)
+        .join(IncidentResponseActionType, IncidentResponseActionType.id == IncidentResponseAction.action_type_id)
+        .outerjoin(User, User.id == IncidentResponseAction.actor)
+        .where(IncidentResponseAction.incident_id == incident_id)
+    ).all()
+    logs = db.execute(
+        select(IncidentAuditLog, User.display_name, User.username)
+        .outerjoin(User, User.id == IncidentAuditLog.actor)
+        .where(IncidentAuditLog.incident_id == incident_id)
+    ).all()
+    items = []
+    for c, dname, uname in comments:
+        items.append({
+            "id": f"comment-{c.id}", "type": "comment", "body": c.body,
+            "before_value": None, "after_value": None,
+            "actor_name": dname or uname, "created_at": c.created_at.isoformat() if c.created_at else None,
+        })
+    for a, type_name, dname, uname in actions:
+        items.append({
+            "id": f"action-{a.id}", "type": "response_action", "body": a.detail,
+            "before_value": None, "after_value": type_name,
+            "actor_name": dname or uname, "created_at": a.created_at.isoformat() if a.created_at else None,
+        })
+    for a, dname, uname in logs:
+        items.append({
+            "id": f"audit-{a.id}", "type": a.action_type, "body": None,
+            "before_value": a.before_value, "after_value": a.after_value,
+            "actor_name": dname or uname, "created_at": a.created_at.isoformat() if a.created_at else None,
+        })
+    items.sort(key=lambda x: x["created_at"] or "", reverse=True)
+    return items
+
+
+# インシデント/ケースの担当者アサイン用に使う軽量なユーザー一覧。/api/users はsysadmin以上限定
+# （ロール・有効/無効等の管理情報を含むため）だが、担当者アサインは閲覧者含む全員が行えるため
+# （権限マトリクス）、id/username/display_nameのみの最小限データを別途返す。
+@router.get("/incident-assignable-users")
+def list_assignable_users(db: Session = Depends(get_db), _a=Depends(require_login)):
+    rows = db.execute(
+        select(User.id, User.username, User.display_name)
+        .where(User.enabled.is_(True)).order_by(User.username)
+    ).all()
+    return [{"id": i, "username": u, "display_name": d} for i, u, d in rows]
+
+
+# ---- ステータスマスタ管理（sysadmin以上のみ追加・非表示化） ----
+@router.get("/incident-statuses")
+def list_incident_statuses(db: Session = Depends(get_db), show_hidden: bool = False):
+    stmt = select(IncidentStatus).order_by(IncidentStatus.sort_order, IncidentStatus.id)
+    if not show_hidden:
+        stmt = stmt.where(IncidentStatus.is_visible.is_(True))
+    return [_status_row(s) for s in db.execute(stmt).scalars().all()]
+
+
+@router.post("/incident-statuses")
+def create_incident_status(body: IncidentStatusCreate, db: Session = Depends(get_db), user=Depends(require_sysadmin)):
+    if not body.name.strip():
+        return _err(400, "ステータス名を入力してください")
+    max_sort = db.scalar(select(func.max(IncidentStatus.sort_order))) or 0
+    st = IncidentStatus(name=body.name.strip(), special_type=None, is_visible=True, sort_order=max_sort + 1)
+    db.add(st)
+    db.flush()
+    _incident_audit(db, incident_id=None, action_type="status_master.create", before=None, after=st.name, user=user)
+    db.commit()
+    return _status_row(st)
+
+
+@router.put("/incident-statuses/{status_id}/visibility")
+def set_incident_status_visibility(status_id: int, body: IncidentStatusVisibilityUpdate,
+                                   db: Session = Depends(get_db), user=Depends(require_sysadmin)):
+    st = db.get(IncidentStatus, status_id)
+    if not st:
+        return _err(404, "ステータスが見つかりません")
+    before = st.is_visible
+    st.is_visible = body.is_visible
+    _incident_audit(db, incident_id=None, action_type="status_master.visibility",
+                    before=f"{st.name}: {before}", after=f"{st.name}: {body.is_visible}", user=user)
+    db.commit()
+    return _status_row(st)
+
+
+# ---- 対応アクション種別マスタ（sysadmin以上のみ追加・非表示化。設計書v2 4-4節） ----
+@router.get("/incident-response-action-types")
+def list_response_action_types(db: Session = Depends(get_db), show_hidden: bool = False):
+    stmt = select(IncidentResponseActionType).order_by(IncidentResponseActionType.sort_order, IncidentResponseActionType.id)
+    if not show_hidden:
+        stmt = stmt.where(IncidentResponseActionType.is_visible.is_(True))
+    return [_response_action_type_row(t) for t in db.execute(stmt).scalars().all()]
+
+
+@router.post("/incident-response-action-types")
+def create_response_action_type(body: IncidentResponseActionTypeCreate, db: Session = Depends(get_db),
+                                user=Depends(require_sysadmin)):
+    if not body.name.strip():
+        return _err(400, "種別名を入力してください")
+    max_sort = db.scalar(select(func.max(IncidentResponseActionType.sort_order))) or 0
+    t = IncidentResponseActionType(name=body.name.strip(), is_visible=True, sort_order=max_sort + 1)
+    db.add(t)
+    db.flush()
+    _incident_audit(db, incident_id=None, action_type="response_action_type.create", before=None, after=t.name, user=user)
+    db.commit()
+    return _response_action_type_row(t)
+
+
+@router.put("/incident-response-action-types/{type_id}/visibility")
+def set_response_action_type_visibility(type_id: int, body: IncidentResponseActionTypeVisibilityUpdate,
+                                        db: Session = Depends(get_db), user=Depends(require_sysadmin)):
+    t = db.get(IncidentResponseActionType, type_id)
+    if not t:
+        return _err(404, "対応アクション種別が見つかりません")
+    before = t.is_visible
+    t.is_visible = body.is_visible
+    _incident_audit(db, incident_id=None, action_type="response_action_type.visibility",
+                    before=f"{t.name}: {before}", after=f"{t.name}: {body.is_visible}", user=user)
+    db.commit()
+    return _response_action_type_row(t)
 
 
 @router.get("/events/{event_id}/annotations")
@@ -1083,6 +1524,7 @@ def admin_overview(db: Session = Depends(get_db)):
             "events": db.scalar(select(func.count()).select_from(Event)),
             "normalized": db.scalar(select(func.count()).select_from(N)),
             "entities": db.scalar(select(func.count()).select_from(EventEntity)),
+            "cases": db.scalar(select(func.count()).select_from(Case)),
             "incidents": db.scalar(select(func.count()).select_from(Incident)),
             "ioc": db.scalar(select(func.count()).select_from(IOC)),
             "dead_letters": db.scalar(select(func.count()).select_from(DeadLetter)),

@@ -40,6 +40,10 @@ def _init_db() -> None:
         except OperationalError:
             log.info("waiting for db... (%d)", attempt)
             time.sleep(2)
+    # ケース/インシデント管理機能: v1テーブルのリネームはcreate_allより前に済ませる必要がある
+    # （create_allが先に空の新テーブルを作ってしまうと、リネームの要否判定を誤るため。migrations.py参照）
+    from . import migrations as incident_migrations
+    incident_migrations.pre_create_all(engine)
     Base.metadata.create_all(bind=engine)
     log.info("DB ready, tables ensured.")
     # TCP NDJSON 受信を起動
@@ -65,6 +69,9 @@ def _init_db() -> None:
             # 初回のみ管理者(root)を seed（ユーザーが1人もいない時だけ）
             from .auth import bootstrap_root
             bootstrap_root(_db)
+            # インシデント管理機能: create_allで作れない既存テーブルへのカラム追加等（migrations.py）
+            from . import migrations as incident_migrations
+            incident_migrations.run(_db)
         finally:
             _db.close()
         start_ioc()
