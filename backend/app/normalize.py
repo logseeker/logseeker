@@ -84,6 +84,15 @@ MAPPINGS: dict[str, dict[str, list[str]]] = {
         "message": ["Message", "message"],
         "event_severity": ["Severity"],
     },
+    # auditd監査ログ（NXLog im_audit/im_file。2026-08-09以降、nxlog側でtype/res/acct/exe/
+    # SourceIPAddressをフィールド化して送るようになったため、Message本文の正規表現抽出はしない）。
+    "audit": {
+        "source_ip": ["SourceIPAddress"],
+        "actor_user": ["audit_acct"],
+        "service_name": ["audit_exe"],
+        "observer_name": ["Hostname"],
+        "message": ["Message", "message"],
+    },
 }
 
 _RE_FOR_USER = re.compile(r"for (?:invalid user )?(?P<user>[\w.\-@$]+)")
@@ -257,6 +266,31 @@ def _category_extras(source_type: str, payload: dict, norm: dict) -> None:
         else:
             norm["event_result"] = "unknown"
 
+    elif source_type == "audit":
+        # audit_type（USER_LOGIN/CRYPTO_KEY_USER/SERVICE_START等）をevent_actionにそのまま出す。
+        # login_success/failed等に丸めず、auditdのレコード種別を正確に反映する。
+        atype = str(payload.get("audit_type") or "")
+        norm["event_action"] = atype or None
+        if atype in ("USER_LOGIN", "USER_ERR", "USER_AUTH", "USER_ACCT") or atype.startswith("CRED_"):
+            norm["event_category"] = "authentication"
+        else:
+            norm["event_category"] = "system"
+
+        res = str(payload.get("audit_res") or "").lower()
+        if res == "success":
+            norm["event_result"] = "success"
+        elif res == "failed":
+            norm["event_result"] = "failure"
+            if norm["event_category"] == "authentication" and norm.get("actor_user") == "root":
+                norm["event_severity"] = "warning"
+        else:
+            norm["event_result"] = "unknown"
+
+        # 防御的措置: SourceIPAddressに"?"のような無効値が紛れ込んでいてもIPとして扱わない
+        # （nxlog側で addr=? は既に除外済みだが、念のため）。
+        if norm.get("source_ip") == "?":
+            norm["source_ip"] = None
+
     elif source_type == "linux":
         msg = str(payload.get("Message") or payload.get("message") or "")
         low = msg.lower()
@@ -265,7 +299,9 @@ def _category_extras(source_type: str, payload: dict, norm: dict) -> None:
             "accepted ", "failed password", "invalid user", "authentication failure",
             "session opened", "session closed", "[preauth]", "authenticating user",
             "disconnected from authenticating", "too many authentication",
-            # auditd（NXLog im_audit/im_file）: type=USER_LOGIN/USER_AUTH等、res=failed/success
+            # auditdは2026-08-09以降 source_type="audit"（MAPPINGS["audit"]+下のaudit分岐）で
+            # 処理されるためこの経路には来ないはずだが、secure/messages側に万一audit相当の
+            # 生テキストが紛れ込んだ場合のフォールバックとして残す。
             "type=user_login", "type=user_auth", "res=failed", "res=success")))
         if is_auth:
             norm["event_category"] = "authentication"

@@ -12,11 +12,13 @@ from .normalize import PARSER_VERSION, normalize
 log = logging.getLogger("pipeline")
 _NORM_COLS = set(NormalizedEvent.__table__.columns.keys()) - {"event_id"}
 
-# syslogのファシリティ/ログファイル名（secure, messages, audit等）はPROJECT.mdの方針により
+# syslogのファシリティ/ログファイル名（secure, messages等）はPROJECT.mdの方針により
 # source_type として使わない。NXLog経由のLinuxログは source_type="linux" に一本化する
 # （どのログファイル由来かは payload の SourceModuleName 等、他フィールドで判別する）。
-# audit: auditd(NXLog im_audit/im_file)由来のログ（type=USER_LOGIN等）も同様にlinuxへ寄せる。
-_SOURCE_TYPE_ALIASES = {"secure": "linux", "messages": "linux", "audit": "linux"}
+# audit（auditd由来、type=USER_LOGIN等）は、nxlog側でtype/res/acct/exe/SourceIPAddressを
+# フィールド化して送るようになったため、2026-08-09以降はlinuxに寄せず独立source_typeとして
+# 扱う（MAPPINGS["audit"]で直接マッピング。Message本文の正規表現抽出はしない）。
+_SOURCE_TYPE_ALIASES = {"secure": "linux", "messages": "linux"}
 
 # 正規化フィールド → 相関エンティティ (entity_type, role)
 # エンティティ＝相関・調査の対象になる「資産／主体／観測可能な指標」だけを持つ。
