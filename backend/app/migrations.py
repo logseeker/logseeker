@@ -114,7 +114,6 @@ _PAYLOAD_FIELD_INDEXES = [
     ("web_access", "vhost"),
     ("web_access", "status"),
     ("web_access", "request"),
-    ("web_error", "level"),
     ("linux", "Hostname"),
     ("linux", "SourceName"),
     ("linux", "Severity"),
