@@ -114,20 +114,6 @@ def is_event_attention(db: Session, event_id: int) -> bool:
     stmt = _joined().where(Event.id == event_id, _attention_clause())
     return db.execute(stmt).first() is not None
 
-# イベント一覧（/api/events, /api/events/export）専用のデフォルト期間。
-# 期間未指定のまま455,503件規模の全表スキャンが走っていたため、期間指定なし時は
-# 直近24時間に絞る（フロント側でも同じデフォルトを画面表示するが、APIを直接叩く
-# 経路の保護としてサーバー側にも入れる）。他エンドポイント（/api/sources 等）が使う
-# 共有の filters() には手を入れず、イベント一覧のみに限定する。
-EVENTS_DEFAULT_PERIOD_HOURS = 24
-
-
-def _with_events_default_period(f: dict) -> dict:
-    if f["start"] is None and f["end"] is None:
-        end = datetime.now(timezone.utc)
-        f = {**f, "start": end - timedelta(hours=EVENTS_DEFAULT_PERIOD_HOURS), "end": end}
-    return f
-
 
 def filters(request: Request, db: Session = Depends(get_db), q: str | None = None,
             start: datetime | None = None, end: datetime | None = None):
