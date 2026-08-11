@@ -3,8 +3,16 @@ import { api } from "../api";
 import { fmtTime, stLabel } from "../labels";
 import { adviseForEvent } from "../advice";
 import { useAssetDisplayNames, formatHost } from "../assetNames";
-import type { Count, EventRow, EventsResponse, FilterState, Screen } from "../types";
+import { useEventsColumns } from "../eventsColumns";
+import type { AuthStatus, Count, EventRow, EventsResponse, FilterState, Screen } from "../types";
 import { EventDetail } from "./EventDetail";
+
+// payload生キーの値を追加列セルに表示するための整形（オブジェクト/配列はJSON文字列化するのみ、変換はしない）。
+function fmtPayloadValue(v: unknown): string | null {
+  if (v === null || v === undefined || v === "") return null;
+  if (typeof v === "object") return JSON.stringify(v);
+  return String(v);
+}
 
 function Badge({ r }: { r: string | null }) {
   const v = r ?? "unknown";
@@ -164,7 +172,7 @@ function computePresetRange(key: string): { start: string; end: string } | null 
 }
 
 export function Events({
-  filter, setSearch, search, onTax, onApplyFilters, onAttention, onThreat, onEntity, onNav, onOpenCase, onOpenIncident,
+  filter, setSearch, search, onTax, onApplyFilters, onAttention, onThreat, onEntity, onNav, onOpenCase, onOpenIncident, auth,
 }: {
   filter: FilterState;
   search: string;
@@ -177,6 +185,7 @@ export function Events({
   onNav: (s: Screen) => void;
   onOpenCase?: (caseId: number) => void;
   onOpenIncident?: (incidentId: number) => void;
+  auth?: AuthStatus;
 }) {
   const [data, setData] = useState<EventsResponse>({ total: 0, limit: 100, offset: 0, items: [] });
   const [srcNames, setSrcNames] = useState<Count[]>([]);
@@ -190,6 +199,13 @@ export function Events({
   const [showAdvice, setShowAdvice] = useState(false);   // 「対応策」列の表示切替（既定オフ）
   const [datePreset, setDatePreset] = useState("24h");   // 期間プルダウンの選択状態（画面初期表示のデフォルトと合わせる）
   const assetNames = useAssetDisplayNames();
+
+  // 種別（Class）を1つに絞っている時だけ、そのClassのpayload生キーを追加列として選べる
+  // （混在表示中はClassごとに全く違うキーになるため対象外とする。フェーズ3設計判断）。
+  const singleClass = filter.tax.source_type || "";
+  const { candidates, columns: extraCols, setColumns: setExtraCols } = useEventsColumns(auth ?? null, singleClass);
+  const [colSettingsOpen, setColSettingsOpen] = useState(false);
+  useEffect(() => { setColSettingsOpen(false); }, [singleClass]);
 
   // 上部フィルタバーは「実行」ボタンを押すまで実際の検索(filter)には反映しない下書き状態。
   // ドロップダウン選択のたびに毎回大量データへ再クエリが飛んで重くなるのを避けるため。
@@ -359,6 +375,12 @@ export function Events({
                 onClick={() => setShowAdvice((v) => !v)}>
                 🛠 対応策{showAdvice ? "を隠す" : "を表示"}
               </button>
+              {singleClass && (
+                <button className={`btn btn-sm ${colSettingsOpen ? "btn-info" : "btn-outline-info"}`}
+                  onClick={() => setColSettingsOpen((v) => !v)}>
+                  ⚙ 列設定（{stLabel(singleClass)}）
+                </button>
+              )}
               <div className="btn-group" title="現在の絞り込みで最大2万件までダウンロード">
                 <button className="btn btn-sm btn-outline-secondary"
                   onClick={() => api.exportEvents(filter, "csv").catch((e) => setErr((e as Error).message))}>
@@ -374,6 +396,47 @@ export function Events({
               </button>
             </div>
           </div>
+          {singleClass && colSettingsOpen && (
+            <div className="card-body border-top">
+              <div className="text-secondary small mb-2">
+                「{stLabel(singleClass)}」の直近データに実際に含まれるキー(受信payloadそのまま。変換・補完はしません)。
+                チェックした項目が一覧に追加列として表示されます。↑↓で表示順を変更できます。
+              </div>
+              <div className="d-flex flex-wrap gap-2">
+                {candidates.map((c) => {
+                  const idx = extraCols.indexOf(c.key);
+                  const checked = idx >= 0;
+                  return (
+                    <div key={c.key} className="d-flex align-items-center gap-1 border rounded px-2 py-1">
+                      <input type="checkbox" className="form-check-input m-0" checked={checked}
+                        onChange={() => setExtraCols(checked
+                          ? extraCols.filter((k) => k !== c.key)
+                          : [...extraCols, c.key])} />
+                      <span>{c.key}</span>
+                      <span className="text-secondary small">({c.count})</span>
+                      {checked && (
+                        <span className="d-flex gap-1 ms-1">
+                          <button type="button" className="btn btn-sm btn-link p-0" disabled={idx === 0}
+                            onClick={() => {
+                              const next = [...extraCols];
+                              [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
+                              setExtraCols(next);
+                            }}>↑</button>
+                          <button type="button" className="btn btn-sm btn-link p-0" disabled={idx === extraCols.length - 1}
+                            onClick={() => {
+                              const next = [...extraCols];
+                              [next[idx + 1], next[idx]] = [next[idx], next[idx + 1]];
+                              setExtraCols(next);
+                            }}>↓</button>
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+                {candidates.length === 0 && <span className="text-secondary small">候補キーがありません</span>}
+              </div>
+            </div>
+          )}
           <div className="table-responsive">
           <table className="table table-vcenter table-sm card-table table-hover">
             <thead><tr>
@@ -383,6 +446,7 @@ export function Events({
               <th style={stickyStyle(3, true)}>重大度</th>
               <th>ホスト/デバイス</th><th>ドメイン</th>
               <th>送信元IP</th><th>ユーザー</th><th>イベント/サービス</th><th>対象</th><th>ステータス</th><th>メッセージ</th>
+              {singleClass && extraCols.map((k) => <th key={k} className="text-nowrap">{k}</th>)}
               <th className="text-center">対応</th>
               {showAdvice && <th>対応策</th>}
             </tr></thead>
@@ -417,6 +481,9 @@ export function Events({
                   <td className="text-truncate" style={{ maxWidth: 220 }}>{e.url_path || <span className="text-secondary">-</span>}</td>
                   <td>{e.http_status_code ? <span className="badge bg-azure-lt">{e.http_status_code}</span> : <Badge r={e.event_result} />}</td>
                   <td className="text-truncate" style={{ maxWidth: 320 }}>{dash(e.message)}</td>
+                  {singleClass && extraCols.map((k) => (
+                    <td key={k} className="text-truncate" style={{ maxWidth: 200 }}>{dash(fmtPayloadValue(e.payload?.[k]))}</td>
+                  ))}
                   <td className="text-center" onClick={stop}>
                     <input type="checkbox" className="form-check-input" checked={e.resolved}
                       title={e.resolved ? "対応済み" : "未対応"}
@@ -425,7 +492,7 @@ export function Events({
                   {showAdvice && <td className="text-nowrap"><AdviceCell e={e} onPick={(k, v) => onTax(k, v)} /></td>}
                 </tr>
               ))}
-              {data.items.length === 0 && <tr><td colSpan={showAdvice ? 14 : 13} className="text-secondary text-center py-4">該当なし</td></tr>}
+              {data.items.length === 0 && <tr><td colSpan={(showAdvice ? 14 : 13) + (singleClass ? extraCols.length : 0)} className="text-secondary text-center py-4">該当なし</td></tr>}
             </tbody>
           </table>
           </div>

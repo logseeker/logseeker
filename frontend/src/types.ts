@@ -24,7 +24,12 @@ export interface EventRow {
   http_status_code: string | null;
   message: string | null;
   resolved: boolean;
+  payload: Record<string, unknown>;
 }
+
+// Events一覧のClass別追加列（payload生キー）機能で使う型。
+export interface EventsColumnCandidate { key: string; count: number; }
+export interface EventsColumnCandidates { source_type: string; sampled: number; keys: EventsColumnCandidate[]; }
 
 export interface EventsResponse {
   total: number; limit: number; offset: number; items: EventRow[];

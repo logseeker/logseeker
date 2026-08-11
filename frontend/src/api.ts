@@ -1,7 +1,7 @@
 import type {
   AdminOverview, Annotation, AssetRow, AssignableUser, AuditResponse, AuthStatus, AuthUser, CaseCommentItem,
   CaseDetail, CaseRow, CorrelationResponse, Count, CreateUserResult, CustomRule, CustomRulesResponse,
-  DeadLettersResponse, EntityDetail, EntityRow, EventDetail, EventRow, EventsResponse, FieldInfo, FilterState,
+  DeadLettersResponse, EntityDetail, EntityRow, EventDetail, EventRow, EventsColumnCandidates, EventsResponse, FieldInfo, FilterState,
   IncidentActivityItem, IncidentDetail, IncidentResponseActionTypeDef, IncidentRow, IncidentStatusDef,
   IngestStatus, IngestVolume, IocFeedsInfo, IpRestrictStatus, LicenseInfo, MappingsResponse, NotificationConfig,
   ReleaseItem, Role, RuleDef, RuleHit, SsoStatus, Summary, Timeline, Verdict,
@@ -251,4 +251,11 @@ export const api = {
   // 既読状態（ログイン中はDB、未ログインはフロント側でlocalStorageにフォールバック）
   getDismissedRelease: () => get<{ last_dismissed_release: string | null }>(`/api/changelog/dismissed`),
   setDismissedRelease: (tag_name: string) => put<{ ok: boolean }>(`/api/changelog/dismissed`, { tag_name }),
+
+  eventsColumnCandidates: (source_type: string) =>
+    get<EventsColumnCandidates>(`/api/events/columns/candidates?source_type=${encodeURIComponent(source_type)}`),
+  getEventsColumns: (source_type: string) =>
+    get<{ columns: string[] | null }>(`/api/events/columns?source_type=${encodeURIComponent(source_type)}`),
+  setEventsColumns: (source_type: string, columns: string[]) =>
+    put<{ ok: boolean }>(`/api/events/columns`, { source_type, columns }),
 };

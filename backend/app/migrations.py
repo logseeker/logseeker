@@ -149,7 +149,16 @@ def run(db: Session) -> None:
     _drop_case_verdict_assignee(db)
     _fix_user_fk_ondelete(db)
     _fix_incident_event_id_nullable(db)
+    _add_user_settings_events_columns(db)
     log.info("case/incident management migrations: done.")
+
+
+def _add_user_settings_events_columns(db: Session) -> None:
+    """Events一覧のClass別列設定を保存する user_settings.events_columns 列（フェーズ3）。"""
+    if not _table_exists(db, "user_settings"):
+        return
+    db.execute(text("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS events_columns TEXT"))
+    db.commit()
 
 
 def _table_exists(db: Session, name: str) -> bool:

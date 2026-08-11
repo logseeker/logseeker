@@ -379,6 +379,9 @@ class UserSettings(Base):
     __tablename__ = "user_settings"
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     last_dismissed_release: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Events一覧のClass別追加列設定。JSON文字列: {source_type: [payloadキー, ...]}（表示順）。
+    # 未設定のClassはキー無し＝追加列なし（固定共通列のみ表示）。
+    events_columns: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class AuthSession(Base):

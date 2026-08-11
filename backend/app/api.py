@@ -16,7 +16,7 @@ from .models import IncidentStatus, IncidentStatusHistory
 from .models import IocFeed, License, Setting, User, UserSettings
 from .models import NormalizedEvent as N
 from .schema import (AnnotationCreate, AssetCreate, AssetDisplayNameUpdate, AssetUpdate, CustomRuleCreate,
-                     CustomRuleUpdate, DismissedRelease, FeedUpdate,
+                     CustomRuleUpdate, DismissedRelease, EventsColumnsUpdate, FeedUpdate,
                      LicenseApply, NotificationConfig, SilenceSettings, SyncSettings)
 from .incident_schema import (CaseCommentCreate, CaseCreate, CaseEventAdd, CaseEventNoteUpdate,
                               CaseTitleUpdate, EventResolvedUpdate, IncidentAssigneeUpdate,
@@ -195,6 +195,7 @@ def _row(ev: Event, n: N) -> dict:
         "service_name": n.service_name,
         "message": n.message,
         "resolved": ev.resolved,
+        "payload": ev.payload,
     }
 
 
@@ -259,6 +260,60 @@ def export_events(db: Session = Depends(get_db), f: dict = Depends(filters),
     data = "﻿" + buf.getvalue()
     return Response(content=data, media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": "attachment; filename=logseeker_events.csv"})
+
+
+# Events列設定（フェーズ3）。/events/{event_id} より前に置く（"columns" がevent_idとして
+# 誤マッチしないよう、固定パスは動的パスより先に登録する。/events/export と同じ理由）。
+EVENTS_COLUMNS_SAMPLE = 300  # 候補キー集計に使う直近件数（重い全表集計を避ける）
+
+
+@router.get("/events/columns/candidates")
+def events_column_candidates(source_type: str, db: Session = Depends(get_db)):
+    """指定Classの直近イベントに実際に存在するpayloadキーを頻度順に返す（列選択の候補案内用）。
+    taxonomy.mdの推奨KEYではなく実データを使う（送信元はまだ標準KEY名に追従していないため）。"""
+    rows = db.execute(
+        select(Event.payload).where(Event.source_type == source_type)
+        .order_by(Event.id.desc()).limit(EVENTS_COLUMNS_SAMPLE)
+    ).scalars().all()
+    counts: dict[str, int] = {}
+    for p in rows:
+        if isinstance(p, dict):
+            for k in p.keys():
+                counts[k] = counts.get(k, 0) + 1
+    keys = sorted(counts.keys(), key=lambda k: (-counts[k], k))
+    return {"source_type": source_type, "sampled": len(rows),
+            "keys": [{"key": k, "count": counts[k]} for k in keys]}
+
+
+@router.get("/events/columns")
+def get_events_columns(source_type: str, user: User | None = Depends(get_current_user), db: Session = Depends(get_db)):
+    """ログイン中ユーザーが保存した、指定Classの追加列設定（表示順）。未ログインならnull
+    （フロント側はその場合localStorageにフォールバックする。changelog/dismissedと同じ方式）。"""
+    if not user:
+        return {"columns": None}
+    row = db.get(UserSettings, user.id)
+    if not row or not row.events_columns:
+        return {"columns": None}
+    import json
+    cfg = json.loads(row.events_columns)
+    return {"columns": cfg.get(source_type)}
+
+
+@router.put("/events/columns")
+def set_events_columns(body: EventsColumnsUpdate, user: User | None = Depends(get_current_user),
+                       db: Session = Depends(get_db)):
+    if not user:
+        return {"ok": True}  # 未ログイン時はDBに保存しない（フロントはlocalStorageを使う）
+    import json
+    row = db.get(UserSettings, user.id)
+    if not row:
+        row = UserSettings(user_id=user.id)
+        db.add(row)
+    cfg = json.loads(row.events_columns) if row.events_columns else {}
+    cfg[body.source_type] = body.columns
+    row.events_columns = json.dumps(cfg, ensure_ascii=False)
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/events/{event_id}")

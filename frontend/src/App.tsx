@@ -240,7 +240,7 @@ export default function App() {
       case "dashboard": return <Dashboard onPick={drill} changelog={changelog} onNavChangelog={() => setScreen("changelog")} />;
       case "changelog": return <Changelog />;
       case "events": return <Events filter={filter} search={search} setSearch={setSearch}
-        onTax={onTax} onApplyFilters={onApplyFilters} onAttention={onAttention} onThreat={onThreat} onEntity={navEntity} onNav={setScreen} onOpenCase={navCase} onOpenIncident={navIncidentDetail} />;
+        onTax={onTax} onApplyFilters={onApplyFilters} onAttention={onAttention} onThreat={onThreat} onEntity={navEntity} onNav={setScreen} onOpenCase={navCase} onOpenIncident={navIncidentDetail} auth={auth ?? undefined} />;
       case "sources": return <Sources filter={filter} onPick={drill} />;
       case "hosts": return <HostsDomains filter={filter} onPick={drill} />;
       case "fields": return <Fields filter={filter} />;

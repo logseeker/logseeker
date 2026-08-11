@@ -130,6 +130,11 @@ class DismissedRelease(BaseModel):
     tag_name: str
 
 
+class EventsColumnsUpdate(BaseModel):
+    source_type: str
+    columns: list[str]
+
+
 class IpAllowEntry(BaseModel):
     cidr: str
     label: str = ""
