@@ -36,9 +36,15 @@ def generate_temp_password(length: int = 12) -> str:
     return secrets.token_urlsafe(length)
 
 
+_DUMMY_HASH = hash_password(secrets.token_urlsafe(16))  # 起動時に1回だけ生成。存在しないユーザー名でも
+# 実在ユーザーと同じだけPBKDF2を回すためのダミー（比較は必ず不一致になる）。
+
+
 def verify_password(pw: str, stored: str | None) -> bool:
-    if not stored:
-        return False
+    """`stored`がNoneでも同じ計算コストのダミーハッシュと比較する。
+    早期returnすると「ユーザー名が存在しない場合だけ応答が速い」という
+    タイミングサイドチャネルでユーザー名の存在を推測されてしまうため。"""
+    stored = stored or _DUMMY_HASH
     try:
         algo, iters, salt_b64, dk_b64 = stored.split("$")
         if algo != "pbkdf2_sha256":
@@ -147,44 +153,40 @@ def client_ip(request: Request) -> str | None:
     送信元を探す:
       1. CF-Connecting-IP（Cloudflare使用時。Cloudflareが上書き不可能な形で
          付与する真の接続元IPなので最優先）
-      2. X-Forwarded-For の先頭（＝最初にリクエストを受けたプロキシが記録した
-         オリジンの値。Apache/nginxのmod_proxy等は自分が受けた相手のIPを
-         末尾に追記していく仕様のため、先頭が一番オリジンに近い）
+      2. X-Forwarded-For の「末尾」（＝直前の信頼できるリバースプロキシが実際に
+         観測した接続元。nginx/Apache/OpenLiteSpeedいずれも、自分が観測した
+         接続元IPを末尾に追記する。先頭はクライアントが`X-Forwarded-For: 偽装IP`
+         を自分で送りつけるだけで詐称できるため、監査ログの信頼性のために
+         末尾を使う。access_control_ip()と同じ考え方 — そちらのdocstring参照）
       3. request.client.host（プロキシを介さない直接アクセス時。§CLAUDE.mdの
          とおりDocker構成を変えない前提のため、この経路も残す）
-    ヘッダーはクライアントが自由に詐称できるため、信頼できるリバースプロキシ
-    （Apache/nginx/Cloudflare）を必ず前段に置く運用を前提にしている。
     """
     cf = request.headers.get("cf-connecting-ip")
     if cf:
         return cf.strip()
     xff = request.headers.get("x-forwarded-for")
     if xff:
-        first = xff.split(",")[0].strip()
-        if first:
-            return first
+        parts = [p.strip() for p in xff.split(",") if p.strip()]
+        if parts:
+            return parts[-1]
     return request.client.host if request.client else None
 
 
 def access_control_ip(request: Request) -> str | None:
-    """アクセス制御（IP許可リスト）専用の送信元IP判定。client_ip()とは別物。
+    """アクセス制御（IP許可リスト）専用の送信元IP判定。client_ip()とはフォールバックが異なるため別関数。
 
-    client_ip() は監査ログの表示用に X-Forwarded-For の「先頭」（＝最初にリクエストを
-    受けたプロキシが記録したオリジン）を使うが、これはクライアントが
-    `X-Forwarded-For: 偽装したいIP` を自分で送りつけるだけで詐称できてしまう
-    （nginx/Apache/OpenLiteSpeedいずれも、そのプロキシ自身が観測した接続元IPは
-    「末尾」に追記する仕様のため、先頭はクライアントの自己申告のまま残る）。
-
-    許可/拒否を決めるアクセス制御では逆に「末尾」（＝直前の信頼できるリバースプロキシが
-    実際に観測した接続元）だけを信じる。この末尾追記の挙動は nginx
+    IPの取り方自体（CF-Connecting-IP優先、次にX-Forwarded-Forの「末尾」）はclient_ip()と同じロジック
+    （client_ip()のdocstring参照）。末尾追記の挙動は nginx
     （`proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`）・Apache
     （mod_proxy_httpの既定 `ProxyAddHeaders On`）・OpenLiteSpeed のいずれもリバースプロキシ
     として動作する際の標準動作なので、プロキシの種類を問わず同じロジックで安全に判定できる。
 
-    ヘッダが全く無い場合は request.client.host にフォールバックしない
-    （backendは127.0.0.1でのみ待ち受け＝直前のプロキシ自身のIPしか見えないため、フォールバックすると
-    全員が同じアドレスに見えてしまい、許可リストが実質無意味化する）。None を返し、呼び出し側で
-    「判定不能＝拒否」として扱う。
+    client_ip()との違いはフォールバックのみ: ヘッダが全く無い場合、access_control_ip()は
+    request.client.host にフォールバックしない（backendは127.0.0.1でのみ待ち受け＝直前のプロキシ
+    自身のIPしか見えないため、フォールバックすると全員が同じアドレスに見えてしまい、許可リストが
+    実質無意味化する）。None を返し、呼び出し側で「判定不能＝拒否」として扱う（fail-closed）。
+    client_ip()は監査ログ表示用で「何かは表示したい」ため request.client.host にフォールバックする
+    （Docker直結等プロキシが無い環境でも動作させるため）。
     """
     cf = request.headers.get("cf-connecting-ip")
     if cf:

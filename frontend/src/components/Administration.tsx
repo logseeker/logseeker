@@ -17,7 +17,9 @@ export function Administration() {
 
   useEffect(() => {
     if (!tokenStore.get()) { setChecking(false); return; }
-    api.authStatus()
+    // /api/auth/status ではなく /api/auth/admin-status を使う（IPアクセス制限の対象にできるため。
+    // 詳細はbackend側のdocstring参照）。IP制限で弾かれた場合はcatchに落ちて通常のログイン画面を出す。
+    api.adminStatus()
       .then((s) => { if (s.user?.role === "admin") setUser(s.user); })
       .catch(() => {})
       .finally(() => setChecking(false));

@@ -49,7 +49,10 @@ def auth_status(user: User | None = Depends(A.get_current_user), db: Session = D
 def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
     ip = A.client_ip(request)
     u = db.execute(select(User).where(User.username == body.username)).scalar_one_or_none()
-    if not u or not u.enabled or not A.verify_password(body.password, u.password_hash):
+    # ユーザー名の存在有無で応答時間に差が出ない（タイミングでの存在推測を防ぐ）よう、
+    # 存在しない場合もverify_password自体は必ず呼ぶ（or の短絡評価をしない）。
+    pw_ok = A.verify_password(body.password, u.password_hash if u else None)
+    if not u or not u.enabled or not pw_ok:
         A.audit(db, action="login", status="failure", username=body.username,
                 method="POST", path="/api/auth/login", ip=ip,
                 detail="認証失敗（ユーザー名またはパスワード不一致）")
@@ -67,7 +70,10 @@ def admin_login(body: LoginRequest, request: Request, db: Session = Depends(get_
     ログインさせない（『ログイン後の通常画面』とは分離した管理パネル専用の入口のため）。"""
     ip = A.client_ip(request)
     u = db.execute(select(User).where(User.username == body.username)).scalar_one_or_none()
-    if not u or not u.enabled or not A.verify_password(body.password, u.password_hash):
+    # ユーザー名の存在有無で応答時間に差が出ない（タイミングでの存在推測を防ぐ）よう、
+    # 存在しない場合もverify_password自体は必ず呼ぶ（or の短絡評価をしない）。
+    pw_ok = A.verify_password(body.password, u.password_hash if u else None)
+    if not u or not u.enabled or not pw_ok:
         A.audit(db, action="login.admin", status="failure", username=body.username,
                 method="POST", path="/api/auth/admin-login", ip=ip,
                 detail="認証失敗（ユーザー名またはパスワード不一致）")
@@ -82,6 +88,20 @@ def admin_login(body: LoginRequest, request: Request, db: Session = Depends(get_
     A.audit(db, action="login.admin", status="success", user=u, method="POST",
             path="/api/auth/admin-login", ip=ip)
     return {"token": token, "user": _user_dict(u)}
+
+
+@router.get("/auth/admin-status")
+def admin_status(user: User | None = Depends(A.get_current_user)):
+    """管理パネル(?screen=administration)が「既存セッションがadminか」を確認する専用エンドポイント。
+
+    /api/auth/status ではなくこれを使う理由: /api/auth/status はアプリ全体で使う汎用エンドポイントで
+    IPアクセス制限の対象に出来ない（対象にすると通常アプリまで巻き込んでしまう）。この専用エンドポイントは
+    ip_restrict.PROTECTED_PREFIXES に含めているため、IP制限が有効な時に許可外IPからは403になり、
+    「既にadminセッションを持っているのでログイン試行を経由せず管理パネルに入れてしまう」抜け道を防ぐ。
+    """
+    if user and user.role == "admin":
+        return {"user": _user_dict(user)}
+    return {"user": None}
 
 
 @router.post("/auth/logout")

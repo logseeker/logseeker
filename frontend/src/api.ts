@@ -220,6 +220,7 @@ export const api = {
     post<{ token: string; user: AuthUser }>(`/api/auth/login`, { username, password }),
   adminLogin: (username: string, password: string) =>
     post<{ token: string; user: AuthUser }>(`/api/auth/admin-login`, { username, password }),
+  adminStatus: () => get<{ user: AuthUser | null }>(`/api/auth/admin-status`),
   logout: () => post<{ ok: boolean }>(`/api/auth/logout`, {}),
   listUsers: () => get<AuthUser[]>(`/api/users`),
   createUser: (b: { username: string; display_name?: string; role: Role; email?: string; password?: string }) =>
