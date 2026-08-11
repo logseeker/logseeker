@@ -90,6 +90,20 @@ def _init_db() -> None:
     except Exception as e:  # noqa
         log.error("case/incident management migration failed (schema may be inconsistent): %s", e)
 
+    # フェーズ2・第2段（案C）: Class別受信フィールドへの部分インデックス（migrations.py参照）。
+    # 上のcase/incident管理マイグレーションとは無関係な処理のため、独立したtry/exceptにする
+    # （関係ない失敗が別々のマイグレーションを巻き添えにしないよう、直上と同じ方針を踏襲）。
+    try:
+        from .db import SessionLocal
+        from . import migrations
+        _idx_db = SessionLocal()
+        try:
+            migrations.create_payload_field_indexes(_idx_db)
+        finally:
+            _idx_db.close()
+    except Exception as e:  # noqa
+        log.error("payload field index migration failed: %s", e)
+
     # 脅威インテリの自動同期スケジューラ起動。上記の初期データ用意・マイグレーションの成否に
     # 関わらず必ず起動を試みる（スケジューラ自身は1周ごとにtry/exceptしており、
     # フィード行が未整備でも次回同期時に自然に解消されるため、ここで足止めする理由が無い）。

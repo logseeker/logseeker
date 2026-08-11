@@ -47,6 +47,8 @@ def pre_create_all(engine) -> None:
     1行でもあれば削除せず起動を止める」方針で対応した（無条件でDROPしない）。以前はこの
     旧`incidents`を`cases`へリネームして引き継ぐ実装だったが、無関係な別機能のデータを
     ケース機能へ引き継ぐ意味がないため、削除に変更した。"""
+    # incidents/casesの早期returnより前に無条件で実行する（無関係な独立処理のため）。
+    _drop_taxonomy_events(engine)
     with engine.begin() as conn:
         cases_exists = conn.execute(text("SELECT to_regclass('cases')")).scalar() is not None
         if cases_exists:
@@ -75,6 +77,66 @@ def pre_create_all(engine) -> None:
             conn.execute(text("DROP TABLE incident_events"))
         conn.execute(text("DROP TABLE incidents"))
     log.info("dropped legacy pre-v1 incidents/incident_events (§9.5/9.6, 0 rows) before create_all")
+
+
+def _drop_taxonomy_events(engine) -> None:
+    """フェーズ2・第2段でtaxonomy_events（旧taxonomy_normalize.pyのMapping変換型正規化）を廃止する
+    （PROJECT_basic_design_revised_v10.md §4/§5。新設計は受信KEYの読み替え・コピーを禁止しており、
+    Mapping変換前提だったこの構造は新設計と非適合。フェーズ2・第1段調査で他テーブルからのFK参照が
+    無いことを確認済み）。incidents/incident_eventsと同じ方針で、0行なら削除、1行でもあれば
+    削除せず起動を止める（念のためのデータ喪失防止。無条件でDROPしない）。"""
+    with engine.begin() as conn:
+        exists = conn.execute(text("SELECT to_regclass('taxonomy_events')")).scalar() is not None
+        if not exists:
+            return
+        count = conn.execute(text("SELECT count(*) FROM taxonomy_events")).scalar()
+        if count:
+            raise RuntimeError(
+                f"taxonomy_events にデータが残っているため自動削除を中止しました（{count}行）。"
+                "削除前にデータの要否を確認してください。"
+            )
+        conn.execute(text("DROP TABLE taxonomy_events"))
+    log.info("dropped taxonomy_events (phase2 step1, 0 rows)")
+
+
+# フェーズ2・第2段（案C）: Class別の受信フィールドへの部分/式インデックス。
+# PROJECT_basic_design_revised_v10.md §4/§5・docs/taxonomy.md v1.4は受信KEYの読み替え・コピーを
+# 禁止しているため、events.payloadの生KEYへ直接インデックスする（フェーズ2・第1段調査レポート、
+# フェーズ2・第2段ステップ2-1の絞り込み結果に基づく）。
+# 自由記述系フィールド（message/Message等）は部分一致検索に式btreeが向かないため対象外
+# （pg_trgm/GIN等の別方式は別途検討）。
+# ->> 演算子はJSON値が文字列/数値のどちらでもテキストへ統一して返すため、型ゆらぎ（例: statusが
+# 文字列/数値どちらでも届く可能性）はインデックス定義・検索クエリの双方で->>を一貫使用するだけで
+# 吸収できる（CASTは不要。2026-08-11、はやしさん確認の上で採用）。
+_PAYLOAD_FIELD_INDEXES = [
+    # (source_type, payload key)
+    ("web_access", "client"),
+    ("web_access", "vhost"),
+    ("web_access", "status"),
+    ("web_access", "request"),
+    ("web_error", "level"),
+    ("linux", "Hostname"),
+    ("linux", "SourceName"),
+    ("linux", "Severity"),
+    ("audit", "SourceIPAddress"),
+    ("audit", "audit_type"),
+    ("audit", "audit_res"),
+    ("audit", "audit_acct"),
+]
+
+
+def create_payload_field_indexes(db: Session) -> None:
+    """`_PAYLOAD_FIELD_INDEXES`の各(source_type, key)についてCREATE INDEX IF NOT EXISTSする。
+    冪等（何度呼んでも安全）。ロールバックする場合は生成された `ix_events_payload_*` を
+    個別にDROP INDEXすればよい。"""
+    for source_type, key in _PAYLOAD_FIELD_INDEXES:
+        idx_name = f"ix_events_payload_{source_type}_{key.lower()}"
+        db.execute(text(
+            f'CREATE INDEX IF NOT EXISTS {idx_name} ON events ((payload ->> \'{key}\')) '
+            f"WHERE source_type = '{source_type}'"
+        ))
+    db.commit()
+    log.info("payload field indexes ensured (%d)", len(_PAYLOAD_FIELD_INDEXES))
 
 
 def run(db: Session) -> None:
