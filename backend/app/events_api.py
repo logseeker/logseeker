@@ -24,8 +24,8 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query, Response
-from sqlalchemy import String, and_, cast, func, literal, or_, select, text, true
-from sqlalchemy.dialects.postgresql import JSONB, array as pg_array
+from sqlalchemy import String, and_, cast, func, or_, select, text, true
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from .auth import get_current_user, require_login
@@ -86,6 +86,16 @@ def _pv(ev, key: str):
 def _cls(ev):
     """Class VALUE ＝ 受信JSONの `class` KEYのVALUE（大文字小文字は無視。`CLASS` も一致）。"""
     return func.coalesce(_pv(ev, "class"), func.cast(UNKNOWN_CLASS, String))
+
+
+def _class_of(payload_col):
+    """CTEを経由せずpayload列から直接Classを取り出す（大文字小文字は無視）。
+    Dashboardの内訳集計のように、KEY小文字化コピー(lp)を作らない経路で使う。"""
+    kv = func.jsonb_each_text(payload_col).table_valued("key", "value")
+    got = (select(kv.c.value).where(func.lower(kv.c.key) == "class",
+                                    func.nullif(kv.c.value, "").isnot(None))
+           .limit(1).scalar_subquery())
+    return func.coalesce(got, func.cast(UNKNOWN_CLASS, String))
 
 
 def _pick(payload: dict, key: str):
@@ -575,47 +585,64 @@ def overview(qy: EventQuery = Depends(event_query), db: Session = Depends(get_db
     axes = _keep_taxonomy([x for x in fields.split(",") if x.strip()]) or \
         _keep_taxonomy(DEFAULT_DASHBOARD_AXES)
 
-    # ---- 全部の内訳を1回のスキャンで集計する ----
-    # 軸ごとに別クエリを流すと、軸の数だけCTE（payloadのJSONB展開）が再計算されて
-    # 非常に遅くなる（軸13本で実測10秒超）。unnestで「軸名, 値」の組へ展開し、
-    # ウィンドウ関数で軸ごとの上位だけを1文で取り出す。
-    axis_defs: list[tuple[str, object]] = [(f"f:{k}", _pv(ev, k)) for k in axes]
-    axis_defs += [(f"x:{k}", _pv(ev, k)) for k in extras]
-    axis_defs += [("_rep", rep), ("_class", _cls(ev)), ("_source", ev.c.source)]
-
-    # render_derived() で `AS t(k, v)` の列リストまで出力させる（無いと列名が解決できない）
-    t = (func.unnest(pg_array([literal(n) for n, _ in axis_defs]),
-                     pg_array([e for _, e in axis_defs]))
-         .table_valued("k", "v").render_derived(name="ax", with_types=False).lateral())
-    base = qy.apply(select(t.c.k.label("k"), t.c.v.label("v"), func.count().label("c"))
-                    .select_from(ev).join(t, true()), ev).where(t.c.v.isnot(None)).group_by(text("1"), text("2"))
-    sub = base.subquery()
-    ranked = select(sub.c.k, sub.c.v, sub.c.c,
-                    func.row_number().over(partition_by=sub.c.k,
-                                           order_by=sub.c.c.desc()).label("rn")).subquery()
-    rows = db.execute(select(ranked.c.k, ranked.c.v, ranked.c.c)
-                      .where(ranked.c.rn <= TOP_N).order_by(ranked.c.k, ranked.c.c.desc())).all()
-
+    # ---- 内訳は payload を1回だけ展開して集計する ----
+    # 軸ごとに `lp->>'key'` を取り出すと、行あたり軸の数だけJSONB抽出が走って遅い
+    # （本番57,012件・軸16本で実測12.9秒）。jsonb_each_text で payload を1回展開し、
+    # lower(key) が対象軸に含まれる行だけを残して集計する。KEYの小文字化コピー(lp)を
+    # 作る必要もなくなるため、この経路ではCTEを使わない。
+    want = [k for k in axes] + [k for k in extras]
+    kv = func.jsonb_each_text(Event.payload).table_valued("key", "value") \
+             .render_derived(name="kv", with_types=False).lateral()
+    scan = (select(func.lower(kv.c.key).label("k"), kv.c.value.label("v"), func.count().label("c"))
+            .select_from(Event).join(kv, true())
+            .where(Event.received_at >= qy.start, Event.received_at <= qy.end,
+                   func.lower(kv.c.key).in_(want), func.nullif(kv.c.value, "").isnot(None)))
+    if qy.class_value:
+        scan = scan.where(_class_of(Event.payload) == qy.class_value)
+    if qy.source:
+        scan = scan.where(Event.source == qy.source)
+    scan = scan.group_by(text("1"), text("2")).subquery()
+    ranked = select(scan.c.k, scan.c.v, scan.c.c,
+                    func.row_number().over(partition_by=scan.c.k,
+                                           order_by=scan.c.c.desc()).label("rn")).subquery()
     got: dict[str, list[dict]] = {}
-    for k, v, c in rows:
+    for k, v, c in db.execute(select(ranked.c.k, ranked.c.v, ranked.c.c)
+                              .where(ranked.c.rn <= TOP_N).order_by(ranked.c.k, ranked.c.c.desc())).all():
         got.setdefault(k, []).append({"value": v, "count": c})
 
-    total = db.scalar(qy.apply(select(func.count()).select_from(ev), ev))
-    breakdowns = [{"field": k, "label": label_of(k), "values": got.get(f"f:{k}", [])} for k in axes]
+    # ログソース・Class・代表値は軸とは別に集計する（payload展開を伴わない/伴っても1本）
+    meta = qy.apply(select(ev.c.source.label("s"), _cls(ev).label("c"), rep.label("r"),
+                           func.count().label("n")).select_from(ev), ev) \
+             .group_by(text("1"), text("2"), text("3"))
+    by_source: dict[str | None, int] = {}
+    by_class: dict[str, int] = {}
+    by_rep: dict[str, int] = {}
+    total = 0
+    for s, c, r, n in db.execute(meta).all():
+        total += n
+        if s:
+            by_source[s] = by_source.get(s, 0) + n
+        by_class[c] = by_class.get(c, 0) + n
+        if r:
+            by_rep[r] = by_rep.get(r, 0) + n
+
+    def _top(d: dict) -> list[dict]:
+        return [{"value": k, "count": v} for k, v in sorted(d.items(), key=lambda x: -x[1])[:TOP_N]]
+    breakdowns = [{"field": k, "label": label_of(k), "values": got.get(k, [])} for k in axes]
     return {
         "total": total,
         "period": {"start": qy.start.isoformat(), "end": qy.end.isoformat()},
         # ログソース(source)はLogSeeker管理メタデータ。§4.1.1により表示・集計に使ってよい
-        "by_source": got.get("_source", []),
-        "source_count": len(got.get("_source", [])),
-        "host_domain_count": len(got.get("_rep", [])),
+        "by_source": _top(by_source),
+        "source_count": len(by_source),
+        "host_domain_count": len(by_rep),
         "ingest_failed": db.scalar(select(func.count()).select_from(Event)
                                    .where(Event.parse_status == "failed",
                                           Event.received_at >= qy.start, Event.received_at <= qy.end)) or 0,
-        "by_class": got.get("_class", []),
+        "by_class": _top(by_class),
         # ドメイン/ホストは代表値優先順位で集約（v12 §5.3）
-        "domain_host": {"priority": priority, "representative": got.get("_rep", []),
-                        "extra": {k: got.get(f"x:{k}", []) for k in extras}},
+        "domain_host": {"priority": priority, "representative": _top(by_rep),
+                        "extra": {k: got.get(k, []) for k in extras}},
         # 利用者が選んだTaxonomy KEYごとの内訳カード（既定はDEFAULT_DASHBOARD_AXES）
         "breakdowns": [b for b in breakdowns if b["values"]],
         "empty_axes": [b["field"] for b in breakdowns if not b["values"]],
