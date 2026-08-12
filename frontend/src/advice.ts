@@ -1,5 +1,10 @@
 // イベント1件から「危険度と対応策」を導く（AIなし・ルールと同じ考え方をフロントで軽量再現）。
 // rules.py の判定と整合。イベント一覧の「対応策」列とイベント詳細で共用。
+//
+// 入力は **docs/taxonomy.md のTaxonomy KEY** で受ける（v12 §4.1.1）。
+// 旧版は normalized_events の列名（event_category / url_path 等）で受けていたが、
+// あれは normalize.py の MAPPINGS によるKEY読み替えの産物で、v12 §15が禁じている。
+// 判定内容そのものは変えていない。
 
 export interface EventAdvice {
   level: "danger" | "warning";
@@ -8,15 +13,18 @@ export interface EventAdvice {
   actions: string[];    // 具体アクション（バッジ表示用）
 }
 
-interface EventLike {
-  event_category?: string | null;
-  event_result?: string | null;
-  event_severity?: string | null;
-  actor_user?: string | null;
-  url_path?: string | null;
-  url_query?: string | null;
-  http_status_code?: string | null;
-  source_type?: string | null;
+/** Taxonomy KEYで表したイベント。値は payload から読んだものをそのまま渡す。 */
+export interface TaxonomyEventLike {
+  category?: string | null;
+  result?: string | null;
+  severity?: string | null;
+  username?: string | null;
+  accountname?: string | null;
+  uri?: string | null;
+  query?: string | null;
+  statuscode?: string | null;
+  status?: string | null;
+  class?: string | null;
 }
 
 // backend/app/rules.py の SENSITIVE_PATHS と同期させること。
@@ -68,14 +76,16 @@ const PAYLOAD_SIGNATURES = [
   "${jndi:",
 ];
 
-export function adviseForEvent(e: EventLike): EventAdvice | null {
-  const cat = (e.event_category || "").toLowerCase();
-  const result = (e.event_result || "").toLowerCase();
-  const user = (e.actor_user || "").toLowerCase();
-  const path = e.url_path || "";
-  const query = e.url_query || "";
-  const status = e.http_status_code || "";
-  const sev = (e.event_severity || "").toLowerCase();
+export function adviseForEvent(e: TaxonomyEventLike): EventAdvice | null {
+  const cat = (e.category || "").toLowerCase();
+  const result = (e.result || "").toLowerCase();
+  const user = (e.username || e.accountname || "").toLowerCase();
+  // uri はクエリを含む場合があるため、? 以降を query 側にも回して判定に載せる
+  const rawUri = e.uri || "";
+  const [path, uriQuery] = rawUri.includes("?") ? [rawUri.slice(0, rawUri.indexOf("?")), rawUri.slice(rawUri.indexOf("?") + 1)] : [rawUri, ""];
+  const query = e.query || uriQuery;
+  const status = e.statuscode || e.status || "";
+  const sev = (e.severity || "").toLowerCase();
 
   // 攻撃ペイロード検知（パストラバーサル/SQLi/XSS等。件数しきい値なし・最優先）
   const urlCombined = `${path} ${query}`.toLowerCase();
@@ -88,8 +98,22 @@ export function adviseForEvent(e: EventLike): EventAdvice | null {
     };
   }
 
-  // 認証失敗（root は特に危険）
-  if ((cat === "authentication" || cat === "security") && result === "failure") {
+  // ビルド失敗（Astro, source_type=astro_build）: 運用監視系。攻撃系とは別トーン（「不審」ではなく「要対応」）
+  if ((cat === "build" || (e.class || "").includes("build")) && result.includes("fail")) {
+    return {
+      level: "warning",
+      title: "ビルド失敗（要対応）",
+      rec: "npm run build を手動で再実行して再現するか確認。errorの内容と直近のコンテンツ変更・依存パッケージ更新を確認。"
+        + "trigger が directus_flow/directus_activity ならDirectus側の記事編集内容も確認。",
+      actions: ["ビルド再実行", "error内容確認", "Directus編集確認", "ビルド環境確認"],
+    };
+  }
+
+  // 認証失敗（root は特に危険）。
+  // 旧版は category が authentication/security であることを条件にしていたが、category は
+  // 送信元が明示しないと存在しないTaxonomy KEYなので、result の失敗判定を主軸にする
+  // （backend の _threat_clause の auth_fail と同じ考え方）。
+  if (result.includes("fail") || result === "failure") {
     if (user === "root" || user === "administrator" || user === "admin") {
       return {
         level: "danger",
@@ -117,7 +141,7 @@ export function adviseForEvent(e: EventLike): EventAdvice | null {
   }
 
   // Webshell探索の疑い（数字名.phpへの404。1件でも要注意。件数しきい値なし）
-  if (cat === "web" && status === "404" && WEBSHELL_PROBE_RE.test(path)) {
+  if (status === "404" && WEBSHELL_PROBE_RE.test(path)) {
     return {
       level: "danger",
       title: "Webshell探索の疑い",
@@ -127,23 +151,12 @@ export function adviseForEvent(e: EventLike): EventAdvice | null {
   }
 
   // Webスキャン（4xx失敗）
-  if (cat === "web" && result === "failure" && /^4\d\d$/.test(status)) {
+  if (/^4\d\d$/.test(status)) {
     return {
       level: "warning",
       title: "Webスキャン/探索の疑い",
       rec: "存在しないパスへの探索の可能性。多発する送信元はWAF/FWで遮断、レート制限。",
       actions: ["IP遮断", "WAF", "レート制限"],
-    };
-  }
-
-  // ビルド失敗（Astro, source_type=astro_build）: 運用監視系。攻撃系とは別トーン（「不審」ではなく「要対応」）
-  if (cat === "build" && result === "failure") {
-    return {
-      level: "warning",
-      title: "ビルド失敗（要対応）",
-      rec: "npm run build を手動で再実行して再現するか確認。errorの内容と直近のコンテンツ変更・依存パッケージ更新を確認。"
-        + "trigger が directus_flow/directus_activity ならDirectus側の記事編集内容も確認。",
-      actions: ["ビルド再実行", "error内容確認", "Directus編集確認", "ビルド環境確認"],
     };
   }
 

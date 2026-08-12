@@ -4,12 +4,26 @@ import { api } from "../api";
 import type { EventQuery } from "../api";
 import { fmtTime } from "../labels";
 import { EventDetail } from "./EventDetail";
+import { adviseForEvent } from "../advice";
 import type {
   AuthStatus, ColumnSets, EventsClass, EventSearchRow, EventsSearchResponse,
   HistogramResponse, Screen, TaxonomyField,
 } from "../types";
 
 const ROW_CHOICES = [50, 100, 500, 1000];
+// 脅威フィルタ（判定はbackendのTaxonomy KEYベース。_threat_clause参照）
+const THREATS = [
+  { value: "", label: "指定なし" },
+  { value: "any", label: "いずれか" },
+  { value: "ioc", label: "既知の脅威(IOC)一致" },
+  { value: "sensitive_path", label: "機微パスへのアクセス" },
+  { value: "web_scan", label: "Webスキャンの兆候" },
+  { value: "auth_fail", label: "認証失敗" },
+  { value: "root_ssh", label: "特権ユーザーへの試行" },
+];
+// 対応策の判定に使うTaxonomy KEY（一覧に出していなくても取得する）
+const ADVICE_KEYS = ["category", "result", "severity", "username", "accountname",
+                     "uri", "query", "statuscode", "status", "class"];
 const LS_PREFIX = "logseeker_events_v3";
 
 /** 未ログイン時のフォールバック保存先（サーバーはログイン利用者単位でしか保存しないため）。 */
@@ -35,7 +49,7 @@ type Props = {
   initialQuery?: EventQuery;
 };
 
-export function Events({ onEntity, onOpenCase, onOpenIncident, auth, initialEventId, initialQuery }: Props) {
+export function Events({ onEntity, onNav, onOpenCase, onOpenIncident, auth, initialEventId, initialQuery }: Props) {
   const loggedIn = !!auth?.user;
 
   // ---- 検索条件（「検索」ボタンで確定。ドロップダウン変更では飛ばさない）----
@@ -98,13 +112,15 @@ export function Events({ onEntity, onOpenCase, onOpenIncident, auth, initialEven
   const [hist, setHist] = useState<HistogramResponse | null>(null);
   const [panel, setPanel] = useState<null | "columns" | "classes">(null);
   const [gear, setGear] = useState(false);
+  const [showAdvice, setShowAdvice] = useState(false);
 
   useEffect(() => { setOffset(0); }, [applied, limit]);
   useEffect(() => {
     if (!columns.length) return;
-    api.searchEvents(applied, columns, limit, offset).then(setRows)
+    const need = showAdvice ? [...new Set([...columns, ...ADVICE_KEYS])] : columns;
+    api.searchEvents(applied, need, limit, offset).then(setRows)
       .catch((e) => setErr((e as Error).message));
-  }, [applied, columns, limit, offset]);
+  }, [applied, columns, limit, offset, showAdvice]);
   useEffect(() => {
     if (!showViz) return;
     api.eventsHistogram(applied, 60).then(setHist).catch(() => setHist(null));
@@ -166,7 +182,20 @@ export function Events({ onEntity, onOpenCase, onOpenIncident, auth, initialEven
                 <input type="datetime-local" className="form-control form-control-sm"
                   value={isoLocal(draft.end)} onChange={(e) => setDraft({ ...draft, end: toIso(e.target.value) })} />
               </div>
+              <div>
+                <label className="form-label mb-0 small">脅威</label>
+                <select className="form-select form-select-sm" style={{ width: 190 }}
+                  value={applied.threat ?? ""}
+                  onChange={(e) => { const q = { ...applied, threat: e.target.value || undefined }; setApplied(q); setDraft(q); }}>
+                  {THREATS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+                </select>
+              </div>
               <div className="form-check ms-2">
+                <input className="form-check-input" type="checkbox" id="attention" checked={!!applied.attention}
+                  onChange={(e) => { const q = { ...applied, attention: e.target.checked || undefined }; setApplied(q); setDraft(q); }} />
+                <label className="form-check-label small" htmlFor="attention">注目のみ</label>
+              </div>
+              <div className="form-check">
                 <input className="form-check-input" type="checkbox" id="viz" checked={showViz}
                   onChange={(e) => setShowViz(e.target.checked)} />
                 <label className="form-check-label small" htmlFor="viz">視覚化</label>
@@ -224,6 +253,25 @@ export function Events({ onEntity, onOpenCase, onOpenIncident, auth, initialEven
           </div>
         )}
 
+        {/* 旧Events画面から引き続き提供する操作 */}
+        <div className="d-flex flex-wrap align-items-center gap-2 mb-2">
+          <button className="btn btn-sm btn-outline-primary" onClick={() => setPanel("columns")}>
+            ⚙ 列を編集（現在{columns.length}列）
+          </button>
+          <button className={`btn btn-sm ${showAdvice ? "btn-warning" : "btn-outline-warning"}`}
+            onClick={() => setShowAdvice(!showAdvice)} title="危険度と対応策を一覧に表示する">
+            ⚒ 対応策を{showAdvice ? "隠す" : "表示"}
+          </button>
+          <div className="btn-group btn-group-sm ms-auto">
+            <button className="btn btn-outline-secondary"
+              onClick={() => api.exportEvents(applied, columns, "csv").catch((e) => setErr((e as Error).message))}>↓ CSV</button>
+            <button className="btn btn-outline-secondary"
+              onClick={() => api.exportEvents(applied, columns, "json").catch((e) => setErr((e as Error).message))}>↓ JSON</button>
+          </div>
+          <button className="btn btn-sm btn-outline-danger" onClick={() => onNav("rules")}
+            title="ルール / 注意喚起の画面へ">♡ 攻撃・注意喚起を見る</button>
+        </div>
+
         {showViz && hist && (
           <div className="card mb-2"><div className="card-body py-2">
             <ReactECharts style={{ height: 120 }} option={{
@@ -262,6 +310,7 @@ export function Events({ onEntity, onOpenCase, onOpenIncident, auth, initialEven
                     </th>
                   ))}
                   {columns.length === 0 && <th className="text-secondary">列が選択されていません（⚙→列をカスタマイズ）</th>}
+                  {showAdvice && <th className="text-nowrap">対応策</th>}
                 </tr>
               </thead>
               <tbody>
@@ -295,10 +344,11 @@ export function Events({ onEntity, onOpenCase, onOpenIncident, auth, initialEven
                         </td>
                       );
                     })}
+                    {showAdvice && <AdviceCell row={r} />}
                   </tr>
                 ))}
                 {rows && rows.items.length === 0 && (
-                  <tr><td colSpan={columns.length + 2} className="text-center text-secondary py-4">
+                  <tr><td colSpan={columns.length + (showAdvice ? 3 : 2)} className="text-center text-secondary py-4">
                     該当するイベントがありません
                   </td></tr>
                 )}
@@ -358,6 +408,30 @@ export function Events({ onEntity, onOpenCase, onOpenIncident, auth, initialEven
           }} />
       )}
     </div>
+  );
+}
+
+/** 対応策セル。危険度と推奨アクションを advice.ts（rules.pyと整合）で導く。
+ * 判定に使う値はTaxonomy KEYから取るため、列に出していなくても算出できる。 */
+function AdviceCell({ row }: { row: EventSearchRow }) {
+  const v = row.values as Record<string, unknown>;
+  const str = (k: string) => (v[k] == null ? null : String(v[k]));
+  const a = adviseForEvent({
+    category: str("category"), result: str("result"), severity: str("severity"),
+    username: str("username"), accountname: str("accountname"),
+    uri: str("uri"), query: str("query"),
+    statuscode: str("statuscode"), status: str("status"), class: row.class_value,
+  });
+  if (!a) return <td><span className="text-secondary">-</span></td>;
+  return (
+    <td style={{ minWidth: 220 }}>
+      <span className={`badge ${a.level === "danger" ? "bg-red-lt" : "bg-yellow-lt"}`} title={a.rec}>
+        {a.title}
+      </span>
+      <div className="d-flex flex-wrap gap-1 mt-1">
+        {a.actions.map((x) => <span key={x} className="badge bg-secondary-lt">{x}</span>)}
+      </div>
+    </td>
   );
 }
 

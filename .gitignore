@@ -46,3 +46,7 @@ docs/detection-rules.md
 # インシデント管理機能の設計書（社内検討用の非公開ドキュメント。後日Wordの基本設計書へ統合予定）
 docs/incident-management-design.md
 docs/db-schema.md
+
+# 設計ドキュメント: 公開の可否を別途判断するまでリポジトリに含めない
+docs/taxonomy.md
+docs/normalize-mapping.md

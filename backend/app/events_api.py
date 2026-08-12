@@ -16,19 +16,21 @@
 設計ではなく実データに引きずられた画面になるため。
 """
 import csv
+import re
+from functools import lru_cache
 import io
 import json
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query, Response
-from sqlalchemy import String, cast, func, select, text
+from sqlalchemy import String, and_, cast, func, or_, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from .auth import get_current_user, require_login
 from .db import get_db
-from .models import Event, Setting, User, UserSettings
+from .models import IOC, Event, Setting, User, UserSettings
 from .schema import EventsClassesUpdate, EventsColumnSetSave, EventsColumnsUpdate
 from .taxonomy_master import (ALL_KEYS, CLASS_HINTS, canonical_key, default_columns, is_taxonomy_key,
                              label_of)
@@ -172,12 +174,96 @@ def _priority(db: Session) -> list[str]:
     return DEFAULT_DOMAIN_HOST_PRIORITY
 
 
+# 「注目」判定に使うキーワード（api.py の ATTENTION_KEYWORDS と同じ意味。payload全文に対する一致）
+ATTENTION_KEYWORDS = ["fail", "error", "deny", "denied", "invalid", "unauthor", "refused",
+                      "reject", "lock", "warn", "attack", "violat", "critical", "alert", "404"]
+SEVERE_VALUES = ["warning", "warn", "error", "err", "critical", "crit", "alert", "emerg", "high"]
+
+# 送信元IPを表し得るTaxonomy KEY（IOC突合・root SSH判定などで横断的に見る）
+SRC_IP_KEYS = ["srcipv4", "srcipv6", "client", "srchost", "xfwdforip"]
+# 結果・アクション・ユーザーを表し得るTaxonomy KEY
+RESULT_KEYS = ["result", "eventtype", "action"]
+USER_KEYS = ["username", "accountname", "targetusername"]
+STATUS_KEYS = ["statuscode", "status"]
+URI_KEYS = ["uri", "uri_parsed", "url", "query"]
+
+THREATS = ["ioc", "sensitive_path", "web_scan", "auth_fail", "root_ssh", "any"]
+
+# 上の各リストがTaxonomy外KEYを含んでいないことを起動時に検証する（v12 §15）。
+# 実装時に「実データにあるから」という理由でTaxonomy外KEY（例: request, Message）を
+# 混ぜてしまう事故を、起動を止めることで確実に防ぐ。
+for _name, _keys in (("SRC_IP_KEYS", SRC_IP_KEYS), ("RESULT_KEYS", RESULT_KEYS),
+                     ("USER_KEYS", USER_KEYS), ("STATUS_KEYS", STATUS_KEYS),
+                     ("URI_KEYS", URI_KEYS), ("DEFAULT_DASHBOARD_AXES", DEFAULT_DASHBOARD_AXES),
+                     ("DEFAULT_DOMAIN_HOST_PRIORITY", DEFAULT_DOMAIN_HOST_PRIORITY)):
+    _ng = [k for k in _keys if not canonical_key(k)]
+    if _ng:
+        raise RuntimeError(
+            f"{_name} にTaxonomy外KEYが含まれています: {_ng}。"
+            "docs/taxonomy.md に定義されたTaxonomy KEYだけを使ってください（v12 §15）。")
+
+
+def _any_pv(ev, keys: list[str]):
+    """複数のTaxonomy KEYのうち最初に値があるもの（横断判定用）。読み替えではなく評価時の走査。"""
+    return func.coalesce(*[_pv(ev, k) for k in keys])
+
+
+@lru_cache(maxsize=4)
+def _SENSITIVE_RE(paths: tuple[str, ...]) -> str:
+    """機微パス一覧を1本の正規表現（大文字小文字無視で部分一致）へまとめる。
+    rules.py の定義をそのまま使い、正規表現の特殊文字だけエスケープする。"""
+    return "|".join(re.escape(p) for p in paths)
+
+
+def _threat_clause(db: Session, ev, threat: str):
+    """脅威フィルタ。**判定材料はTaxonomy KEYだけ**（v12 §15。normalized_eventsは使わない）。
+
+    旧実装は normalized_events（MAPPINGSによるKEY読み替えの産物）を見ていたが、
+    同じ意味の判定をTaxonomy受信フィールドの上で組み直している。
+    機微パス・攻撃シグネチャの定義は rules.py を単一の出処として読み取るだけに留める
+    （rules.py 自体は変更しない）。"""
+    from .rules import SENSITIVE_PATHS
+
+    uri = _any_pv(ev, URI_KEYS)
+    status = _any_pv(ev, STATUS_KEYS)
+    result = _any_pv(ev, RESULT_KEYS)
+    user = _any_pv(ev, USER_KEYS)
+    srcip = _any_pv(ev, SRC_IP_KEYS)
+
+    # 機微パスは約50個あるため ILIKE のOR結合にすると1行あたり50回走って極端に遅い
+    # （実測: 24時間分で13秒）。1本の正規表現にまとめてPostgreSQL側の1パスで判定する。
+    sensitive = uri.op("~*")(_SENSITIVE_RE(tuple(SENSITIVE_PATHS)))
+    # Webスキャンの兆候: 4xx（404等）が立っている
+    web_scan = status.op("~")(r"^4\d\d$")
+    auth_fail = or_(func.lower(result).in_(["failure", "fail", "failed", "audit_failure"]),
+                    func.lower(result).like("%fail%"))
+    root_ssh = and_(func.lower(user).in_(["root", "administrator"]), auth_fail)
+    # IOC突合: 送信元IP系のTaxonomy KEYの値が ioc テーブルに存在するか（突合はローカル）
+    ioc_hit = srcip.in_(select(IOC.value).where(IOC.indicator_type == "ip"))
+
+    table = {"ioc": ioc_hit, "sensitive_path": sensitive, "web_scan": web_scan,
+             "auth_fail": auth_fail, "root_ssh": root_ssh}
+    if threat == "any":
+        return or_(ioc_hit, sensitive, web_scan, auth_fail)
+    return table.get(threat)
+
+
+def _attention_clause(ev):
+    """「注目」＝payload全文のキーワード一致、またはTaxonomy KEYの result/severity が失敗・高重大度。
+    api.py の同名ロジック（インシデント化の可否判定に使う）と同じ意味を、Taxonomy KEYで組み直したもの。"""
+    kw = or_(*[cast(ev.c.payload, String).ilike(f"%{k}%") for k in ATTENTION_KEYWORDS])
+    sev = or_(func.lower(_any_pv(ev, RESULT_KEYS)).like("%fail%"),
+              func.lower(_pv(ev, "severity")).in_(SEVERE_VALUES))
+    return or_(kw, sev)
+
+
 class EventQuery:
     """Events/Dashboard共通の絞り込み。Taxonomy KEYとClass、期間、全文だけを条件にする。"""
 
     def __init__(self, db: Session, class_value: str | None, q: str | None,
                  start: datetime | None, end: datetime | None,
-                 rep_value: str | None, field: str | None, value: str | None):
+                 rep_value: str | None, field: str | None, value: str | None,
+                 attention: bool = False, threat: str | None = None):
         self.db = db
         self.class_value = class_value
         self.q = q
@@ -186,6 +272,8 @@ class EventQuery:
         # 個別Taxonomyフィールドでの絞り込み（normalize-mapping.md §7.2の単純遷移）
         self.field = field if (field and is_taxonomy_key(field)) else None
         self.value = value
+        self.attention = attention
+        self.threat = threat if threat in THREATS else None
 
     def apply(self, stmt, ev):
         """CTE(ev)の列だけで条件を組む。期間はCTE側で適用済み。"""
@@ -197,6 +285,12 @@ class EventQuery:
             stmt = stmt.where(self.rep_expr(ev) == self.rep_value)
         if self.q:
             stmt = stmt.where(cast(ev.c.payload, String).ilike(f"%{self.q}%"))
+        if self.attention:
+            stmt = stmt.where(_attention_clause(ev))
+        if self.threat:
+            c = _threat_clause(self.db, ev, self.threat)
+            if c is not None:
+                stmt = stmt.where(c)
         return stmt
 
     def rep_expr(self, ev):
@@ -208,8 +302,9 @@ class EventQuery:
 
 def event_query(db: Session = Depends(get_db), class_value: str | None = None, q: str | None = None,
                 start: datetime | None = None, end: datetime | None = None,
-                rep_value: str | None = None, field: str | None = None, value: str | None = None) -> EventQuery:
-    return EventQuery(db, class_value, q, start, end, rep_value, field, value)
+                rep_value: str | None = None, field: str | None = None, value: str | None = None,
+                attention: bool = False, threat: str | None = None) -> EventQuery:
+    return EventQuery(db, class_value, q, start, end, rep_value, field, value, attention, threat)
 
 
 # ---------------------------------------------------------------- 行の組み立て
