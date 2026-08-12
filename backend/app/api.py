@@ -1234,10 +1234,13 @@ def _mapping_rows() -> list[dict]:
 
 @router.get("/mappings")
 def mappings(db: Session = Depends(get_db)):
-    """NXLog等のJSONキー → 正規化フィールドの対応表（source_type別）。
-    受信JSONの当該キーを見つけて正規化フィールドへ“コピー”するだけ（値は改変しない）。"""
+    """マッピング画面。取り込みの現行方式（Taxonomy KEY直接）＋送信設定サンプル＋
+    正規化マッピング（検知ルール・相関分析が使う normalized_events 向け）を返す。"""
     from .normalize import MAPPINGS
     from .labels_backend import ST_LABEL
+    from .log_samples import SAMPLES
+    from .taxonomy_master import ALL_KEYS, LABELS
+
     groups = []
     for st, fields in MAPPINGS.items():
         groups.append({
@@ -1245,9 +1248,45 @@ def mappings(db: Session = Depends(get_db)):
             "fields": [{"field": f, "field_label": _FIELD_LABEL.get(f, f), "candidate_keys": k}
                        for f, k in fields.items()],
         })
+
+    # 画面の「よく使うキー」に出す代表例。ALL_KEYSは770個あり全部は出せないので、
+    # ラベル付き（＝画面で日本語表示できる）ものだけを用途別に抜粋する。
+    common = [
+        ("分類", ["class", "source"]),
+        ("時刻", ["eventtime"]),
+        ("ホスト/ドメイン", ["domain", "vhost", "virtualhost", "virtualdomain", "host", "hostname"]),
+        ("通信元", ["client", "srcipv4", "srcipv6", "sourceipaddress"]),
+        ("HTTP", ["request", "httpmethod", "uri", "url", "status", "statuscode",
+                  "size", "referer", "user_agent"]),
+        ("ユーザー", ["username", "accountname", "targetusername"]),
+        ("内容", ["message", "severity", "category", "action", "result"]),
+        ("Windows", ["eventid", "processid"]),
+        ("auditd", ["audit_type", "audit_res", "audit_acct"]),
+    ]
+    key_groups = [{"title": t,
+                   "keys": [{"key": k, "label": LABELS.get(k, "")} for k in ks]}
+                  for t, ks in common]
+
     return {
+        "taxonomy_total": len(ALL_KEYS),
+        "ingest_note": (
+            "受信したJSONのキー名が Taxonomy KEY と一致したものだけを、画面の表示・検索・集計に使う。"
+            "一致は大文字小文字を無視して行うので EventTime / EVENTTIME / eventtime はすべて同じ扱いになる。"
+            "一致しないキーも値は無改変で保存されるが、表示・検索・集計には使われない。"
+            "別名は同一視しないため host と hostname、client と srcipv4 は別のキーとして扱う。"
+        ),
+        "class_note": (
+            "クラスは受信JSONの class キーの値だけで決まる。推定はしない。"
+            "class が無いイベントは unknown になるので、送信側で必ず付けること。"
+        ),
+        "key_groups": key_groups,
+        "samples": SAMPLES,
         "note": "候補キーは先頭から順に探索し、最初に見つかった値を採用（値は無改変でコピー）。"
                 "event_category/result/severity 等はメッセージ本文からの分類で導出（キー直写しではない）。",
+        "normalize_note": (
+            "以下は normalized_events（軽量タクソノミー）への対応表で、検知ルール・相関分析・"
+            "調査支援が使う。イベント画面とダッシュボードはこの表を使わず、上のTaxonomy KEYを直接読む。"
+        ),
         "groups": groups,
     }
 
