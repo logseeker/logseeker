@@ -127,8 +127,10 @@ class DismissedRelease(BaseModel):
 
 
 class EventsColumnsUpdate(BaseModel):
-    source_type: str
-    columns: list[str]
+    # Class未選択（Events画面の「すべて」）でも保存できるよう None を許可する。
+    # 必須にしていたため「すべて」表示時の列設定が422で保存できなかった。
+    source_type: str | None = None
+    columns: list[str] = Field(default_factory=list)
 
 
 class EventsClassesUpdate(BaseModel):

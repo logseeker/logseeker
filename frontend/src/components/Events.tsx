@@ -93,13 +93,18 @@ export function Events({ onEntity, onNav, onOpenCase, onOpenIncident, auth, init
   }, [cls, loggedIn]);
   useEffect(loadColumns, [loadColumns]);
 
+  /** 列の変更は即座に永続化する（利用者が保存操作をしなくても再読み込みで戻らないように）。
+   * ログイン中はサーバー、未ログインはlocalStorage。保存に失敗したら黙って捨てず画面に出す。 */
   const persistColumns = (cols: string[]) => {
     setColumns(cols);
-    if (loggedIn) { api.saveColumns(cls, cols).then(loadColumns).catch(() => {}); return; }
+    if (loggedIn) {
+      api.saveColumns(cls, cols)
+        .catch((e) => setErr(`列設定の保存に失敗しました: ${(e as Error).message}`));
+      return;
+    }
     const local = lsGet<Record<string, string[]>>("columns", {});
     local[cls ?? "__all__"] = cols;
     lsSet("columns", local);
-    loadColumns();
   };
 
   // ---- 結果 ----
@@ -522,7 +527,10 @@ function ColumnsPanel({ fields, columns, sets, onApply, onSaveAs, onDeleteSet, o
   const from = useRef<number | null>(null);
   const byKey = useMemo(() => new Map(fields.map((f) => [f.key, f])), [fields]);
 
+  // 変更のたびに即座に反映・保存する。利用者が保存操作をしなくても再読み込みで戻らない。
   const selected = order.filter((k) => checked.has(k));
+  const commit = (nextOrder: string[], nextChecked: Set<string>) =>
+    onApply(nextOrder.filter((k) => nextChecked.has(k)));
   const shown = order.filter((k) => {
     if (!q) return true;
     const f = byKey.get(k);
@@ -532,7 +540,11 @@ function ColumnsPanel({ fields, columns, sets, onApply, onSaveAs, onDeleteSet, o
   const drop = (to: number) => {
     const f = from.current; from.current = null;
     if (f === null || f === to) return;
-    setOrder((p) => { const n = [...p]; const [m] = n.splice(f, 1); n.splice(to, 0, m); return n; });
+    setOrder((p) => {
+      const n = [...p]; const [m] = n.splice(f, 1); n.splice(to, 0, m);
+      commit(n, checked);
+      return n;
+    });
   };
 
   return (
@@ -561,7 +573,11 @@ function ColumnsPanel({ fields, columns, sets, onApply, onSaveAs, onDeleteSet, o
                   onDrop={() => drop(i)} style={{ cursor: "grab" }}>
                   <span className="text-secondary" aria-hidden>⣿</span>
                   <input className="form-check-input mt-0" type="checkbox" checked={checked.has(k)}
-                    onChange={() => setChecked((p) => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n; })} />
+                    onChange={() => setChecked((p) => {
+                      const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k);
+                      commit(order, n);
+                      return n;
+                    })} />
                   <span className="flex-fill">
                     {f?.recommended && <span className="text-warning me-1">★</span>}
                     {f?.label ? <>{f.label} <span className="text-secondary small">({k})</span></> : k}
@@ -583,7 +599,10 @@ function ColumnsPanel({ fields, columns, sets, onApply, onSaveAs, onDeleteSet, o
             <div className="list-group list-group-flush mt-2">
               {Object.entries(sets).map(([n, cols]) => (
                 <div key={n} className="list-group-item px-0 py-1 d-flex align-items-center">
-                  <button className="btn btn-sm btn-link p-0" onClick={() => { setChecked(new Set(cols)); setOrder([...cols, ...order.filter((k) => !cols.includes(k))]); }}>
+                  <button className="btn btn-sm btn-link p-0" onClick={() => {
+                    const nc = new Set(cols); const no = [...cols, ...order.filter((k) => !cols.includes(k))];
+                    setChecked(nc); setOrder(no); commit(no, nc);
+                  }}>
                     {n}<span className="text-secondary ms-1">({cols.length}列)</span>
                   </button>
                   <button className="btn btn-sm btn-ghost-danger ms-auto p-0" onClick={() => onDeleteSet(n)}>削除</button>
@@ -592,9 +611,10 @@ function ColumnsPanel({ fields, columns, sets, onApply, onSaveAs, onDeleteSet, o
             </div>
           )}
         </div>
-        <div className="card-footer d-flex justify-content-between">
+        <div className="card-footer d-flex align-items-center justify-content-between">
           <button className="btn btn-outline-secondary" onClick={() => { onReset(); onClose(); }}>既定に戻す</button>
-          <button className="btn btn-primary" onClick={() => { onApply(selected); onClose(); }}>適用</button>
+          <span className="text-secondary small">変更は自動で保存されます</span>
+          <button className="btn btn-primary" onClick={onClose}>閉じる</button>
         </div>
       </div>
     </>
