@@ -96,6 +96,10 @@ def _scoped(stmt, qy):
         stmt = stmt.where(_class_of(Event.payload) == qy.class_value)
     if qy.source:
         stmt = stmt.where(Event.source == qy.source)
+    for f, v in qy.filters:
+        kvf = func.jsonb_each_text(Event.payload).table_valued("key", "value")
+        hit = select(kvf.c.value).where(func.lower(kvf.c.key) == f, kvf.c.value == v).limit(1).scalar_subquery()
+        stmt = stmt.where(hit.isnot(None))
     return stmt
 
 
@@ -297,9 +301,11 @@ class EventQuery:
         self.q = q
         self.start, self.end = _period(start, end)
         self.rep_value = rep_value
-        # 個別Taxonomyフィールドでの絞り込み（normalize-mapping.md §7.2の単純遷移）
-        self.field = field if (field and is_taxonomy_key(field)) else None
-        self.value = value
+        # 個別Taxonomyフィールドでの絞り込み（normalize-mapping.md §7.2の単純遷移）。
+        # 列ヘッダの絞り込みで複数条件を同時に指定できるよう、KEYと値の対の配列で保持する。
+        fs = field if isinstance(field, list) else ([field] if field else [])
+        vs = value if isinstance(value, list) else ([value] if value is not None else [])
+        self.filters = [(canonical_key(f), v) for f, v in zip(fs, vs) if canonical_key(f)]
         self.attention = attention
         self.threat = threat if threat in THREATS else None
         # ログソース(LogSeeker管理メタデータ)での絞り込み。Dashboardの「ログソース別」から遷移する
@@ -311,8 +317,8 @@ class EventQuery:
             stmt = stmt.where(_cls(ev) == self.class_value)
         if self.source:
             stmt = stmt.where(ev.c.source == self.source)
-        if self.field and self.value is not None:
-            stmt = stmt.where(_pv(ev, self.field) == self.value)
+        for f, v in self.filters:
+            stmt = stmt.where(_pv(ev, f) == v)
         if self.rep_value is not None:
             stmt = stmt.where(self.rep_expr(ev) == self.rep_value)
         if self.q:
@@ -334,7 +340,8 @@ class EventQuery:
 
 def event_query(db: Session = Depends(get_db), class_value: str | None = None, q: str | None = None,
                 start: datetime | None = None, end: datetime | None = None,
-                rep_value: str | None = None, field: str | None = None, value: str | None = None,
+                rep_value: str | None = None,
+                field: list[str] = Query(default=[]), value: list[str] = Query(default=[]),
                 attention: bool = False, threat: str | None = None,
                 source: str | None = None) -> EventQuery:
     return EventQuery(db, class_value, q, start, end, rep_value, field, value, attention, threat, source)

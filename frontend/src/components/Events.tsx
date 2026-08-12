@@ -126,20 +126,28 @@ export function Events({ onEntity, onNav, onOpenCase, onOpenIncident, auth, init
     api.eventsHistogram(applied, 60).then(setHist).catch(() => setHist(null));
   }, [applied, showViz]);
 
+  /** 指定Taxonomy KEYの値で絞り込む（既存の同一KEY条件は置き換える）。複数KEYを同時指定できる。 */
   const pivot = (field: string, value: unknown) => {
-    const q = { ...applied, field, value: String(value ?? "") };
+    const v = String(value ?? "");
+    const rest = (applied.filters ?? []).filter((f) => f.field !== field);
+    const q = { ...applied, filters: [...rest, { field, value: v }] };
     setApplied(q); setDraft(q);
   };
-  const clearPivot = () => {
-    const q = { ...applied, field: undefined, value: undefined, rep_value: undefined };
+  const unpivot = (field: string) => {
+    const q = { ...applied, filters: (applied.filters ?? []).filter((f) => f.field !== field) };
+    setApplied(q); setDraft(q);
+  };
+  const clearRep = () => {
+    const q = { ...applied, rep_value: undefined };
     setApplied(q); setDraft(q);
   };
 
   const chips: { label: string; clear: () => void }[] = [];
   if (applied.class_value) chips.push({ label: `Class: ${applied.class_value}`,
     clear: () => { const q = { ...applied, class_value: undefined }; setApplied(q); setDraft(q); } });
-  if (applied.field) chips.push({ label: `${labelOf(applied.field)}: ${applied.value}`, clear: clearPivot });
-  if (applied.rep_value) chips.push({ label: `ドメイン/ホスト: ${applied.rep_value}`, clear: clearPivot });
+  (applied.filters ?? []).forEach((f) => chips.push({
+    label: `${labelOf(f.field)}: ${f.value}`, clear: () => unpivot(f.field) }));
+  if (applied.rep_value) chips.push({ label: `ドメイン/ホスト: ${applied.rep_value}`, clear: clearRep });
   if (applied.source) chips.push({ label: `ログソース: ${applied.source}`,
     clear: () => { const q = { ...applied, source: undefined }; setApplied(q); setDraft(q); } });
   if (applied.threat) chips.push({ label: `脅威: ${THREATS.find((t) => t.value === applied.threat)?.label ?? applied.threat}`,
@@ -311,6 +319,9 @@ export function Events({ onEntity, onNav, onOpenCase, onOpenIncident, auth, init
                     <th key={k} className="text-nowrap">
                       {labelOf(k)}
                       <span className="text-secondary ms-1 small">{k}</span>
+                      <ColumnFilter field={k} label={labelOf(k)} query={applied}
+                        active={(applied.filters ?? []).find((f) => f.field === k)?.value}
+                        onPick={(v) => pivot(k, v)} onClear={() => unpivot(k)} />
                       <button className="btn btn-sm btn-ghost-secondary p-0 ms-1" title="この列を非表示"
                         onClick={() => persistColumns(columns.filter((c) => c !== k))}>✕</button>
                     </th>
@@ -414,6 +425,57 @@ export function Events({ onEntity, onNav, onOpenCase, onOpenIncident, auth, init
           }} />
       )}
     </div>
+  );
+}
+
+/** 列ヘッダの絞り込み。その列(Taxonomy KEY)に実際に入っている値を件数付きで出し、選ぶと絞り込む。
+ * 旧Events画面のログソース/HTTPステータス/重大度ドロップダウンに相当するが、
+ * 特定KEYを決め打ちせず「表示中の任意の列」で使える。値は /events/facet から取る。 */
+function ColumnFilter({ field, label, query, active, onPick, onClear }: {
+  field: string; label: string; query: EventQuery; active?: string;
+  onPick: (v: string) => void; onClear: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [vals, setVals] = useState<{ value: string | null; count: number }[] | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setVals(null);
+    api.eventsFacet(query, field, 30).then((r) => setVals(r.values)).catch(() => setVals([]));
+  }, [open, field, query]);
+
+  return (
+    <span className="position-relative">
+      <button className={`btn btn-sm p-0 ms-1 ${active ? "text-primary" : "btn-ghost-secondary"}`}
+        title={active ? `${label} = ${active} で絞り込み中` : `${label}で絞り込む`}
+        onClick={() => setOpen(!open)}>▼</button>
+      {open && (
+        <>
+          <div style={{ position: "fixed", inset: 0, zIndex: 20 }} onClick={() => setOpen(false)} />
+          <div className="card position-absolute" style={{ zIndex: 30, minWidth: 240, maxHeight: 320, overflowY: "auto", top: "100%", left: 0 }}>
+            <div className="card-body p-2">
+              <div className="d-flex align-items-center mb-1">
+                <strong className="small">{label}</strong>
+                {active && <button className="btn btn-sm btn-link p-0 ms-auto"
+                  onClick={() => { onClear(); setOpen(false); }}>解除</button>}
+              </div>
+              {vals === null ? <div className="text-secondary small">読み込み中...</div>
+                : vals.length === 0 ? <div className="text-secondary small">値がありません</div> : (
+                  <div className="list-group list-group-flush">
+                    {vals.map((v) => (
+                      <button key={String(v.value)} className="list-group-item list-group-item-action px-0 py-1 d-flex small"
+                        onClick={() => { onPick(String(v.value)); setOpen(false); }}>
+                        <span className="text-truncate" style={{ maxWidth: 170 }} title={String(v.value)}>{v.value}</span>
+                        <span className="text-secondary ms-auto">{v.count.toLocaleString()}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+            </div>
+          </div>
+        </>
+      )}
+    </span>
   );
 }
 

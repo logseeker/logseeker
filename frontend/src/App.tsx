@@ -199,7 +199,7 @@ export default function App() {
   const [eventsQuery, setEventsQuery] = useState<EventQuery | undefined>();
   const toEvents = (q: EventQuery) => { setEventsQuery({ ...q, _n: Date.now() } as EventQuery); setScreen("events"); };
   const drillRep = (value: string) => toEvents({ rep_value: value });
-  const drillField = (field: string, value: string) => toEvents({ field, value });
+  const drillField = (field: string, value: string) => toEvents({ filters: [{ field, value }] });
   const drillClass = (class_value: string) => toEvents({ class_value });
   const drillSource = (source: string) => toEvents({ source });
   // イベント等から「エンティティ調査」画面へ（IP/ユーザーの攻撃像を時系列で見る）

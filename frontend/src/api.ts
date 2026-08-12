@@ -86,8 +86,8 @@ export interface EventQuery {
   q?: string;
   start?: string;
   end?: string;
-  field?: string;        // 個別Taxonomyフィールドでの単純絞り込み（normalize-mapping.md §7.2）
-  value?: string;
+  /** 個別Taxonomyフィールドでの絞り込み（normalize-mapping.md §7.2）。複数同時指定できる */
+  filters?: { field: string; value: string }[];
   rep_value?: string;    // 代表値グループでの絞り込み（同 §7.1：集計時と同じ優先順位のOR条件）
   attention?: boolean;   // 「注目」のみ（payloadキーワード一致 or result/severity が失敗・高重大度）
   threat?: string;       // 脅威フィルタ: ioc / sensitive_path / web_scan / auth_fail / root_ssh / any
@@ -99,7 +99,8 @@ function eq(qy: EventQuery, extra: Record<string, string | number> = {}): string
   const put_ = (k: string, v: unknown) => { if (v !== undefined && v !== null && v !== "") p.set(k, String(v)); };
   put_("class_value", qy.class_value);
   put_("q", qy.q); put_("start", qy.start); put_("end", qy.end);
-  put_("field", qy.field); put_("value", qy.value); put_("rep_value", qy.rep_value);
+  (qy.filters ?? []).forEach((f) => { p.append("field", f.field); p.append("value", f.value); });
+  put_("rep_value", qy.rep_value);
   if (qy.attention) p.set("attention", "true");
   put_("threat", qy.threat);
   put_("source", qy.source);
