@@ -1,23 +1,27 @@
 import ReactECharts from "echarts-for-react";
 import type { Count } from "../types";
 
-// 横棒ランキング。棒クリックで onPick(value)。
-export function BarChart({
-  data, onPick, color = "#3b82f6", height = 240,
-}: { data: Count[]; onPick?: (v: string) => void; color?: string; height?: number }) {
-  if (!data.length) return <p className="muted">データなし</p>;
-  const sorted = [...data].slice(0, 12).sort((a, b) => a.count - b.count);
-  const labels = sorted.map((d) => (d.value == null || d.value === "" ? "(なし)" : d.value));
+// 汎用の横棒グラフ。件数上位のCount[]（value/count）を受け取って描画するだけの
+// プレゼンテーション部品（データの意味付けはDashboard.tsx側で行う）。
+export function BarChart({ data, onPick, height = 220 }: {
+  data: Count[]; onPick?: (value: string) => void; height?: number;
+}) {
+  if (!data.length) return <div className="text-secondary small py-4 text-center">データがありません</div>;
+  const rows = [...data].reverse();  // echartsの横棒は下から積むため上位を上にするため逆順
   const option = {
-    tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
-    grid: { left: 8, right: 36, top: 8, bottom: 24, containLabel: true },
+    grid: { left: 8, right: 24, top: 8, bottom: 8, containLabel: true },
+    tooltip: { trigger: "item" },
     xAxis: { type: "value" },
-    yAxis: { type: "category", data: labels, axisLabel: { fontSize: 10, width: 150, overflow: "truncate" } },
-    series: [{ type: "bar", data: sorted.map((d) => d.count), itemStyle: { color },
-      label: { show: true, position: "right", fontSize: 10 } }],
+    yAxis: { type: "category", data: rows.map((d) => d.value ?? "(空)"), axisLabel: { fontSize: 11 } },
+    series: [{ type: "bar", data: rows.map((d) => d.count), barMaxWidth: 18 }],
   };
-  const onEvents: Record<string, (p: { dataIndex: number }) => void> = onPick
-    ? { click: (p: { dataIndex: number }) => { const v = sorted[p.dataIndex]?.value; if (v != null) onPick(String(v)); } }
-    : {};
-  return <ReactECharts option={option} style={{ height }} notMerge onEvents={onEvents} />;
+  return (
+    <ReactECharts
+      option={option}
+      style={{ height }}
+      onEvents={onPick ? {
+        click: (p: { name?: string }) => { if (p.name) onPick(p.name === "(空)" ? "" : p.name); },
+      } : undefined}
+    />
+  );
 }

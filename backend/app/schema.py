@@ -23,10 +23,6 @@ class IncidentEventAdd(BaseModel):
     note: str | None = None
 
 
-class AnnotationCreate(BaseModel):
-    comment: str | None = None
-    tags: str | None = None
-    created_by: str | None = None
 
 
 class LicenseApply(BaseModel):
@@ -133,6 +129,19 @@ class DismissedRelease(BaseModel):
 class EventsColumnsUpdate(BaseModel):
     source_type: str
     columns: list[str]
+
+
+class EventsClassesUpdate(BaseModel):
+    hidden: list[str] = Field(default_factory=list)
+    order: list[str] = Field(default_factory=list)
+    pinned: list[str] = Field(default_factory=list)
+
+
+class EventsColumnSetSave(BaseModel):
+    """Events列セット（名前を付けて保存するプリセット）。"""
+    name: str
+    class_value: str | None = None
+    columns: list[str] = Field(default_factory=list)
 
 
 class IpAllowEntry(BaseModel):

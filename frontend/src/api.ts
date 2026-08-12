@@ -1,10 +1,11 @@
 import type {
-  AdminOverview, Annotation, AssetRow, AssignableUser, AuditResponse, AuthStatus, AuthUser, CaseCommentItem,
+  AdminOverview, AssetRow, AssignableUser, AuditResponse, AuthStatus, AuthUser, CaseCommentItem,
   CaseDetail, CaseRow, CorrelationResponse, Count, CreateUserResult, CustomRule, CustomRulesResponse,
-  DeadLettersResponse, EntityDetail, EntityRow, EventDetail, EventRow, EventsColumnCandidates, EventsResponse, FieldInfo, FilterState,
+  ColumnSets, DashboardOverview, DashboardTimeline, DeadLettersResponse, EntityDetail, EntityRow, EventDetailData, EventRow,
+  EventsClassesResponse, EventsFields, EventsSearchResponse, FacetResponse, FieldInfo, FilterState, HistogramResponse,
   IncidentActivityItem, IncidentDetail, IncidentResponseActionTypeDef, IncidentRow, IncidentStatusDef,
   IngestStatus, IngestVolume, IocFeedsInfo, IpRestrictStatus, LicenseInfo, MappingsResponse, NotificationConfig,
-  ReleaseItem, Role, RuleDef, RuleHit, SsoStatus, Summary, Timeline, Verdict,
+  ReleaseItem, Role, RuleDef, RuleHit, SsoStatus, Verdict,
 } from "./types";
 
 const BASE = (import.meta.env.VITE_API_BASE as string) || "";
@@ -79,17 +80,68 @@ async function downloadFile(path: string, filename: string): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
+// Events/Dashboardの検索条件（v12 A案）。絞り込みはTaxonomy KEY・Class・期間・全文のみ。
+export interface EventQuery {
+  class_value?: string | null;
+  q?: string;
+  start?: string;
+  end?: string;
+  field?: string;        // 個別Taxonomyフィールドでの単純絞り込み（normalize-mapping.md §7.2）
+  value?: string;
+  rep_value?: string;    // 代表値グループでの絞り込み（同 §7.1：集計時と同じ優先順位のOR条件）
+}
+
+function eq(qy: EventQuery, extra: Record<string, string | number> = {}): string {
+  const p = new URLSearchParams();
+  const put_ = (k: string, v: unknown) => { if (v !== undefined && v !== null && v !== "") p.set(k, String(v)); };
+  put_("class_value", qy.class_value);
+  put_("q", qy.q); put_("start", qy.start); put_("end", qy.end);
+  put_("field", qy.field); put_("value", qy.value); put_("rep_value", qy.rep_value);
+  Object.entries(extra).forEach(([k, v]) => put_(k, v));
+  const s = p.toString();
+  return s ? `?${s}` : "";
+}
+
 export const api = {
-  events: (f: FilterState, limit = 100, offset = 0) =>
-    get<EventsResponse>(`/api/events${qs(f, { limit, offset })}`),
-  eventDetail: (id: number) => get<EventDetail>(`/api/events/${id}`),
-  timeline: (f: FilterState, interval: string, groupby?: string) =>
-    get<Timeline>(`/api/timeline${qs(f, groupby ? { interval, groupby } : { interval })}`),
+  // ---- Events / Dashboard（v12 A案。値はpayloadのTaxonomy KEYからのみ取得する）----
+  eventsFields: (class_value?: string | null) =>
+    get<EventsFields>(`/api/events/fields${class_value ? `?class_value=${ev(class_value)}` : ""}`),
+  columnSets: (class_value?: string | null) =>
+    get<ColumnSets>(`/api/events/column-sets${class_value ? `?class_value=${ev(class_value)}` : ""}`),
+  saveColumns: (class_value: string | null, columns: string[]) =>
+    put<{ ok: boolean }>(`/api/events/columns`, { source_type: class_value, columns }),
+  saveColumnSet: (name: string, class_value: string | null, columns: string[]) =>
+    put<{ ok: boolean; name: string }>(`/api/events/column-sets`, { name, class_value, columns }),
+  deleteColumnSet: (name: string, class_value?: string | null) =>
+    del<{ ok: boolean }>(`/api/events/column-sets/${ev(name)}${class_value ? `?class_value=${ev(class_value)}` : ""}`),
+
+  eventsClasses: (qy: EventQuery = {}) => get<EventsClassesResponse>(`/api/events/classes${eq(qy)}`),
+  setEventsClasses: (b: { hidden: string[]; order: string[]; pinned: string[] }) =>
+    put<{ ok: boolean }>(`/api/events/classes`, b),
+
+  searchEvents: (qy: EventQuery, columns: string[], limit = 50, offset = 0) =>
+    get<EventsSearchResponse>(`/api/events/search${eq(qy, { columns: columns.join(","), limit, offset })}`),
+  eventsHistogram: (qy: EventQuery, buckets = 60) =>
+    get<HistogramResponse>(`/api/events/histogram${eq(qy, { buckets })}`),
+  eventsFacet: (qy: EventQuery, field: string, top = 20) =>
+    get<FacetResponse>(`/api/events/facet${eq(qy, { field, top })}`),
+  eventDetail: (id: number) => get<EventDetailData>(`/api/events/detail/${id}`),
+  exportEvents: (qy: EventQuery, columns: string[], format: "csv" | "json") =>
+    downloadFile(`/api/events/export${eq(qy, { columns: columns.join(","), format })}`,
+      `logseeker_events.${format}`),
+  dashboardTimeline: (interval: "hour" | "day", date: string, class_value?: string | null) =>
+    get<DashboardTimeline>(`/api/dashboard/timeline?interval=${interval}&date=${ev(date)}` +
+      (class_value ? `&class_value=${ev(class_value)}` : "")),
+  dashboardOverview: (qy: EventQuery, fields: string[] = [], extraFields: string[] = []) =>
+    get<DashboardOverview>(`/api/dashboard/overview${eq(qy, {
+      ...(fields.length ? { fields: fields.join(",") } : {}),
+      ...(extraFields.length ? { extra_fields: extraFields.join(",") } : {}),
+    })}`),
+
+  // ---- 他画面（ログソース/フィールド/ホスト・ドメイン/ルール）が使う既存API（無変更）----
   groupby: (f: FilterState, field: string, top = 20) =>
     get<Count[]>(`/api/groupby${qs(f, { field, top })}`),
-  sourceTypes: (f: FilterState) => get<{ source_type: string | null; count: number }[]>(`/api/source-types${qs(f)}`),
   fields: (f: FilterState) => get<FieldInfo[]>(`/api/fields${qs(f)}`),
-  summary: (f: FilterState) => get<Summary>(`/api/dashboard/summary${qs(f)}`),
 
   // MVP3: エンティティ & 相関
   entities: (type?: string, q?: string) =>
@@ -108,9 +160,6 @@ export const api = {
   setLocalAssetDisplayName: (ip: string, display_name: string | null) =>
     put<{ id: number; ip: string; ip_version: string; label: string | null; description: string | null; display_name: string | null }>(`/api/assets/local/${ip}`, { display_name }),
 
-  annotations: (id: number) => get<Annotation[]>(`/api/events/${id}/annotations`),
-  addAnnotation: (id: number, b: { comment?: string; tags?: string }) =>
-    post<{ id: number }>(`/api/events/${id}/annotations`, b),
   setEventResolved: (id: number, resolved: boolean) =>
     put<{ ok: boolean; resolved: boolean }>(`/api/events/${id}/resolved`, { resolved }),
 
@@ -176,10 +225,6 @@ export const api = {
   // ログ未達監視のしきい値
   silenceSettings: () => get<{ hours: number }>(`/api/monitor/silence`),
   saveSilenceSettings: (hours: number) => post<{ ok: boolean }>(`/api/monitor/silence`, { hours }),
-
-  // イベントのCSV/JSONエクスポート（現在の絞り込みに従う。認証ヘッダ付きでblobダウンロード）
-  exportEvents: (f: FilterState, format: "csv" | "json") =>
-    downloadFile(`/api/events/export${qs(f, { format })}`, `logseeker_events.${format}`),
 
   // ライセンス
   license: () => get<LicenseInfo>(`/api/license`),
@@ -252,10 +297,4 @@ export const api = {
   getDismissedRelease: () => get<{ last_dismissed_release: string | null }>(`/api/changelog/dismissed`),
   setDismissedRelease: (tag_name: string) => put<{ ok: boolean }>(`/api/changelog/dismissed`, { tag_name }),
 
-  eventsColumnCandidates: (source_type: string) =>
-    get<EventsColumnCandidates>(`/api/events/columns/candidates?source_type=${encodeURIComponent(source_type)}`),
-  getEventsColumns: (source_type: string) =>
-    get<{ columns: string[] | null }>(`/api/events/columns?source_type=${encodeURIComponent(source_type)}`),
-  setEventsColumns: (source_type: string, columns: string[]) =>
-    put<{ ok: boolean }>(`/api/events/columns`, { source_type, columns }),
 };

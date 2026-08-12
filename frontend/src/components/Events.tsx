@@ -1,539 +1,523 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ReactECharts from "echarts-for-react";
 import { api } from "../api";
-import { fmtTime, stLabel } from "../labels";
-import { adviseForEvent } from "../advice";
-import { useAssetDisplayNames, formatHost } from "../assetNames";
-import { useEventsColumns } from "../eventsColumns";
-import type { AuthStatus, Count, EventRow, EventsResponse, FilterState, Screen } from "../types";
+import type { EventQuery } from "../api";
+import { fmtTime } from "../labels";
 import { EventDetail } from "./EventDetail";
+import type {
+  AuthStatus, ColumnSets, EventsClass, EventSearchRow, EventsSearchResponse,
+  HistogramResponse, Screen, TaxonomyField,
+} from "../types";
 
-// payload生キーの値を追加列セルに表示するための整形（オブジェクト/配列はJSON文字列化するのみ、変換はしない）。
-function fmtPayloadValue(v: unknown): string | null {
-  if (v === null || v === undefined || v === "") return null;
-  if (typeof v === "object") return JSON.stringify(v);
-  return String(v);
+const ROW_CHOICES = [50, 100, 500, 1000];
+const LS_PREFIX = "logseeker_events_v3";
+
+/** 未ログイン時のフォールバック保存先（サーバーはログイン利用者単位でしか保存しないため）。 */
+function lsGet<T>(key: string, fb: T): T {
+  try { const v = localStorage.getItem(`${LS_PREFIX}_${key}`); return v ? (JSON.parse(v) as T) : fb; }
+  catch { return fb; }
+}
+function lsSet(key: string, v: unknown) {
+  try { localStorage.setItem(`${LS_PREFIX}_${key}`, JSON.stringify(v)); } catch { /* noop */ }
 }
 
-function Badge({ r }: { r: string | null }) {
-  const v = r ?? "unknown";
-  const cls = v === "success" ? "bg-green-lt" : v === "failure" ? "bg-red-lt" : "bg-secondary-lt";
-  return <span className={`badge ${cls}`}>{v}</span>;
-}
-function SevBadge({ s }: { s: string | null }) {
-  if (!s) return <span className="text-secondary">-</span>;
-  const v = s.toUpperCase();
-  const cls = ["EMERG","ALERT","CRITICAL","CRIT"].includes(v) ? "bg-red text-white"
-    : ["ERROR","ERR"].includes(v) ? "bg-red-lt"
-    : v === "WARNING" || v === "WARN" ? "bg-yellow-lt"
-    : v === "NOTICE" ? "bg-azure-lt"
-    : "bg-secondary-lt";
-  return <span className={`badge ${cls}`}>{s}</span>;
-}
-const dash = (v: string | null) => (v ? v : <span className="text-secondary">-</span>);
+const isoLocal = (iso?: string) => (iso ? iso.slice(0, 16) : "");
+const toIso = (local: string) => (local ? new Date(local).toISOString() : undefined);
 
-// ISO国コード（例: "JP"）→ 国旗絵文字（例: "🇯🇵"）。地域表示記号(Regional Indicator Symbol)への変換。
-// 画像アセット不要でOS/ブラウザのフォントが描画するため、追加リソースなしで使える。
-function flagEmoji(iso2: string | null): string | null {
-  if (!iso2 || iso2.length !== 2) return null;
-  const code = iso2.toUpperCase();
-  if (!/^[A-Z]{2}$/.test(code)) return null;
-  const points = [...code].map((c) => 0x1f1e6 + (c.charCodeAt(0) - 65));
-  return String.fromCodePoint(...points);
-}
+type Props = {
+  onEntity: (type: string, value: string) => void;
+  onNav: (s: Screen) => void;
+  onOpenCase: (id: number) => void;
+  onOpenIncident: (id: number) => void;
+  auth?: AuthStatus;
+  initialEventId?: number;
+  /** Dashboardから遷移してきたときの初期条件 */
+  initialQuery?: EventQuery;
+};
 
-// ページ番号一覧を生成（多い場合は省略記号「…」を挟む）。例: 1 … 4 5 [6] 7 8 … 20
-function pageNumbers(current: number, total: number): (number | "...")[] {
-  if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
-  const keep = new Set([1, 2, total - 1, total, current - 1, current, current + 1]);
-  const sorted = [...keep].filter((p) => p >= 1 && p <= total).sort((a, b) => a - b);
-  const result: (number | "...")[] = [];
-  let prev = 0;
-  for (const p of sorted) {
-    if (prev && p - prev > 1) result.push("...");
-    result.push(p);
-    prev = p;
-  }
-  return result;
-}
+export function Events({ onEntity, onOpenCase, onOpenIncident, auth, initialEventId, initialQuery }: Props) {
+  const loggedIn = !!auth?.user;
 
-// 横スクロール時も主要列（時刻・ログソース・種別・重大度）を常に見えるようにする sticky 設定。
-const STICKY_W = [150, 130, 90, 90]; // px: 時刻, ログソース, 種別, 重大度
-const STICKY_LEFT = STICKY_W.reduce<number[]>((acc, _w, i) => [...acc, i === 0 ? 0 : acc[i - 1] + STICKY_W[i - 1]], []);
-function stickyStyle(i: number, isHeader = false): React.CSSProperties {
-  return {
-    position: "sticky",
-    left: STICKY_LEFT[i],
-    width: STICKY_W[i],
-    minWidth: STICKY_W[i],
-    maxWidth: STICKY_W[i],
-    background: "var(--tblr-card-bg, #fff)",
-    zIndex: isHeader ? 3 : 2,
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    boxShadow: i === STICKY_W.length - 1 ? "2px 0 4px -2px rgba(0,0,0,.15)" : undefined,
+  // ---- 検索条件（「検索」ボタンで確定。ドロップダウン変更では飛ばさない）----
+  const [applied, setApplied] = useState<EventQuery>(() => initialQuery ?? {});
+  const [draft, setDraft] = useState<EventQuery>(() => initialQuery ?? {});
+  useEffect(() => { if (initialQuery) { setApplied(initialQuery); setDraft(initialQuery); } }, [initialQuery]);
+
+  const cls = applied.class_value ?? null;
+
+  // ---- Class ----
+  const [classes, setClasses] = useState<EventsClass[]>([]);
+  const loadClasses = useCallback(() => {
+    api.eventsClasses({ start: applied.start, end: applied.end }).then((r) => {
+      if (loggedIn) { setClasses(r.classes); return; }
+      const local = lsGet("classes", { hidden: [] as string[], pinned: [] as string[], order: [] as string[] });
+      const hid = new Set(local.hidden), pin = new Set(local.pinned);
+      setClasses(r.classes.map((c) => ({ ...c, hidden: hid.has(c.class_value), pinned: pin.has(c.class_value) })));
+    }).catch(() => setClasses([]));
+  }, [loggedIn, applied.start, applied.end]);
+  useEffect(loadClasses, [loadClasses]);
+  const visibleClasses = classes.filter((c) => !c.hidden);
+  const pinnedClasses = visibleClasses.filter((c) => c.pinned);
+
+  // ---- 列（Taxonomy KEYのみ。実データでは決まらない）----
+  const [fields, setFields] = useState<TaxonomyField[]>([]);
+  const [sets, setSets] = useState<ColumnSets | null>(null);
+  const [columns, setColumns] = useState<string[]>([]);
+  const labelOf = useMemo(() => {
+    const m = new Map(fields.map((f) => [f.key, f.label]));
+    return (k: string) => m.get(k) || k;
+  }, [fields]);
+
+  const loadColumns = useCallback(() => {
+    Promise.all([api.eventsFields(cls), api.columnSets(cls)]).then(([f, s]) => {
+      setFields(f.keys);
+      const local = lsGet<Record<string, string[]>>("columns", {});
+      const saved = loggedIn ? s.columns : (local[cls ?? "__all__"] ?? null);
+      setSets({ ...s, columns: saved, sets: loggedIn ? s.sets : lsGet(`sets_${cls ?? "__all__"}`, {}) });
+      setColumns(saved && saved.length ? saved : f.default_columns);
+    }).catch(() => { setFields([]); setColumns([]); });
+  }, [cls, loggedIn]);
+  useEffect(loadColumns, [loadColumns]);
+
+  const persistColumns = (cols: string[]) => {
+    setColumns(cols);
+    if (loggedIn) { api.saveColumns(cls, cols).then(loadColumns).catch(() => {}); return; }
+    const local = lsGet<Record<string, string[]>>("columns", {});
+    local[cls ?? "__all__"] = cols;
+    lsSet("columns", local);
+    loadColumns();
   };
-}
 
-// イベント1件の「対応策」セル。既定はルール名バッジ1つのみ表示し、
-// 「詳細」クリックでアクションバッジ・調査ボタンを展開する（列が横に広がりすぎるのを防ぐ）。
-function AdviceCell({ e, onPick }: { e: EventRow; onPick: (k: string, v: string) => void }) {
-  const a = adviseForEvent(e);
-  const [open, setOpen] = useState(false);
-  if (!a) return <span className="text-secondary">-</span>;
+  // ---- 結果 ----
+  const [rows, setRows] = useState<EventsSearchResponse | null>(null);
+  const [limit, setLimit] = useState(50);
+  const [offset, setOffset] = useState(0);
+  const [err, setErr] = useState<string | null>(null);
+  const [sel, setSel] = useState<number | null>(initialEventId ?? null);
+  const [showViz, setShowViz] = useState(false);
+  const [hist, setHist] = useState<HistogramResponse | null>(null);
+  const [panel, setPanel] = useState<null | "columns" | "classes">(null);
+  const [gear, setGear] = useState(false);
+
+  useEffect(() => { setOffset(0); }, [applied, limit]);
+  useEffect(() => {
+    if (!columns.length) return;
+    api.searchEvents(applied, columns, limit, offset).then(setRows)
+      .catch((e) => setErr((e as Error).message));
+  }, [applied, columns, limit, offset]);
+  useEffect(() => {
+    if (!showViz) return;
+    api.eventsHistogram(applied, 60).then(setHist).catch(() => setHist(null));
+  }, [applied, showViz]);
+
+  const pivot = (field: string, value: unknown) => {
+    const q = { ...applied, field, value: String(value ?? "") };
+    setApplied(q); setDraft(q);
+  };
+  const clearPivot = () => {
+    const q = { ...applied, field: undefined, value: undefined, rep_value: undefined };
+    setApplied(q); setDraft(q);
+  };
+
+  const chips: { label: string; clear: () => void }[] = [];
+  if (applied.class_value) chips.push({ label: `Class: ${applied.class_value}`,
+    clear: () => { const q = { ...applied, class_value: undefined }; setApplied(q); setDraft(q); } });
+  if (applied.field) chips.push({ label: `${labelOf(applied.field)}: ${applied.value}`, clear: clearPivot });
+  if (applied.rep_value) chips.push({ label: `ドメイン/ホスト: ${applied.rep_value}`, clear: clearPivot });
+  if (applied.q) chips.push({ label: `検索 "${applied.q}"`,
+    clear: () => { const q = { ...applied, q: undefined }; setApplied(q); setDraft(q); } });
+
   return (
-    <div style={{ maxWidth: 240, whiteSpace: "normal" }}>
-      <div className="d-flex align-items-center flex-wrap gap-1">
-        <span className={`badge ${a.level === "danger" ? "bg-red-lt" : "bg-yellow-lt"}`}>{a.title}</span>
-        <button type="button" className="btn btn-xs btn-link p-0"
-          onClick={(ev) => { ev.stopPropagation(); setOpen((v) => !v); }}>
-          {open ? "隠す" : "詳細"}
-        </button>
-      </div>
-      {open && (
-        <div className="mt-1">
-          <div className="d-flex flex-wrap gap-1 mb-1">
-            {a.actions.map((x) => <span key={x} className="badge bg-azure-lt">{x}</span>)}
+    <div className="d-flex align-items-start" style={{ gap: "1rem" }}>
+      <div style={{ flex: sel != null ? "1 1 60%" : "1 1 100%", minWidth: 0 }}>
+        {err && <div className="alert alert-danger">{err}</div>}
+
+        {/* ===== 検索バー ===== */}
+        <div className="card mb-2">
+          <div className="card-body py-2">
+            <div className="d-flex gap-2 align-items-center mb-2">
+              <input className="form-control" placeholder="全文検索（payload全体を対象）"
+                value={draft.q ?? ""} onChange={(e) => setDraft({ ...draft, q: e.target.value })}
+                onKeyDown={(e) => e.key === "Enter" && setApplied(draft)} />
+              <button className="btn btn-primary" onClick={() => setApplied(draft)}>検索</button>
+            </div>
+            <div className="d-flex flex-wrap gap-2 align-items-end">
+              <div>
+                <label className="form-label mb-0 small">Class</label>
+                <div className="d-flex gap-1">
+                  <select className="form-select form-select-sm" style={{ width: 190 }}
+                    value={draft.class_value ?? ""}
+                    onChange={(e) => setDraft({ ...draft, class_value: e.target.value || undefined })}>
+                    <option value="">すべて</option>
+                    {visibleClasses.map((c) => (
+                      <option key={c.class_value} value={c.class_value}>{c.class_value} ({c.count})</option>
+                    ))}
+                  </select>
+                  <button className="btn btn-sm btn-ghost-secondary" onClick={() => setPanel("classes")}>設定</button>
+                </div>
+              </div>
+              <div>
+                <label className="form-label mb-0 small">開始</label>
+                <input type="datetime-local" className="form-control form-control-sm"
+                  value={isoLocal(draft.start)} onChange={(e) => setDraft({ ...draft, start: toIso(e.target.value) })} />
+              </div>
+              <div>
+                <label className="form-label mb-0 small">終了</label>
+                <input type="datetime-local" className="form-control form-control-sm"
+                  value={isoLocal(draft.end)} onChange={(e) => setDraft({ ...draft, end: toIso(e.target.value) })} />
+              </div>
+              <div className="form-check ms-2">
+                <input className="form-check-input" type="checkbox" id="viz" checked={showViz}
+                  onChange={(e) => setShowViz(e.target.checked)} />
+                <label className="form-check-label small" htmlFor="viz">視覚化</label>
+              </div>
+
+              <div className="ms-auto d-flex align-items-end gap-2">
+                <div>
+                  <label className="form-label mb-0 small">列セット</label>
+                  <select className="form-select form-select-sm" style={{ width: 190 }} value=""
+                    onChange={(e) => { const s = sets?.sets?.[e.target.value]; if (s) persistColumns(s); }}>
+                    <option value="">{columns.length}列を表示中</option>
+                    {Object.keys(sets?.sets ?? {}).map((n) => <option key={n} value={n}>{n}</option>)}
+                  </select>
+                </div>
+                <div className="position-relative">
+                  <button className="btn btn-sm btn-outline-secondary" onClick={() => setGear(!gear)} title="表の設定">⚙</button>
+                  {gear && (
+                    <div className="card position-absolute end-0 mt-1" style={{ zIndex: 30, minWidth: 210 }}>
+                      <div className="list-group list-group-flush">
+                        <button className="list-group-item list-group-item-action"
+                          onClick={() => { setGear(false); setPanel("columns"); }}>列をカスタマイズ</button>
+                        <button className="list-group-item list-group-item-action"
+                          onClick={() => { setGear(false); persistColumns(sets?.default_columns ?? []); }}>列を既定に戻す</button>
+                        <button className="list-group-item list-group-item-action"
+                          onClick={() => { setGear(false); api.exportEvents(applied, columns, "csv").catch((e) => setErr((e as Error).message)); }}>CSVで出力</button>
+                        <button className="list-group-item list-group-item-action"
+                          onClick={() => { setGear(false); api.exportEvents(applied, columns, "json").catch((e) => setErr((e as Error).message)); }}>JSONで出力</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {pinnedClasses.length > 0 && (
+              <div className="d-flex flex-wrap gap-1 mt-2">
+                {pinnedClasses.map((c) => (
+                  <button key={c.class_value}
+                    className={`btn btn-sm ${applied.class_value === c.class_value ? "btn-primary" : "btn-outline-secondary"}`}
+                    onClick={() => { const q = { ...applied, class_value: c.class_value }; setApplied(q); setDraft(q); }}>
+                    {c.class_value} <span className="text-secondary">({c.count})</span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-          {e.source_ip && (
-            <button className="btn btn-xs btn-outline-danger py-0"
-              onClick={(ev) => { ev.stopPropagation(); onPick("source_ip", e.source_ip!); }}>
-              このIPを調査 ({e.source_ip})
-            </button>
-          )}
         </div>
+
+        {chips.length > 0 && (
+          <div className="d-flex flex-wrap gap-1 mb-2 align-items-center">
+            <span className="text-secondary small">絞り込み:</span>
+            {chips.map((c, i) => (
+              <span key={i} role="button" className="badge bg-blue text-white" onClick={c.clear}>{c.label} ✕</span>
+            ))}
+          </div>
+        )}
+
+        {showViz && hist && (
+          <div className="card mb-2"><div className="card-body py-2">
+            <ReactECharts style={{ height: 120 }} option={{
+              grid: { left: 40, right: 10, top: 10, bottom: 20 },
+              tooltip: { trigger: "axis" },
+              xAxis: { type: "category", data: hist.buckets.map((b) => fmtTime(b.t)), axisLabel: { fontSize: 9 } },
+              yAxis: { type: "value" },
+              series: [{ type: "bar", data: hist.buckets.map((b) => b.count) }],
+            }} />
+          </div></div>
+        )}
+
+        <div className="card">
+          <div className="card-body py-2 d-flex align-items-center">
+            <span className="text-secondary small">
+              {rows ? `${rows.total.toLocaleString()} 件の結果が見つかりました` : "検索中..."}
+            </span>
+            <span className="ms-auto text-secondary small">
+              表示列は taxonomy.md のTaxonomy KEYから選択します（{fields.length}件）
+            </span>
+          </div>
+          <div className="table-responsive">
+            <table className="table table-sm table-vcenter card-table">
+              <thead>
+                <tr>
+                  <th style={{ width: 70 }}>対応</th>
+                  {/* Classは受信payloadのフィールドではなくLogSeeker管理情報。行の class_value を
+                      そのまま出す（右パネルのバッジと必ず同じ値になるようにする）。 */}
+                  <th className="text-nowrap">Class</th>
+                  {columns.map((k) => (
+                    <th key={k} className="text-nowrap">
+                      {labelOf(k)}
+                      <span className="text-secondary ms-1 small">{k}</span>
+                      <button className="btn btn-sm btn-ghost-secondary p-0 ms-1" title="この列を非表示"
+                        onClick={() => persistColumns(columns.filter((c) => c !== k))}>✕</button>
+                    </th>
+                  ))}
+                  {columns.length === 0 && <th className="text-secondary">列が選択されていません（⚙→列をカスタマイズ）</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {(rows?.items ?? []).map((r: EventSearchRow) => (
+                  <tr key={r.id} className={sel === r.id ? "table-active" : ""} role="button"
+                    onClick={() => setSel(r.id)}>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <div className="form-check form-switch mb-0">
+                        <input className="form-check-input" type="checkbox" checked={r.resolved}
+                          onChange={() => api.setEventResolved(r.id, !r.resolved)
+                            .then(() => api.searchEvents(applied, columns, limit, offset).then(setRows))} />
+                      </div>
+                    </td>
+                    <td className="text-nowrap">
+                      <span className={`badge ${r.class_value === "unknown" ? "bg-secondary-lt" : "bg-blue-lt"}`}>
+                        {r.class_value}
+                      </span>
+                    </td>
+                    {columns.map((k) => {
+                      const v = r.values[k];
+                      const s = v === null || v === undefined || v === "" ? "" : String(v);
+                      return (
+                        <td key={k} className="text-truncate" style={{ maxWidth: 240 }} title={s}>
+                          {s ? (
+                            <span className="d-inline-flex align-items-center gap-1">
+                              <span className="text-truncate">{s}</span>
+                              <button className="btn btn-sm btn-ghost-secondary p-0" title={`${labelOf(k)} = ${s} で絞り込む`}
+                                onClick={(e) => { e.stopPropagation(); pivot(k, s); }}>⌄</button>
+                            </span>
+                          ) : <span className="text-secondary">-</span>}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+                {rows && rows.items.length === 0 && (
+                  <tr><td colSpan={columns.length + 2} className="text-center text-secondary py-4">
+                    該当するイベントがありません
+                  </td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div className="card-footer d-flex align-items-center gap-2">
+            <span className="text-secondary small">rows</span>
+            {ROW_CHOICES.map((n) => (
+              <button key={n} className={`btn btn-sm ${limit === n ? "btn-primary" : "btn-ghost-secondary"}`}
+                onClick={() => setLimit(n)}>{n}</button>
+            ))}
+            <span className="ms-auto text-secondary small">
+              {rows ? `${rows.items.length ? offset + 1 : 0}〜${offset + rows.items.length}` : ""}
+            </span>
+            <div className="btn-group">
+              <button className="btn btn-sm" disabled={offset === 0}
+                onClick={() => setOffset(Math.max(0, offset - limit))}>前へ</button>
+              <button className="btn btn-sm" disabled={!rows || offset + limit >= rows.total}
+                onClick={() => setOffset(offset + limit)}>次へ</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {sel != null && (
+        <div style={{ flex: "0 0 38%", maxWidth: 540, position: "sticky", top: 8 }}>
+          <EventDetail id={sel} variant="panel" onClose={() => setSel(null)} onPivot={pivot}
+            onEntity={onEntity} onOpenCase={onOpenCase} onOpenIncident={onOpenIncident} />
+        </div>
+      )}
+
+      {panel === "columns" && (
+        <ColumnsPanel fields={fields} columns={columns} sets={sets?.sets ?? {}}
+          onApply={persistColumns}
+          onSaveAs={(name, cols) => {
+            if (loggedIn) return api.saveColumnSet(name, cls, cols).then(loadColumns);
+            const s = lsGet<Record<string, string[]>>(`sets_${cls ?? "__all__"}`, {});
+            s[name] = cols; lsSet(`sets_${cls ?? "__all__"}`, s); loadColumns();
+            return Promise.resolve();
+          }}
+          onDeleteSet={(name) => {
+            if (loggedIn) return api.deleteColumnSet(name, cls).then(loadColumns);
+            const s = lsGet<Record<string, string[]>>(`sets_${cls ?? "__all__"}`, {});
+            delete s[name]; lsSet(`sets_${cls ?? "__all__"}`, s); loadColumns();
+            return Promise.resolve();
+          }}
+          onReset={() => persistColumns(sets?.default_columns ?? [])}
+          onClose={() => setPanel(null)} />
+      )}
+      {panel === "classes" && (
+        <ClassesPanel classes={classes} onClose={() => setPanel(null)}
+          onSave={(hidden, pinned, order) => {
+            if (loggedIn) return api.setEventsClasses({ hidden, pinned, order }).then(loadClasses);
+            lsSet("classes", { hidden, pinned, order }); loadClasses();
+            return Promise.resolve();
+          }} />
       )}
     </div>
   );
 }
 
-// 脅威プルダウン選択時に出す「対応策」
-const THREAT_INFO: Record<string, { label: string; cls: string; rec: string }> = {
-  any: { label: "危ない系（攻撃の疑い）", cls: "danger",
-    rec: "送信元IPの遮断、公開ポート/不要サービスの停止、WAF・レート制限を検討。" },
-  ioc: { label: "IOC一致（既知の不正IP/ドメイン）", cls: "danger",
-    rec: "即時に該当IP/ドメインを遮断（FW/WAF）。関連イベントを調査し被害有無を確認。" },
-  sensitive_path: { label: "危険パスへのアクセス", cls: "danger",
-    rec: "該当IPを遮断。.env/.git 等の公開停止、管理画面を認証保護、CMS/プラグインを最新化。" },
-  web_scan: { label: "Webスキャン(4xx多発)", cls: "warning",
-    rec: "該当IPをWAF/FWで遮断、レート制限。存在しないパスへの探索をブロック。" },
-  auth_fail: { label: "認証失敗（総当たりの疑い）", cls: "warning",
-    rec: "アカウントロック/MFA/強パスワード化。該当IPを遮断。SSH/RDP等のポート見直し・公開制限。" },
-  root_ssh: { label: "root SSH試行", cls: "danger",
-    rec: "【即対応推奨】sshd_config で PermitRootLogin no を設定。PasswordAuthentication no で公開鍵のみに。Fail2ban で自動遮断。不要なら SSH ポートを変更または IP 制限。" },
-  ssh_invalid: { label: "SSH不正ユーザー試行", cls: "warning",
-    rec: "Fail2ban で自動遮断。AllowUsers で許可ユーザーを限定。公開鍵のみ認証に変更（PasswordAuthentication no）。" },
-};
-
-// 期間プリセット。時間単位は「現在時刻からN時間/N日さかのぼる」ローリング窓、
-// 当月/前月は暦月の境界（当月は月初〜前日まで、前月は月初〜月末まで）。
-const DATE_PRESETS: { key: string; label: string }[] = [
-  { key: "1h", label: "1時間" },
-  { key: "3h", label: "3時間" },
-  { key: "5h", label: "5時間" },
-  { key: "8h", label: "8時間" },
-  { key: "24h", label: "24時間" },
-  { key: "3d", label: "3日" },
-  { key: "7d", label: "7日" },
-  { key: "14d", label: "14日" },
-  { key: "21d", label: "21日" },
-  { key: "30d", label: "30日" },
-  { key: "31d", label: "31日" },
-  { key: "thisMonth", label: "当月" },
-  { key: "lastMonth", label: "前月" },
-];
-const pad2 = (n: number) => String(n).padStart(2, "0");
-const fmtLocalJst = (d: Date, endOfDay = false) =>
-  `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${endOfDay ? "23:59:59" : "00:00:00"}+09:00`;
-function computePresetRange(key: string): { start: string; end: string } | null {
-  const now = new Date();
-  const hoursMap: Record<string, number> = { "1h": 1, "3h": 3, "5h": 5, "8h": 8, "24h": 24 };
-  const daysMap: Record<string, number> = { "3d": 3, "7d": 7, "14d": 14, "21d": 21, "30d": 30, "31d": 31 };
-  if (key in hoursMap) {
-    const start = new Date(now.getTime() - hoursMap[key] * 60 * 60 * 1000);
-    return { start: start.toISOString(), end: now.toISOString() };
-  }
-  if (key in daysMap) {
-    const start = new Date(now.getTime() - daysMap[key] * 24 * 60 * 60 * 1000);
-    return { start: start.toISOString(), end: now.toISOString() };
-  }
-  if (key === "thisMonth") {
-    const first = new Date(now.getFullYear(), now.getMonth(), 1);
-    let yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-    if (yesterday < first) yesterday = first; // 月初日に選択した場合は前日が存在しないため当月1日のみにする
-    return { start: fmtLocalJst(first), end: fmtLocalJst(yesterday, true) };
-  }
-  if (key === "lastMonth") {
-    const first = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const lastDay = new Date(now.getFullYear(), now.getMonth(), 0);
-    return { start: fmtLocalJst(first), end: fmtLocalJst(lastDay, true) };
-  }
-  return null;
-}
-
-export function Events({
-  filter, setSearch, search, onTax, onApplyFilters, onAttention, onThreat, onEntity, onNav, onOpenCase, onOpenIncident, auth,
-}: {
-  filter: FilterState;
-  search: string;
-  setSearch: (s: string) => void;
-  onTax: (k: string, v: string) => void;
-  onApplyFilters: (next: FilterState) => void;
-  onAttention: (b: boolean) => void;
-  onThreat: (v: string) => void;
-  onEntity: (type: string, value: string) => void;
-  onNav: (s: Screen) => void;
-  onOpenCase?: (caseId: number) => void;
-  onOpenIncident?: (incidentId: number) => void;
-  auth?: AuthStatus;
+/** 列のカスタマイズ：1本のリストで、⣿をドラッグして並び替え、チェックで表示/非表示。 */
+function ColumnsPanel({ fields, columns, sets, onApply, onSaveAs, onDeleteSet, onReset, onClose }: {
+  fields: TaxonomyField[]; columns: string[]; sets: Record<string, string[]>;
+  onApply: (cols: string[]) => void;
+  onSaveAs: (name: string, cols: string[]) => Promise<void>;
+  onDeleteSet: (name: string) => Promise<void>;
+  onReset: () => void; onClose: () => void;
 }) {
-  const [data, setData] = useState<EventsResponse>({ total: 0, limit: 100, offset: 0, items: [] });
-  const [srcNames, setSrcNames] = useState<Count[]>([]);
-  const [types, setTypes] = useState<{ source_type: string | null; count: number }[]>([]);
-  const [statuses, setStatuses] = useState<Count[]>([]);
-  const [severities, setSeverities] = useState<Count[]>([]);
-  const [sel, setSel] = useState<number | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [pageSize, setPageSize] = useState(30);
-  const [offset, setOffset] = useState(0);
-  const [showAdvice, setShowAdvice] = useState(false);   // 「対応策」列の表示切替（既定オフ）
-  const [datePreset, setDatePreset] = useState("24h");   // 期間プルダウンの選択状態（画面初期表示のデフォルトと合わせる）
-  const assetNames = useAssetDisplayNames();
-
-  // 種別（Class）を1つに絞っている時だけ、そのClassのpayload生キーを追加列として選べる
-  // （混在表示中はClassごとに全く違うキーになるため対象外とする。フェーズ3設計判断）。
-  const singleClass = filter.tax.source_type || "";
-  const { candidates, columns: extraCols, setColumns: setExtraCols } = useEventsColumns(auth ?? null, singleClass);
-  const [colSettingsOpen, setColSettingsOpen] = useState(false);
-  useEffect(() => { setColSettingsOpen(false); }, [singleClass]);
-
-  // 上部フィルタバーは「実行」ボタンを押すまで実際の検索(filter)には反映しない下書き状態。
-  // ドロップダウン選択のたびに毎回大量データへ再クエリが飛んで重くなるのを避けるため。
-  const [draft, setDraft] = useState<FilterState>(filter);
-  useEffect(() => { setDraft(filter); }, [filter]);
-
-  const setDraftTax = (k: string, v: string) => setDraft((d) => {
-    const tax = { ...d.tax };
-    if (!v) delete tax[k]; else tax[k] = v;
-    return { ...d, tax };
+  // 選択中の列を上に、残りのTaxonomy KEYを推奨→KEY名順で下に並べる
+  const [order, setOrder] = useState<string[]>(() => {
+    const rest = fields.map((f) => f.key).filter((k) => !columns.includes(k));
+    return [...columns, ...rest];
   });
-  const setDraftThreat = (v: string) => setDraft((d) => ({ ...d, threat: v || undefined }));
-  const applyDatePreset = (key: string) => {
-    setDatePreset(key);
-    if (!key) return;
-    const range = computePresetRange(key);
-    if (range) setDraft((d) => ({ ...d, start: range.start, end: range.end }));
-  };
-  const handleDateChange = (which: "start" | "end", d: string) => {
-    setDatePreset("");   // 日付欄を手動編集したらプルダウンは「カスタム」扱いにする
-    setDraft((prev) => ({ ...prev, [which]: d ? `${d}T${which === "start" ? "00:00:00" : "23:59:59"}+09:00` : undefined }));
-  };
-  const applyFilters = () => onApplyFilters({ ...draft, q: search || undefined });
+  const [checked, setChecked] = useState<Set<string>>(new Set(columns));
+  const [q, setQ] = useState("");
+  const [name, setName] = useState("");
+  const from = useRef<number | null>(null);
+  const byKey = useMemo(() => new Map(fields.map((f) => [f.key, f])), [fields]);
 
-  // フィルタ変更で先頭ページに戻す
-  useEffect(() => { setOffset(0); }, [filter]);
-
-  useEffect(() => {
-    setErr(null);
-    api.events(filter, pageSize, offset).then(setData).catch((e) => setErr((e as Error).message));
-  }, [filter, pageSize, offset]);
-
-  // 選択肢リストは「その軸自身の絞り込みを除いた」フィルタで取得する。
-  // （種別を選ぶと種別リストが1件に潰れて他を選べない、という自己崩壊を防ぐ）
-  const without = (key: string): FilterState => ({
-    ...filter,
-    tax: Object.fromEntries(Object.entries(filter.tax).filter(([k]) => k !== key)),
+  const selected = order.filter((k) => checked.has(k));
+  const shown = order.filter((k) => {
+    if (!q) return true;
+    const f = byKey.get(k);
+    return k.toLowerCase().includes(q.toLowerCase()) || (f?.label ?? "").toLowerCase().includes(q.toLowerCase());
   });
-  useEffect(() => {
-    api.groupby(without("source_name"), "source_name", 100).then(setSrcNames).catch(() => {});
-    api.sourceTypes(without("source_type")).then(setTypes).catch(() => {});
-    api.groupby(without("http_status_code"), "http_status_code", 100).then(setStatuses).catch(() => {});
-    api.groupby(without("event_severity"), "event_severity", 100).then(setSeverities).catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filter]);
 
-  const stop = (e: React.MouseEvent) => e.stopPropagation();
-  // イベント単体の対応済み/未対応トグル（ケースへの追加有無とは独立。設計書v2 2章）。
-  // 一覧を再取得せず楽観的に更新し、失敗時のみ元に戻す。
-  const toggleResolved = (id: number, next: boolean) => {
-    setData((p) => ({ ...p, items: p.items.map((it) => (it.id === id ? { ...it, resolved: next } : it)) }));
-    api.setEventResolved(id, next).catch(() => {
-      setData((p) => ({ ...p, items: p.items.map((it) => (it.id === id ? { ...it, resolved: !next } : it)) }));
-    });
+  const drop = (to: number) => {
+    const f = from.current; from.current = null;
+    if (f === null || f === to) return;
+    setOrder((p) => { const n = [...p]; const [m] = n.splice(f, 1); n.splice(to, 0, m); return n; });
   };
-  const from = data.total === 0 ? 0 : offset + 1;
-  const to = offset + data.items.length;
-  const hasPrev = offset > 0;
-  const hasNext = to < data.total;
-  const totalPages = Math.max(1, Math.ceil(data.total / pageSize));
-  const currentPage = Math.floor(offset / pageSize) + 1;
-  const goToPage = (p: number) => setOffset((Math.min(Math.max(p, 1), totalPages) - 1) * pageSize);
 
   return (
-    <div className="row row-cards">
-      <div className="col-12">
-        <div className="card"><div className="card-body">
-          <div className="row g-2 align-items-end">
-            <div className="col-md">
-              <label className="form-label">全文検索（payload全体）</label>
-              <input className="form-control" placeholder="Enterまたは検索ボタンで実行" value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") applyFilters(); }} />
-            </div>
-            <div className="col-md-auto">
-              <label className="form-label">ログソース</label>
-              <select className="form-select" value={draft.tax.source_name ?? ""} onChange={(e) => setDraftTax("source_name", e.target.value)}>
-                <option value="">すべて</option>
-                {srcNames.map((s) => <option key={s.value ?? ""} value={s.value ?? ""}>{s.value} ({s.count})</option>)}
-              </select>
-            </div>
-            <div className="col-md-auto">
-              <label className="form-label">種別</label>
-              <select className="form-select" value={draft.tax.source_type ?? ""} onChange={(e) => setDraftTax("source_type", e.target.value)}>
-                <option value="">すべて</option>
-                {types.map((t) => <option key={t.source_type ?? ""} value={t.source_type ?? ""}>{stLabel(t.source_type)} ({t.count})</option>)}
-              </select>
-            </div>
-            <div className="col-md-auto">
-              <label className="form-label">ステータス</label>
-              <select className="form-select" value={draft.tax.http_status_code ?? ""} onChange={(e) => setDraftTax("http_status_code", e.target.value)}>
-                <option value="">すべて</option>
-                {statuses.map((s) => <option key={s.value ?? ""} value={s.value ?? ""}>{s.value} ({s.count})</option>)}
-              </select>
-            </div>
-            <div className="col-md-auto">
-              <label className="form-label">重大度</label>
-              <select className="form-select" value={draft.tax.event_severity ?? ""} onChange={(e) => setDraftTax("event_severity", e.target.value)}>
-                <option value="">すべて</option>
-                {severities.map((s) => <option key={s.value ?? ""} value={s.value ?? ""}>{s.value} ({s.count})</option>)}
-              </select>
-            </div>
-            <div className="col-md-auto">
-              <label className="form-label">脅威</label>
-              <select className="form-select" value={draft.threat ?? ""} onChange={(e) => setDraftThreat(e.target.value)}>
-                <option value="">すべて</option>
-                <option value="any">危ない系（総合）</option>
-                <option value="ioc">IOC一致</option>
-                <option value="sensitive_path">危険パス</option>
-                <option value="web_scan">Webスキャン(4xx)</option>
-                <option value="auth_fail">認証失敗</option>
-                <option value="root_ssh">root SSH試行</option>
-              </select>
-            </div>
-            <div className="col-md-auto">
-              <label className="form-label">期間</label>
-              <div className="d-flex gap-1 flex-wrap">
-                <select className="form-select" style={{ width: 110 }} value={datePreset}
-                  onChange={(e) => applyDatePreset(e.target.value)}>
-                  <option value="">カスタム</option>
-                  {DATE_PRESETS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
-                </select>
-                <div className="input-group" style={{ width: "auto" }}>
-                  <input type="date" className="form-control" value={draft.start?.slice(0, 10) ?? ""} onChange={(e) => handleDateChange("start", e.target.value)} />
-                  <input type="date" className="form-control" value={draft.end?.slice(0, 10) ?? ""} onChange={(e) => handleDateChange("end", e.target.value)} />
-                </div>
-              </div>
-            </div>
-            <div className="col-md-auto">
-              <label className="form-label d-block">&nbsp;</label>
-              <button type="button" className="btn btn-primary" onClick={applyFilters}>🔍 検索</button>
-            </div>
-            <div className="col-md-auto">
-              <label className="form-label d-block">表示</label>
-              <div className="btn-group">
-                <button className={`btn ${!filter.attention ? "btn-primary" : "btn-outline-primary"}`} onClick={() => onAttention(false)}>全件</button>
-                <button className={`btn ${filter.attention ? "btn-primary" : "btn-outline-primary"}`} onClick={() => onAttention(true)}>注目のみ</button>
-              </div>
-            </div>
-          </div>
-        </div></div>
-      </div>
-
-      {err && <div className="col-12"><div className="alert alert-danger">取得失敗: {err}</div></div>}
-
-      {filter.threat && THREAT_INFO[filter.threat] && (
-        <div className="col-12">
-          <div className={`alert alert-${THREAT_INFO[filter.threat].cls}`}>
-            <div className="d-flex align-items-start">
-              <div className="flex-fill">
-                <strong>🛡 {THREAT_INFO[filter.threat].label}</strong> のイベントを表示中
-                <div className="mt-1"><strong>対策：</strong>{THREAT_INFO[filter.threat].rec}</div>
-              </div>
-              <button className="btn btn-sm btn-outline-dark ms-2" onClick={() => onThreat("")}>解除</button>
-            </div>
-          </div>
+    <>
+      <div style={{ position: "fixed", inset: 0, zIndex: 1040, background: "rgba(0,0,0,.15)" }} onClick={onClose} />
+      <div className="card" style={{ position: "fixed", top: 0, right: 0, bottom: 0, width: 440, zIndex: 1050, borderRadius: 0 }}>
+        <div className="card-header">
+          <h3 className="card-title mb-0">列をカスタマイズ</h3>
+          <button className="btn-close ms-auto" onClick={onClose} />
         </div>
-      )}
-
-      <div className="col-12">
-        <div className="card">
-          <div className="card-header">
-            <h3 className="card-title">イベント</h3>
-            <span className="card-subtitle ms-2 text-secondary">該当 {data.total.toLocaleString()} 件</span>
-            <div className="card-actions d-flex gap-2">
-              <button className={`btn btn-sm ${showAdvice ? "btn-warning" : "btn-outline-warning"}`}
-                onClick={() => setShowAdvice((v) => !v)}>
-                🛠 対応策{showAdvice ? "を隠す" : "を表示"}
-              </button>
-              {singleClass && (
-                <button className={`btn btn-sm ${colSettingsOpen ? "btn-info" : "btn-outline-info"}`}
-                  onClick={() => setColSettingsOpen((v) => !v)}>
-                  ⚙ 列設定（{stLabel(singleClass)}）
-                </button>
-              )}
-              <div className="btn-group" title="現在の絞り込みで最大2万件までダウンロード">
-                <button className="btn btn-sm btn-outline-secondary"
-                  onClick={() => api.exportEvents(filter, "csv").catch((e) => setErr((e as Error).message))}>
-                  ⬇ CSV
-                </button>
-                <button className="btn btn-sm btn-outline-secondary"
-                  onClick={() => api.exportEvents(filter, "json").catch((e) => setErr((e as Error).message))}>
-                  ⬇ JSON
-                </button>
-              </div>
-              <button className="btn btn-sm btn-outline-danger" onClick={() => onNav("rules")}>
-                🛡 攻撃・注意喚起を見る
-              </button>
-            </div>
+        <div className="card-body" style={{ overflowY: "auto" }}>
+          <p className="text-secondary small">
+            docs/taxonomy.md の全Taxonomy KEY（{fields.length}件）から選べます。受信データの有無では
+            選択肢は変わりません。★はこのClassの参考例に載っているKEYです。
+          </p>
+          <input className="form-control form-control-sm mb-2" placeholder="フィールド名・表示名で検索"
+            value={q} onChange={(e) => setQ(e.target.value)} />
+          <div className="text-secondary small mb-1">表示中 {selected.length} 列</div>
+          <div className="list-group" style={{ maxHeight: "48vh", overflowY: "auto" }}>
+            {shown.map((k) => {
+              const i = order.indexOf(k);
+              const f = byKey.get(k);
+              return (
+                <div key={k} draggable className="list-group-item d-flex align-items-center gap-2 py-1"
+                  onDragStart={() => { from.current = i; }} onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => drop(i)} style={{ cursor: "grab" }}>
+                  <span className="text-secondary" aria-hidden>⣿</span>
+                  <input className="form-check-input mt-0" type="checkbox" checked={checked.has(k)}
+                    onChange={() => setChecked((p) => { const n = new Set(p); n.has(k) ? n.delete(k) : n.add(k); return n; })} />
+                  <span className="flex-fill">
+                    {f?.recommended && <span className="text-warning me-1">★</span>}
+                    {f?.label ? <>{f.label} <span className="text-secondary small">({k})</span></> : k}
+                  </span>
+                  <span className="text-secondary small">{f?.type}</span>
+                </div>
+              );
+            })}
           </div>
-          {singleClass && colSettingsOpen && (
-            <div className="card-body border-top">
-              <div className="text-secondary small mb-2">
-                「{stLabel(singleClass)}」の直近データに実際に含まれるキー(受信payloadそのまま。変換・補完はしません)。
-                チェックした項目が一覧に追加列として表示されます。↑↓で表示順を変更できます。
-              </div>
-              <div className="d-flex flex-wrap gap-2">
-                {candidates.map((c) => {
-                  const idx = extraCols.indexOf(c.key);
-                  const checked = idx >= 0;
-                  return (
-                    <div key={c.key} className="d-flex align-items-center gap-1 border rounded px-2 py-1">
-                      <input type="checkbox" className="form-check-input m-0" checked={checked}
-                        onChange={() => setExtraCols(checked
-                          ? extraCols.filter((k) => k !== c.key)
-                          : [...extraCols, c.key])} />
-                      <span>{c.key}</span>
-                      <span className="text-secondary small">({c.count})</span>
-                      {checked && (
-                        <span className="d-flex gap-1 ms-1">
-                          <button type="button" className="btn btn-sm btn-link p-0" disabled={idx === 0}
-                            onClick={() => {
-                              const next = [...extraCols];
-                              [next[idx - 1], next[idx]] = [next[idx], next[idx - 1]];
-                              setExtraCols(next);
-                            }}>↑</button>
-                          <button type="button" className="btn btn-sm btn-link p-0" disabled={idx === extraCols.length - 1}
-                            onClick={() => {
-                              const next = [...extraCols];
-                              [next[idx + 1], next[idx]] = [next[idx], next[idx + 1]];
-                              setExtraCols(next);
-                            }}>↓</button>
-                        </span>
-                      )}
-                    </div>
-                  );
-                })}
-                {candidates.length === 0 && <span className="text-secondary small">候補キーがありません</span>}
-              </div>
+
+          <hr />
+          <div className="d-flex gap-1">
+            <input className="form-control form-control-sm" placeholder="列セット名を付けて保存"
+              value={name} onChange={(e) => setName(e.target.value)} />
+            <button className="btn btn-sm btn-outline-primary" disabled={!name.trim() || !selected.length}
+              onClick={() => onSaveAs(name.trim(), selected).then(() => setName(""))}>保存</button>
+          </div>
+          {Object.keys(sets).length > 0 && (
+            <div className="list-group list-group-flush mt-2">
+              {Object.entries(sets).map(([n, cols]) => (
+                <div key={n} className="list-group-item px-0 py-1 d-flex align-items-center">
+                  <button className="btn btn-sm btn-link p-0" onClick={() => { setChecked(new Set(cols)); setOrder([...cols, ...order.filter((k) => !cols.includes(k))]); }}>
+                    {n}<span className="text-secondary ms-1">({cols.length}列)</span>
+                  </button>
+                  <button className="btn btn-sm btn-ghost-danger ms-auto p-0" onClick={() => onDeleteSet(n)}>削除</button>
+                </div>
+              ))}
             </div>
           )}
-          <div className="table-responsive">
-          <table className="table table-vcenter table-sm card-table table-hover">
-            <thead><tr>
-              <th style={stickyStyle(0, true)}>時刻</th>
-              <th style={stickyStyle(1, true)}>ログソース</th>
-              <th style={stickyStyle(2, true)}>種別</th>
-              <th style={stickyStyle(3, true)}>重大度</th>
-              <th>ホスト/デバイス</th><th>ドメイン</th>
-              <th>送信元IP</th><th>ユーザー</th><th>イベント/サービス</th><th>対象</th><th>ステータス</th><th>メッセージ</th>
-              {singleClass && extraCols.map((k) => <th key={k} className="text-nowrap">{k}</th>)}
-              <th className="text-center">対応</th>
-              {showAdvice && <th>対応策</th>}
-            </tr></thead>
-            <tbody>
-              {data.items.map((e) => (
-                <tr key={e.id} style={{ cursor: "pointer" }} onClick={() => setSel(e.id)}>
-                  <td style={stickyStyle(0)} title={e.event_time ?? undefined}>{e.event_time ? fmtTime(e.event_time) : <span className="text-secondary">（時刻なし）</span>}</td>
-                  <td style={stickyStyle(1)} title={e.source_name ?? undefined}><a role="button" className="text-primary" onClick={(ev) => { stop(ev); e.source_name && onTax("source_name", e.source_name); }}>{dash(e.source_name)}</a></td>
-                  <td style={stickyStyle(2)}>{stLabel(e.source_type)}</td>
-                  <td style={stickyStyle(3)}><SevBadge s={e.event_severity} /></td>
-                  <td className="text-nowrap"><a role="button" className="text-reset" onClick={(ev) => { stop(ev); e.device_name && onTax("device_name", e.device_name); }}>{dash(e.device_name && formatHost(e.device_name, assetNames))}</a></td>
-                  <td className="text-nowrap"><a role="button" className="text-reset" onClick={(ev) => { stop(ev); e.url_domain && onTax("url_domain", e.url_domain); }}>{dash(e.url_domain)}</a></td>
-                  <td className="text-nowrap">
-                    <a role="button" className="text-primary" onClick={(ev) => { stop(ev); e.source_ip && onTax("source_ip", e.source_ip); }}>{dash(e.source_ip && formatHost(e.source_ip, assetNames))}</a>
-                    {e.source_country && (
-                      <a role="button" className="text-reset ms-1" title={e.source_country}
-                         onClick={(ev) => { stop(ev); onTax("source_country", e.source_country!); }}>
-                        {flagEmoji(e.source_country) ?? <span className="badge bg-secondary-lt">{e.source_country}</span>}
-                      </a>
-                    )}
-                    {e.source_as_org && (
-                      <a role="button" className="text-reset" onClick={(ev) => { stop(ev); onTax("source_as_org", e.source_as_org!); }}>
-                        <br /><small className="text-secondary">{e.source_as_org}{e.source_asn ? ` (AS${e.source_asn})` : ""}</small>
-                      </a>
-                    )}
-                  </td>
-                  <td className="text-nowrap">{dash(e.actor_user)}</td>
-                  <td className="text-nowrap">
-                    {dash(e.event_action)}
-                    {e.service_name && <><br /><small className="text-secondary">{e.service_name}</small></>}
-                  </td>
-                  <td className="text-truncate" style={{ maxWidth: 220 }}>{e.url_path || <span className="text-secondary">-</span>}</td>
-                  <td>{e.http_status_code ? <span className="badge bg-azure-lt">{e.http_status_code}</span> : <Badge r={e.event_result} />}</td>
-                  <td className="text-truncate" style={{ maxWidth: 320 }}>{dash(e.message)}</td>
-                  {singleClass && extraCols.map((k) => (
-                    <td key={k} className="text-truncate" style={{ maxWidth: 200 }}>{dash(fmtPayloadValue(e.payload?.[k]))}</td>
-                  ))}
-                  <td className="text-center" onClick={stop}>
-                    <input type="checkbox" className="form-check-input" checked={e.resolved}
-                      title={e.resolved ? "対応済み" : "未対応"}
-                      onChange={(ev) => toggleResolved(e.id, ev.target.checked)} />
-                  </td>
-                  {showAdvice && <td className="text-nowrap"><AdviceCell e={e} onPick={(k, v) => onTax(k, v)} /></td>}
-                </tr>
-              ))}
-              {data.items.length === 0 && <tr><td colSpan={(showAdvice ? 14 : 13) + (singleClass ? extraCols.length : 0)} className="text-secondary text-center py-4">該当なし</td></tr>}
-            </tbody>
-          </table>
-          </div>
-          <div className="card-footer d-flex align-items-center flex-wrap gap-2">
-            <span className="text-secondary">{from.toLocaleString()}–{to.toLocaleString()} / {data.total.toLocaleString()} 件（{currentPage} / {totalPages} ページ）</span>
-            <div className="ms-auto d-flex align-items-center gap-2">
-              <span className="text-secondary small">表示件数</span>
-              <select className="form-select form-select-sm w-auto" value={pageSize}
-                onChange={(e) => { setPageSize(Number(e.target.value)); setOffset(0); }}>
-                <option value={30}>30</option><option value={50}>50</option>
-                <option value={100}>100</option><option value={200}>200</option>
-              </select>
-              <ul className="pagination pagination-sm m-0">
-                <li className={`page-item ${!hasPrev ? "disabled" : ""}`}>
-                  <button type="button" className="page-link" disabled={!hasPrev} onClick={() => goToPage(1)}>«</button>
-                </li>
-                <li className={`page-item ${!hasPrev ? "disabled" : ""}`}>
-                  <button type="button" className="page-link" disabled={!hasPrev} onClick={() => goToPage(currentPage - 1)}>前</button>
-                </li>
-                {pageNumbers(currentPage, totalPages).map((p, i) =>
-                  p === "..." ? (
-                    <li key={`ellipsis-${i}`} className="page-item disabled"><span className="page-link">…</span></li>
-                  ) : (
-                    <li key={p} className={`page-item ${p === currentPage ? "active" : ""}`}>
-                      <button type="button" className="page-link" onClick={() => goToPage(p)}>{p}</button>
-                    </li>
-                  )
-                )}
-                <li className={`page-item ${!hasNext ? "disabled" : ""}`}>
-                  <button type="button" className="page-link" disabled={!hasNext} onClick={() => goToPage(currentPage + 1)}>次</button>
-                </li>
-                <li className={`page-item ${!hasNext ? "disabled" : ""}`}>
-                  <button type="button" className="page-link" disabled={!hasNext} onClick={() => goToPage(totalPages)}>»</button>
-                </li>
-              </ul>
+        </div>
+        <div className="card-footer d-flex justify-content-between">
+          <button className="btn btn-outline-secondary" onClick={() => { onReset(); onClose(); }}>既定に戻す</button>
+          <button className="btn btn-primary" onClick={() => { onApply(selected); onClose(); }}>適用</button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+/** Classの表示/非表示・並び順・クイックボタン（既定はクイックボタン0件＝何も出さない）。 */
+function ClassesPanel({ classes, onSave, onClose }: {
+  classes: EventsClass[];
+  onSave: (hidden: string[], pinned: string[], order: string[]) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [order, setOrder] = useState(classes.map((c) => c.class_value));
+  const [hidden, setHidden] = useState(new Set(classes.filter((c) => c.hidden).map((c) => c.class_value)));
+  const [pinned, setPinned] = useState(new Set(classes.filter((c) => c.pinned).map((c) => c.class_value)));
+  const byKey = new Map(classes.map((c) => [c.class_value, c]));
+  const move = (i: number, d: -1 | 1) => setOrder((p) => {
+    const n = [...p], j = i + d;
+    if (j < 0 || j >= n.length) return p;
+    [n[i], n[j]] = [n[j], n[i]]; return n;
+  });
+  return (
+    <>
+      <div className="modal-backdrop show" style={{ position: "fixed", inset: 0, zIndex: 1040 }} onClick={onClose} />
+      <div className="modal d-block" style={{ position: "fixed", inset: 0, zIndex: 1050, overflowY: "auto" }}>
+        <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-content">
+            <div className="modal-header">
+              <h5 className="modal-title">Class表示設定</h5>
+              <button className="btn-close" onClick={onClose} />
+            </div>
+            <div className="modal-body">
+              <p className="text-secondary small">
+                Class名は受信JSONの <code>class</code> VALUE です（固定マスターは持ちません）。
+                「表示」を外すとドロップダウンから消え、「クイック」に付けると検索バーの下にボタンが出ます。
+              </p>
+              <div className="list-group" style={{ maxHeight: 380, overflowY: "auto" }}>
+                {order.map((c, i) => (
+                  <div key={c} className="list-group-item d-flex align-items-center gap-2">
+                    <div className="form-check mb-0">
+                      <input className="form-check-input" type="checkbox" checked={!hidden.has(c)}
+                        onChange={() => setHidden((p) => { const n = new Set(p); n.has(c) ? n.delete(c) : n.add(c); return n; })} />
+                      <label className="form-check-label">{c} <span className="text-secondary small">({byKey.get(c)?.count ?? 0})</span></label>
+                    </div>
+                    <div className="form-check mb-0 ms-auto">
+                      <input className="form-check-input" type="checkbox" checked={pinned.has(c)} disabled={hidden.has(c)}
+                        onChange={() => setPinned((p) => { const n = new Set(p); n.has(c) ? n.delete(c) : n.add(c); return n; })} />
+                      <label className="form-check-label small">クイック</label>
+                    </div>
+                    <span className="btn-group btn-group-sm">
+                      <button className="btn btn-sm" disabled={i === 0} onClick={() => move(i, -1)}>↑</button>
+                      <button className="btn btn-sm" disabled={i === order.length - 1} onClick={() => move(i, 1)}>↓</button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn" onClick={onClose}>キャンセル</button>
+              <button className="btn btn-primary"
+                onClick={() => onSave([...hidden], [...pinned].filter((p) => !hidden.has(p)), order).then(onClose)}>保存</button>
             </div>
           </div>
         </div>
       </div>
-
-      {sel != null && <EventDetail id={sel} onClose={() => setSel(null)} onPivot={onTax} onEntity={onEntity} onOpenCase={onOpenCase} onOpenIncident={onOpenIncident} />}
-    </div>
+    </>
   );
 }

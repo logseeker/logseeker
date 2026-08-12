@@ -34,6 +34,7 @@ import { Audit } from "./components/Audit";
 import { Login } from "./components/Login";
 import { Placeholder } from "./components/Placeholder";
 import { api, setUnauthorizedHandler, tokenStore } from "./api";
+import type { EventQuery } from "./api";
 import { fieldLabel } from "./labels";
 import type { AuthStatus, FilterState, Role, Screen } from "./types";
 import "./styles.css";
@@ -49,7 +50,7 @@ const EMPTY: FilterState = { tax: {} };
 
 // 絞り込み(filter)を実際に使う画面だけ。ここ以外（ダッシュボード/マッピング/管理/
 // ライセンス等）へは絞り込みを持ち込まない＝URLにも載せず、チップも出さない。
-const FILTER_SCREENS = new Set<Screen>(["events", "sources", "hosts", "fields", "rules"]);
+const FILTER_SCREENS = new Set<Screen>(["sources", "hosts", "fields", "rules"]);
 
 // 画面＋絞り込みを URL に出し入れ（ブラウザの戻る/進むを効かせる）
 // 絞り込みを使わない画面では filter を URL に載せない（無関係な画面に値を持ち回らない）。
@@ -110,11 +111,16 @@ const MENU: { key: Screen; label: string; Icon: typeof IconList; ready: boolean 
 ];
 
 const INIT = parseUrl(window.location.search);
+// EventDetailの「新規タブで開く」から来た場合の初期表示イベント（?event=<id>）。
+// 一覧の絞り込み条件は引き継がず、そのイベント単体の詳細だけを開く。
+const INIT_EVENT_ID = (() => {
+  const v = new URLSearchParams(window.location.search).get("event");
+  return v ? Number(v) : undefined;
+})();
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>(INIT.screen);
   const [filter, setFilter] = useState<FilterState>(INIT.filter);
-  const [search, setSearch] = useState(INIT.filter.q ?? "");
   const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [authLoaded, setAuthLoaded] = useState(false);
   const changelog = useChangelog(auth);
@@ -155,7 +161,6 @@ export default function App() {
       const parsed = parseUrl(window.location.search);
       setScreen(parsed.screen);
       setFilter(parsed.filter);
-      setSearch(parsed.filter.q ?? "");
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
@@ -170,9 +175,6 @@ export default function App() {
       return { ...p, tax };
     });
   };
-  // Events画面の上部フィルタバーは「検索」ボタンを押すまで下書き(draft)のまま反映しない。
-  // ボタン押下時にまとめてこの関数で確定させる（毎回のドロップダウン変更で重いクエリが飛ぶのを防ぐ）
-  const onApplyFilters = (next: FilterState) => setFilter(next);
 
   // イベント一覧は455,503件規模で期間指定なしの全表スキャンが重いため、画面表示時に
   // 期間が未指定なら「直近24時間」をデフォルトで自動セットする（期間UIの開始日/終了日欄に
@@ -187,11 +189,18 @@ export default function App() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen]);
-  const onAttention = (b: boolean) => setFilter((p) => ({ ...p, attention: b }));
   const onThreat = (v: string) => setFilter((p) => ({ ...p, threat: v || undefined }));
   // ダッシュボード/ルール/エンティティ等から Events へ。現在の絞り込み文脈（logw等）は維持して追加。
   // ルール等は同じ絞り込みに追従して算出されるので、追加しても0件にならない。
   const drill = (k: string, v: string) => { onTax(k, v); setScreen("events"); };
+  // Dashboardの代表値グループ（ドメイン/ホスト等）をクリックした場合の専用ドリルダウン。
+  // onTax(=tax絞り込み)とは別チャンネル：集計時と同じ優先順位のOR条件でEventsを絞り込む
+  // ため、通常のtaxキー1本の絞り込みとは意味が異なる（normalize-mapping.md §7.1）。
+  const [eventsQuery, setEventsQuery] = useState<EventQuery | undefined>();
+  const toEvents = (q: EventQuery) => { setEventsQuery({ ...q, _n: Date.now() } as EventQuery); setScreen("events"); };
+  const drillRep = (value: string) => toEvents({ rep_value: value });
+  const drillField = (field: string, value: string) => toEvents({ field, value });
+  const drillClass = (class_value: string) => toEvents({ class_value });
   // イベント等から「エンティティ調査」画面へ（IP/ユーザーの攻撃像を時系列で見る）
   const [entityInit, setEntityInit] = useState<{ type: string; value: string; nonce: number } | undefined>();
   const navEntity = (type: string, value: string) => {
@@ -229,18 +238,18 @@ export default function App() {
   // 絞り込みチップ（絞り込みを使う画面でのみ表示・解除できる）
   const chips: { label: string; clear: () => void }[] = [];
   Object.entries(filter.tax).forEach(([k, v]) => chips.push({ label: `${fieldLabel(k)}: ${v}`, clear: () => onTax(k, v) }));
-  if (filter.q) chips.push({ label: `検索 "${filter.q}"`, clear: () => { setSearch(""); setFilter((p) => ({ ...p, q: undefined })); } });
+  if (filter.q) chips.push({ label: `検索 "${filter.q}"`, clear: () => setFilter((p) => ({ ...p, q: undefined })) });
   if (filter.start || filter.end)
     chips.push({ label: `期間 ${filter.start?.slice(0, 10) ?? "…"}〜${filter.end?.slice(0, 10) ?? "…"}`, clear: () => setFilter((p) => ({ ...p, start: undefined, end: undefined })) });
   if (filter.threat) chips.push({ label: `脅威: ${filter.threat}`, clear: () => onThreat("") });
-  const clearAll = () => { setFilter(EMPTY); setSearch(""); };
+  const clearAll = () => setFilter(EMPTY);
 
   const body = () => {
     switch (screen) {
-      case "dashboard": return <Dashboard onPick={drill} changelog={changelog} onNavChangelog={() => setScreen("changelog")} />;
+      case "dashboard": return <Dashboard onPickRep={drillRep} onPickField={drillField} onPickClass={drillClass} changelog={changelog} onNavChangelog={() => setScreen("changelog")} />;
       case "changelog": return <Changelog />;
-      case "events": return <Events filter={filter} search={search} setSearch={setSearch}
-        onTax={onTax} onApplyFilters={onApplyFilters} onAttention={onAttention} onThreat={onThreat} onEntity={navEntity} onNav={setScreen} onOpenCase={navCase} onOpenIncident={navIncidentDetail} auth={auth ?? undefined} />;
+      case "events": return <Events onEntity={navEntity} onNav={setScreen} onOpenCase={navCase}
+        onOpenIncident={navIncidentDetail} auth={auth ?? undefined} initialEventId={INIT_EVENT_ID} initialQuery={eventsQuery} />;
       case "sources": return <Sources filter={filter} onPick={drill} />;
       case "hosts": return <HostsDomains filter={filter} onPick={drill} />;
       case "fields": return <Fields filter={filter} />;

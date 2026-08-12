@@ -1,23 +1,24 @@
 """検索・集計・ダッシュボードAPI（PROJECT.md §11）。events と normalized_events を結合して扱う。"""
 import ipaddress
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, Query, Request, Response
-from sqlalchemy import String, and_, case, cast, func, nulls_last, or_, select, text
+from sqlalchemy import String, case, cast, func, nulls_last, or_, select, text
 from sqlalchemy.orm import Session
 
 from .auth import get_current_user, require_editor, require_login, require_sysadmin
 from .config import settings
 from .db import get_db
 from .incident_status import can_transition
-from .models import Annotation, Asset, Case, CaseComment, CaseEvent, CustomRule, DeadLetter, Event, EventEntity, IOC
+from .models import Asset, Case, CaseComment, CaseEvent, CustomRule, DeadLetter, Event, EventEntity, IOC
 from .models import Incident, IncidentAuditLog, IncidentComment, IncidentResponseAction, IncidentResponseActionType
 from .models import IncidentStatus, IncidentStatusHistory
-from .models import IocFeed, License, Setting, User, UserSettings
+from .models import IocFeed, Setting, User, UserSettings
 from .models import NormalizedEvent as N
-from .schema import (AnnotationCreate, AssetCreate, AssetDisplayNameUpdate, AssetUpdate, CustomRuleCreate,
-                     CustomRuleUpdate, DismissedRelease, EventsColumnsUpdate, FeedUpdate,
+from .schema import (AssetCreate, AssetDisplayNameUpdate, AssetUpdate, CustomRuleCreate,
+                     CustomRuleUpdate, DismissedRelease, FeedUpdate,
                      LicenseApply, NotificationConfig, SilenceSettings, SyncSettings)
+
 from .incident_schema import (CaseCommentCreate, CaseCreate, CaseEventAdd, CaseEventNoteUpdate,
                               CaseTitleUpdate, EventResolvedUpdate, IncidentAssigneeUpdate,
                               IncidentCommentCreate, IncidentResponseActionCreate, IncidentResponseActionTypeCreate,
@@ -53,45 +54,8 @@ TAX_COLS = {
 CONTROL = {"q", "start", "end", "limit", "offset", "interval", "groupby", "field", "top", "attention", "threat", "format"}
 
 
-def _threat_clause(threat: str):
-    """脅威フィルタ → where条件。攻撃/危ない系イベントだけに絞る。"""
-    ioc_ids = select(EventEntity.event_id).join(
-        IOC, (IOC.value == EventEntity.entity_value) & (IOC.indicator_type == EventEntity.entity_type))
-    from .rules import SENSITIVE_PATHS
-    sens = or_(*[N.url_path.ilike(f"%{p}%") for p in SENSITIVE_PATHS])
-    web4xx = and_(N.event_category == "web", N.event_result == "failure")
-    authfail = and_(N.event_category.in_(["authentication", "security"]), N.event_result == "failure")
-    root_ssh = and_(N.event_category == "authentication", N.event_result == "failure", N.actor_user == "root")
-    if threat == "ioc":
-        return Event.id.in_(ioc_ids)
-    if threat == "sensitive_path":
-        return sens
-    if threat == "web_scan":
-        return web4xx
-    if threat == "auth_fail":
-        return authfail
-    if threat == "root_ssh":
-        return root_ssh
-    if threat == "any":
-        return or_(Event.id.in_(ioc_ids), sens, web4xx, authfail)
-    return None
-
 ATTENTION_KEYWORDS = ["fail", "error", "deny", "denied", "invalid", "unauthor", "refused",
                       "reject", "lock", "warn", "attack", "violat", "critical", "alert", "404"]
-
-# イベント一覧（/api/events, /api/events/export）専用のデフォルト期間。
-# 期間未指定のまま455,503件規模の全表スキャンが走っていたため、期間指定なし時は
-# 直近24時間に絞る（フロント側でも同じデフォルトを画面表示するが、APIを直接叩く
-# 経路の保護としてサーバー側にも入れる）。他エンドポイント（/api/sources 等）が使う
-# 共有の filters() には手を入れず、イベント一覧のみに限定する。
-EVENTS_DEFAULT_PERIOD_HOURS = 24
-
-
-def _with_events_default_period(f: dict) -> dict:
-    if f["start"] is None and f["end"] is None:
-        end = datetime.now(timezone.utc)
-        f = {**f, "start": end - timedelta(hours=EVENTS_DEFAULT_PERIOD_HOURS), "end": end}
-    return f
 
 
 def _attention_clause():
@@ -114,7 +78,11 @@ def is_event_attention(db: Session, event_id: int) -> bool:
     stmt = _joined().where(Event.id == event_id, _attention_clause())
     return db.execute(stmt).first() is not None
 
-
+# イベント一覧（/api/events, /api/events/export）専用のデフォルト期間。
+# 期間未指定のまま455,503件規模の全表スキャンが走っていたため、期間指定なし時は
+# 直近24時間に絞る（フロント側でも同じデフォルトを画面表示するが、APIを直接叩く
+# 経路の保護としてサーバー側にも入れる）。他エンドポイント（/api/sources 等）が使う
+# 共有の filters() には手を入れず、イベント一覧のみに限定する。
 def filters(request: Request, db: Session = Depends(get_db), q: str | None = None,
             start: datetime | None = None, end: datetime | None = None):
     tax, payload_kv = [], []
@@ -185,153 +153,6 @@ def _row(ev: Event, n: N) -> dict:
     }
 
 
-@router.get("/events")
-def list_events(db: Session = Depends(get_db), f: dict = Depends(filters), attention: bool = False,
-                threat: str | None = None,
-                limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0)):
-    f = _with_events_default_period(f)
-    stmt = apply_filters(_joined(), f)
-    if attention:
-        stmt = stmt.where(_attention_clause())
-    if threat:
-        clause = _threat_clause(threat)
-        if clause is not None:
-            stmt = stmt.where(clause)
-    total = db.scalar(select(func.count()).select_from(stmt.subquery()))
-    stmt = stmt.order_by(nulls_last(N.event_time.desc()), Event.id.desc()).limit(limit).offset(offset)
-    items = [_row(ev, n) for ev, n in db.execute(stmt).all()]
-    return {"total": total, "limit": limit, "offset": offset, "items": items}
-
-
-EXPORT_MAX_ROWS = 20000  # 一括ダウンロードの上限（メモリ/応答時間の保護）
-
-
-@router.get("/events/export")
-def export_events(db: Session = Depends(get_db), f: dict = Depends(filters),
-                  attention: bool = False, threat: str | None = None,
-                  format: str = Query("csv", pattern="^(csv|json)$"),
-                  actor=Depends(require_login)):
-    """現在の絞り込みに従ってイベントをCSV/JSONで一括ダウンロード（最大 EXPORT_MAX_ROWS 件）。"""
-    f = _with_events_default_period(f)
-    stmt = apply_filters(_joined(), f)
-    if attention:
-        stmt = stmt.where(_attention_clause())
-    if threat:
-        clause = _threat_clause(threat)
-        if clause is not None:
-            stmt = stmt.where(clause)
-    stmt = stmt.order_by(nulls_last(N.event_time.desc()), Event.id.desc()).limit(EXPORT_MAX_ROWS)
-    items = [_row(ev, n) for ev, n in db.execute(stmt).all()]
-
-    from .auth import audit
-    audit(db, action="events.export", user=actor, detail=f"format={format}, rows={len(items)}")
-
-    if format == "json":
-        import json
-        data = json.dumps(items, ensure_ascii=False, indent=2)
-        return Response(content=data, media_type="application/json; charset=utf-8",
-                        headers={"Content-Disposition": "attachment; filename=logseeker_events.json"})
-
-    import csv
-    import io
-    buf = io.StringIO()
-    cols = ["id", "event_time", "source_name", "source_type", "device_name", "url_domain",
-            "source_ip", "source_country", "source_asn", "source_as_org", "actor_user",
-            "event_action", "event_result",
-            "event_severity", "service_name", "url_path", "http_status_code", "message"]
-    w = csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
-    w.writeheader()
-    for it in items:
-        w.writerow(it)
-    data = "﻿" + buf.getvalue()
-    return Response(content=data, media_type="text/csv; charset=utf-8",
-                    headers={"Content-Disposition": "attachment; filename=logseeker_events.csv"})
-
-
-# Events列設定（フェーズ3）。/events/{event_id} より前に置く（"columns" がevent_idとして
-# 誤マッチしないよう、固定パスは動的パスより先に登録する。/events/export と同じ理由）。
-EVENTS_COLUMNS_SAMPLE = 300  # 候補キー集計に使う直近件数（重い全表集計を避ける）
-
-
-@router.get("/events/columns/candidates")
-def events_column_candidates(source_type: str, db: Session = Depends(get_db)):
-    """指定Classの直近イベントに実際に存在するpayloadキーを頻度順に返す（列選択の候補案内用）。
-    taxonomy.mdの推奨KEYではなく実データを使う（送信元はまだ標準KEY名に追従していないため）。"""
-    rows = db.execute(
-        select(Event.payload).where(Event.source_type == source_type)
-        .order_by(Event.id.desc()).limit(EVENTS_COLUMNS_SAMPLE)
-    ).scalars().all()
-    counts: dict[str, int] = {}
-    for p in rows:
-        if isinstance(p, dict):
-            for k in p.keys():
-                counts[k] = counts.get(k, 0) + 1
-    keys = sorted(counts.keys(), key=lambda k: (-counts[k], k))
-    return {"source_type": source_type, "sampled": len(rows),
-            "keys": [{"key": k, "count": counts[k]} for k in keys]}
-
-
-@router.get("/events/columns")
-def get_events_columns(source_type: str, user: User | None = Depends(get_current_user), db: Session = Depends(get_db)):
-    """ログイン中ユーザーが保存した、指定Classの追加列設定（表示順）。未ログインならnull
-    （フロント側はその場合localStorageにフォールバックする。changelog/dismissedと同じ方式）。"""
-    if not user:
-        return {"columns": None}
-    row = db.get(UserSettings, user.id)
-    if not row or not row.events_columns:
-        return {"columns": None}
-    import json
-    cfg = json.loads(row.events_columns)
-    return {"columns": cfg.get(source_type)}
-
-
-@router.put("/events/columns")
-def set_events_columns(body: EventsColumnsUpdate, user: User | None = Depends(get_current_user),
-                       db: Session = Depends(get_db)):
-    if not user:
-        return {"ok": True}  # 未ログイン時はDBに保存しない（フロントはlocalStorageを使う）
-    import json
-    row = db.get(UserSettings, user.id)
-    if not row:
-        row = UserSettings(user_id=user.id)
-        db.add(row)
-    cfg = json.loads(row.events_columns) if row.events_columns else {}
-    cfg[body.source_type] = body.columns
-    row.events_columns = json.dumps(cfg, ensure_ascii=False)
-    db.commit()
-    return {"ok": True}
-
-
-@router.get("/events/{event_id}")
-def event_detail(event_id: int, db: Session = Depends(get_db)):
-    row = db.execute(_joined().where(Event.id == event_id)).first()
-    if not row:
-        return {"error": "not found"}
-    ev, n = row
-    norm = {c: getattr(n, c) for c in N.__table__.columns.keys()}
-    for k, v in norm.items():
-        if isinstance(v, datetime):
-            norm[k] = v.isoformat()
-    link = db.execute(
-        select(CaseEvent.case_id, Case.title)
-        .join(Case, Case.id == CaseEvent.case_id)
-        .where(CaseEvent.event_id == event_id)
-    ).first()
-    incident = db.execute(select(Incident.id, Incident.title).where(Incident.event_id == event_id)).first()
-    return {
-        "id": ev.id, "source": ev.source, "source_type": ev.source_type,
-        "ingest_channel": ev.ingest_channel, "receiver_ip": ev.receiver_ip,
-        "received_at": ev.received_at.isoformat() if ev.received_at else None,
-        "parser_name": ev.parser_name, "parser_version": ev.parser_version,
-        "parse_status": ev.parse_status, "parse_error": ev.parse_error,
-        "payload": ev.payload, "normalized": norm,
-        "resolved": ev.resolved,
-        "is_attention": is_event_attention(db, event_id),
-        "linked_case": {"id": link[0], "title": link[1]} if link else None,
-        "linked_incident": {"id": incident[0], "title": incident[1]} if incident else None,
-    }
-
-
 @router.put("/events/{event_id}/resolved")
 def update_event_resolved(event_id: int, body: EventResolvedUpdate, db: Session = Depends(get_db),
                           _a=Depends(require_login)):
@@ -376,46 +197,10 @@ def create_incident_from_event(event_id: int, db: Session = Depends(get_db), use
     return {"id": inc.id}
 
 
-@router.get("/events/{event_id}/payload")
-def event_payload(event_id: int, db: Session = Depends(get_db)):
-    ev = db.get(Event, event_id)
-    return ev.payload if ev else {"error": "not found"}
-
-
 @router.get("/sources")
 def sources(db: Session = Depends(get_db), f: dict = Depends(filters)):
     stmt = apply_filters(_agg(Event.source, func.count()).group_by(Event.source), f)
     return [{"source": s, "count": c} for s, c in db.execute(stmt.order_by(func.count().desc())).all()]
-
-
-@router.get("/source-types")
-def source_types(db: Session = Depends(get_db), f: dict = Depends(filters)):
-    stmt = apply_filters(_agg(Event.source_type, func.count()).group_by(Event.source_type), f)
-    return [{"source_type": s, "count": c} for s, c in db.execute(stmt.order_by(func.count().desc())).all()]
-
-
-@router.get("/timeline")
-def timeline(db: Session = Depends(get_db), f: dict = Depends(filters),
-             interval: str = Query("day", pattern="^(minute|hour|day|month|year)$"),
-             groupby: str | None = None):
-    bucket = func.date_trunc(interval, N.event_time)
-    if groupby and groupby in TAX_COLS:
-        stmt = apply_filters(_agg(bucket, TAX_COLS[groupby], func.count())
-                             .where(N.event_time.isnot(None)).group_by(text("1"), text("2")), f).order_by(text("1"))
-        rows = [(b, g, c) for b, g, c in db.execute(stmt).all()]
-    else:
-        stmt = apply_filters(_agg(bucket, func.count())
-                             .where(N.event_time.isnot(None)).group_by(text("1")), f).order_by(text("1"))
-        rows = [(b, "count", c) for b, c in db.execute(stmt).all()]
-    buckets, series = [], {}
-    for b, g, c in rows:
-        key = b.isoformat()
-        if key not in series:
-            series[key] = {}
-            buckets.append(key)
-        series[key][g if g is not None else "(none)"] = c
-    names = sorted({g for v in series.values() for g in v})
-    return {"buckets": buckets, "series": {nm: [series.get(b, {}).get(nm, 0) for b in buckets] for nm in names}}
 
 
 @router.get("/groupby")
@@ -441,36 +226,6 @@ def fields(db: Session = Depends(get_db), f: dict = Depends(filters), top: int =
     out.sort(key=lambda x: (x["distinct"] or 0))
     return out
 
-
-@router.get("/dashboard/summary")
-def dashboard_summary(db: Session = Depends(get_db), f: dict = Depends(filters)):
-    """ログソース/ホスト/ドメイン中心の概要（§6,§17）。source_type は主役にしない。"""
-    def grp(col, limit=12):
-        stmt = apply_filters(_agg(col, func.count()).where(col.isnot(None)).group_by(text("1")), f)
-        return [{"value": v, "count": c} for v, c in db.execute(stmt.order_by(func.count().desc()).limit(limit)).all()]
-
-    def ndistinct(col):
-        return db.scalar(apply_filters(_agg(func.count(func.distinct(col))).where(col.isnot(None)), f)) or 0
-
-    total = db.scalar(apply_filters(_agg(func.count()), f))
-    since = datetime.now().astimezone() - timedelta(hours=24)
-    recent = db.scalar(apply_filters(_agg(func.count()).where(N.event_time >= since), f))
-    return {
-        "total": total,
-        "recent_24h": recent,
-        "ingest_failed": db.scalar(apply_filters(_agg(func.count()).where(Event.parse_status == "failed"), f)),
-        "dead_letters": db.scalar(select(func.count()).select_from(DeadLetter)),
-        "source_count": ndistinct(N.source_name),
-        "host_domain_count": ndistinct(N.device_name) + ndistinct(N.url_domain),
-        "by_source_name": grp(N.source_name),
-        "by_device": grp(N.device_name),
-        "by_domain": grp(N.url_domain),
-        "top_source_ip": grp(N.source_ip),
-        "top_actor_user": grp(N.actor_user),
-        "top_url_path": grp(N.url_path),
-        "by_http_status": grp(N.http_status_code),
-        "by_event_action": grp(N.event_action),
-    }
 
 
 # ============================ MVP3: エンティティ & 相関 ============================
@@ -1153,24 +908,6 @@ def set_response_action_type_visibility(type_id: int, body: IncidentResponseActi
                     before=f"{t.name}: {before}", after=f"{t.name}: {body.is_visible}", user=user)
     db.commit()
     return _response_action_type_row(t)
-
-
-@router.get("/events/{event_id}/annotations")
-def list_annotations(event_id: int, db: Session = Depends(get_db)):
-    rows = db.execute(select(Annotation).where(Annotation.event_id == event_id)
-                      .order_by(Annotation.created_at.desc())).scalars().all()
-    return [{"id": a.id, "comment": a.comment, "tags": a.tags, "created_by": a.created_by,
-             "created_at": a.created_at.isoformat() if a.created_at else None} for a in rows]
-
-
-@router.post("/events/{event_id}/annotations")
-def add_annotation(event_id: int, body: AnnotationCreate, db: Session = Depends(get_db),
-                   actor=Depends(require_editor)):
-    created_by = body.created_by or getattr(actor, "username", None)
-    a = Annotation(event_id=event_id, comment=body.comment, tags=body.tags, created_by=created_by)
-    db.add(a)
-    db.commit()
-    return {"id": a.id}
 
 
 @router.get("/rules")

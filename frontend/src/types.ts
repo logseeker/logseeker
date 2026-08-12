@@ -27,52 +27,81 @@ export interface EventRow {
   payload: Record<string, unknown>;
 }
 
-// Events一覧のClass別追加列（payload生キー）機能で使う型。
-export interface EventsColumnCandidate { key: string; count: number; }
-export interface EventsColumnCandidates { source_type: string; sampled: number; keys: EventsColumnCandidate[]; }
+export interface Timeline { buckets: string[]; series: Record<string, number[]>; }
+export interface Count { value: string | null; count: number; }
+export interface FieldInfo { field: string; distinct: number; values: Count[]; }
 
-export interface EventsResponse {
-  total: number; limit: number; offset: number; items: EventRow[];
+// ============================ Events / Dashboard（v12 A案・新実装）============================
+// 「受信フィールド」＝ payload内のKEYのうち docs/taxonomy.md のTaxonomy KEYと完全一致するもの
+// だけ（v12 §4.1.1）。列の選択肢は実データではなくTaxonomy（762KEY）が決める。
+
+export interface TaxonomyField {
+  key: string; type: string; label: string | null;
+  recommended: boolean;    // そのClassの参考例に載っているKEYか（並び順のヒント。制限ではない）
+}
+export interface EventsFields {
+  class_value: string | null; total: number; keys: TaxonomyField[]; default_columns: string[];
 }
 
-export interface EventDetail {
+// 列セット＝名前を付けて保存した表示列のプリセット
+export interface ColumnSets {
+  class_value: string | null;
+  columns: string[] | null;          // 現在の表示列（未保存ならnull→default_columnsを使う）
+  default_columns: string[];
+  sets: Record<string, string[]>;    // 名前 -> 列
+}
+
+export interface EventsClass {
+  class_value: string; count: number; hidden: boolean; pinned: boolean; has_hints: boolean;
+}
+export interface EventsClassesResponse { classes: EventsClass[]; }
+
+export interface EventSearchRow {
   id: number;
-  source: string | null;
-  source_type: string | null;
-  ingest_channel: string;
-  receiver_ip: string | null;
   received_at: string | null;
-  parser_name: string | null;
-  parser_version: string | null;
-  parse_status: string;
-  parse_error: string | null;
-  payload: Record<string, unknown>;
-  normalized: Record<string, unknown>;
+  class_value: string | null;
+  source: string | null;
   resolved: boolean;
+  values: Record<string, unknown>;   // 表示中のTaxonomy KEYの値だけ
+}
+export interface EventsSearchResponse {
+  total: number; limit: number; offset: number; columns: string[]; items: EventSearchRow[];
+}
+
+export interface HistogramBucket { t: string; count: number }
+export interface HistogramResponse {
+  start: string; end: string; width_seconds: number; buckets: HistogramBucket[];
+}
+
+export interface FacetResponse { field: string; label?: string | null; values: Count[] }
+
+export interface EventField { key: string; value: unknown; label: string | null; type: string | null }
+export interface EventDetailData {
+  id: number;
+  class_value: string | null;
+  source: string | null;
+  received_at: string | null;
+  ingest_channel: string;
+  resolved: boolean;
+  fields: EventField[];              // Taxonomy KEY完全一致分のみ
+  taxonomy_outside_count: number;    // Taxonomy外KEYは件数だけ（中身は返さない。v12 §10.3）
   is_attention: boolean;
   linked_case: { id: number; title: string } | null;
   linked_incident: { id: number; title: string } | null;
 }
 
-export interface Timeline { buckets: string[]; series: Record<string, number[]>; }
-export interface Count { value: string | null; count: number; }
-export interface FieldInfo { field: string; distinct: number; values: Count[]; }
-
-export interface Summary {
+export interface DashboardBreakdown { field: string; label: string | null; values: Count[] }
+export interface DashboardOverview {
   total: number;
-  recent_24h: number;
-  ingest_failed: number;
-  dead_letters: number;
+  period: { start: string; end: string };
+  by_source: Count[];
   source_count: number;
   host_domain_count: number;
-  by_source_name: Count[];
-  by_device: Count[];
-  by_domain: Count[];
-  top_source_ip: Count[];
-  top_actor_user: Count[];
-  top_url_path: Count[];
-  by_http_status: Count[];
-  by_event_action: Count[];
+  ingest_failed: number;
+  by_class: Count[];
+  domain_host: { priority: string[]; representative: Count[]; extra: Record<string, Count[]> };
+  breakdowns: DashboardBreakdown[];  // 集計軸は利用者が選ぶ（固定しない）
+  empty_axes: string[];             // 選択中だが受信値が無い軸（カードを出さない）
 }
 
 export interface FilterState {
@@ -155,10 +184,6 @@ export interface IncidentActivityItem {
   id: string; type: string; body: string | null;
   before_value: string | null; after_value: string | null;
   actor_name: string | null; created_at: string | null;
-}
-export interface Annotation {
-  id: number; comment: string | null; tags: string | null;
-  created_by: string | null; created_at: string | null;
 }
 export interface IngestStatus {
   total: number; dead_letters: number; tcp_port: number | null;
@@ -315,4 +340,10 @@ export interface ReleaseItem {
   published_at: string | null;
   html_url: string;
   prerelease: boolean;
+}
+
+export interface DashboardTimeline {
+  interval: "hour" | "day";
+  date: string;
+  buckets: { t: string; count: number }[];
 }

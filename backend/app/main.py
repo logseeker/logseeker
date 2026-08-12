@@ -10,6 +10,7 @@ from sqlalchemy.exc import OperationalError
 
 from . import models  # noqa: F401  (テーブル定義をBaseに登録するため)
 from .api import router as api_router
+from .events_api import router as events_router
 from .auth_api import router as auth_router
 from .config import settings
 from .db import Base, engine
@@ -207,4 +208,5 @@ async def enforce_ip_restrict(request: Request, call_next):
 
 app.include_router(ingest_router)
 app.include_router(auth_router)
+app.include_router(events_router)   # Events/Dashboard（v12 A案・新実装）
 app.include_router(api_router)
