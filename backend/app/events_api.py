@@ -596,9 +596,7 @@ def overview(qy: EventQuery = Depends(event_query), db: Session = Depends(get_db
     **どのKEYを集計するかは固定しない。** `fields` でLogSeeker利用者が選んだTaxonomy KEYを
     集計軸にする（未指定ならそのClassの既定表示列を使う）。特定KEYを実装側で決め打ちすると、
     送信元がどのTaxonomy KEYを使っているかによって画面が空になるため。"""
-    ev = _ev(qy)
     priority = _priority(db)
-    rep = qy.rep_expr(ev)
     extras = _keep_taxonomy([x for x in extra_fields.split(",") if x.strip()])
     axes = _keep_taxonomy([x for x in fields.split(",") if x.strip()]) or \
         _keep_taxonomy(DEFAULT_DASHBOARD_AXES)

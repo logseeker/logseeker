@@ -50,3 +50,5 @@ docs/db-schema.md
 # 設計ドキュメント: 公開の可否を別途判断するまでリポジトリに含めない
 docs/taxonomy.md
 docs/normalize-mapping.md
+tsconfig.tsbuildinfo
+frontend/tsconfig.tsbuildinfo
