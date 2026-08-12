@@ -8,7 +8,7 @@ ALL_KEYS はClassに依存しない全体集合であり、Class VALUEはこの�
 ここに無いKEYを選べなくする用途には使わない。
 """
 
-# 全Taxonomy KEY（762件）: KEY -> 型
+# 全Taxonomy KEY（763件）: KEY -> 型
 ALL_KEYS: dict[str, str] = {
     'accesses': 'string',
     'accessgroup': 'string',
@@ -411,6 +411,7 @@ ALL_KEYS: dict[str, str] = {
     'member': 'string',
     'memberdomain': 'string',
     'membersecurityid': 'string',
+    'message': 'string',
     'message_id': 'string',
     'meta_cb_c': 'string',
     'meta_cb_cn': 'string',
@@ -774,7 +775,7 @@ ALL_KEYS: dict[str, str] = {
     'zone': 'string',
 }
 
-# 日本語表示名（111件）。未定義のKEYは画面でKEY名をそのまま表示する。
+# 日本語表示名（112件）。未定義のKEYは画面でKEY名をそのまま表示する。
 LABELS: dict[str, str] = {
     'accountdomain': 'アカウントドメイン',
     'accountname': 'アカウント名',
@@ -822,6 +823,7 @@ LABELS: dict[str, str] = {
     'member': 'メンバー',
     'memberdomain': 'メンバードメイン',
     'membersecurityid': 'メンバーSID',
+    'message': 'メッセージ',
     'mimetype': 'MIMEタイプ',
     'pid': 'PID',
     'ppid': '親PID',
@@ -1113,7 +1115,7 @@ CLASS_HINTS: dict[str, dict[str, dict]] = {
         'callingusersecurityid': {'default_visible': False},
         'category': {'default_visible': True},
         'class': {'default_visible': True},
-        'description': {'default_visible': True},
+        'description': {'default_visible': False},
         'devicename': {'default_visible': False},
         'dstipv4': {'default_visible': False},
         'dstipv6': {'default_visible': False},
@@ -1135,6 +1137,7 @@ CLASS_HINTS: dict[str, dict[str, dict]] = {
         'member': {'default_visible': False},
         'memberdomain': {'default_visible': False},
         'membersecurityid': {'default_visible': False},
+        'message': {'default_visible': True},
         'pid': {'default_visible': False},
         'ppid': {'default_visible': False},
         'pprocess': {'default_visible': False},
