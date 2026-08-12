@@ -24,8 +24,8 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query, Response
-from sqlalchemy import String, and_, cast, func, or_, select, text, true
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import String, and_, cast, func, literal, or_, select, text, true
+from sqlalchemy.dialects.postgresql import JSONB, array as pg_array
 from sqlalchemy.orm import Session
 
 from .auth import get_current_user, require_login
@@ -86,6 +86,17 @@ def _pv(ev, key: str):
 def _cls(ev):
     """Class VALUE ＝ 受信JSONの `class` KEYのVALUE（大文字小文字は無視。`CLASS` も一致）。"""
     return func.coalesce(_pv(ev, "class"), func.cast(UNKNOWN_CLASS, String))
+
+
+def _scoped(stmt, qy):
+    """Dashboard集計用に events へ直接かける共通条件（期間・Class・ログソース）。
+    KEY小文字化コピー(lp)を作らない経路で使う。"""
+    stmt = stmt.select_from(Event).where(Event.received_at >= qy.start, Event.received_at <= qy.end)
+    if qy.class_value:
+        stmt = stmt.where(_class_of(Event.payload) == qy.class_value)
+    if qy.source:
+        stmt = stmt.where(Event.source == qy.source)
+    return stmt
 
 
 def _class_of(payload_col):
@@ -593,15 +604,8 @@ def overview(qy: EventQuery = Depends(event_query), db: Session = Depends(get_db
     want = [k for k in axes] + [k for k in extras]
     kv = func.jsonb_each_text(Event.payload).table_valued("key", "value") \
              .render_derived(name="kv", with_types=False).lateral()
-    scan = (select(func.lower(kv.c.key).label("k"), kv.c.value.label("v"), func.count().label("c"))
-            .select_from(Event).join(kv, true())
-            .where(Event.received_at >= qy.start, Event.received_at <= qy.end,
-                   func.lower(kv.c.key).in_(want), func.nullif(kv.c.value, "").isnot(None)))
-    if qy.class_value:
-        scan = scan.where(_class_of(Event.payload) == qy.class_value)
-    if qy.source:
-        scan = scan.where(Event.source == qy.source)
-    scan = scan.group_by(text("1"), text("2")).subquery()
+    scan = _scoped(select(func.lower(kv.c.key).label("k"), kv.c.value.label("v"),
+                          func.count().label("c")).join(kv, true()), qy)         .where(func.lower(kv.c.key).in_(want), func.nullif(kv.c.value, "").isnot(None))         .group_by(text("1"), text("2")).subquery()
     ranked = select(scan.c.k, scan.c.v, scan.c.c,
                     func.row_number().over(partition_by=scan.c.k,
                                            order_by=scan.c.c.desc()).label("rn")).subquery()
@@ -610,21 +614,36 @@ def overview(qy: EventQuery = Depends(event_query), db: Session = Depends(get_db
                               .where(ranked.c.rn <= TOP_N).order_by(ranked.c.k, ranked.c.c.desc())).all():
         got.setdefault(k, []).append({"value": v, "count": c})
 
-    # ログソース・Class・代表値は軸とは別に集計する（payload展開を伴わない/伴っても1本）
-    meta = qy.apply(select(ev.c.source.label("s"), _cls(ev).label("c"), rep.label("r"),
-                           func.count().label("n")).select_from(ev), ev) \
-             .group_by(text("1"), text("2"), text("3"))
-    by_source: dict[str | None, int] = {}
-    by_class: dict[str, int] = {}
-    by_rep: dict[str, int] = {}
+    # ログソースと総数は payload に触れずに取れる（received_at のインデックスだけで済む）
+    src_q = _scoped(select(Event.source.label("s"), func.count().label("n")), qy).group_by(text("1"))
+    by_source: dict[str, int] = {}
     total = 0
-    for s, c, r, n in db.execute(meta).all():
+    for s, n in db.execute(src_q).all():
         total += n
         if s:
-            by_source[s] = by_source.get(s, 0) + n
-        by_class[c] = by_class.get(c, 0) + n
-        if r:
-            by_rep[r] = by_rep.get(r, 0) + n
+            by_source[s] = n
+
+    # Class は class KEY を持つ行だけ集計し、残りを unknown として差分で求める
+    # （行ごとの相関サブクエリを避けるため）
+    by_class: dict[str, int] = {}
+    cls_q = _scoped(select(kv.c.value.label("v"), func.count().label("n")).join(kv, true()), qy) \
+        .where(func.lower(kv.c.key) == "class", func.nullif(kv.c.value, "").isnot(None)).group_by(text("1"))
+    named = 0
+    for v, n in db.execute(cls_q).all():
+        by_class[v] = n
+        named += n
+    if total - named > 0:
+        by_class[UNKNOWN_CLASS] = total - named
+
+    # 代表値は「優先順位の上から最初に見つかった非空VALUE」なので行ごとの解決が要る。
+    # DISTINCT ON で1行1件に絞ってから件数を数える（payload展開はここでも1回だけ）。
+    prio = pg_array([literal(p) for p in priority])
+    picked = _scoped(select(Event.id.label("id"), kv.c.value.label("v")).join(kv, true()), qy) \
+        .where(func.lower(kv.c.key).in_(priority), func.nullif(kv.c.value, "").isnot(None)) \
+        .distinct(Event.id) \
+        .order_by(Event.id, func.array_position(prio, func.lower(kv.c.key))).subquery()
+    by_rep = {v: n for v, n in db.execute(
+        select(picked.c.v, func.count()).group_by(text("1")).order_by(func.count().desc())).all()}
 
     def _top(d: dict) -> list[dict]:
         return [{"value": k, "count": v} for k, v in sorted(d.items(), key=lambda x: -x[1])[:TOP_N]]
