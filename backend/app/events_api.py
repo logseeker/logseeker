@@ -24,8 +24,8 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query, Response
-from sqlalchemy import String, and_, cast, func, or_, select, text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import String, and_, cast, func, literal, or_, select, text, true
+from sqlalchemy.dialects.postgresql import JSONB, array as pg_array
 from sqlalchemy.orm import Session
 
 from .auth import get_current_user, require_login
@@ -103,6 +103,7 @@ DEFAULT_DOMAIN_HOST_PRIORITY = ["domain", "vhost", "virtualhost", "virtualdomain
 # これは「固定の集計軸」ではなく初期値で、LogSeeker利用者が762KEYから自由に選び直せる
 # （選択はlocalStorage/サーバーへ保存される）。値が0件の軸はカードを描画しない。
 DEFAULT_DASHBOARD_AXES = ["hostname", "client", "srcipv4", "uri", "username", "accountname",
+                          "audit_type", "audit_acct",
                           "status", "statuscode", "action", "category", "severity"]
 
 # 集計・時間軸に使うタイムゾーン。日別バケットがJSTの0時で区切られるようにする
@@ -110,6 +111,7 @@ DEFAULT_DASHBOARD_AXES = ["hostname", "client", "srcipv4", "uri", "username", "a
 DISPLAY_TZ = "Asia/Tokyo"
 K_PRIORITY = "dashboard_domain_host_priority"
 EXPORT_MAX_ROWS = 20000
+TOP_N = 12                 # 内訳カードに出す上位件数
 DEFAULT_PERIOD_HOURS = 24
 
 
@@ -179,19 +181,24 @@ ATTENTION_KEYWORDS = ["fail", "error", "deny", "denied", "invalid", "unauthor", 
                       "reject", "lock", "warn", "attack", "violat", "critical", "alert", "404"]
 SEVERE_VALUES = ["warning", "warn", "error", "err", "critical", "crit", "alert", "emerg", "high"]
 
-# 送信元IPを表し得るTaxonomy KEY（IOC突合・root SSH判定などで横断的に見る）
-SRC_IP_KEYS = ["srcipv4", "srcipv6", "client", "srchost", "xfwdforip"]
-# 結果・アクション・ユーザーを表し得るTaxonomy KEY
-RESULT_KEYS = ["result", "eventtype", "action"]
-USER_KEYS = ["username", "accountname", "targetusername"]
+# 脅威判定で横断的に見るTaxonomy KEY群。同義語として統合しているのではなく、
+# 「そのイベントで送信元IP／結果／URIを表しているKEY」を評価時に順に見るだけ（v12 §5.2と同じ考え方）。
+# 送信元IPを表し得るTaxonomy KEY
+SRC_IP_KEYS = ["srcipv4", "srcipv6", "client", "sourceipaddress", "srchost", "xfwdforip"]
+# 結果を表し得るTaxonomy KEY（audit_res は auditd の success/failed）
+RESULT_KEYS = ["result", "audit_res", "eventtype", "action"]
+# ユーザーを表し得るTaxonomy KEY（audit_acct は auditd のアカウント）
+USER_KEYS = ["username", "accountname", "audit_acct", "targetusername"]
 STATUS_KEYS = ["statuscode", "status"]
-URI_KEYS = ["uri", "uri_parsed", "url", "query"]
+# URIを表し得るTaxonomy KEY（request は "POST /path HTTP/1.1" 形式のリクエスト行）
+URI_KEYS = ["uri", "uri_parsed", "url", "request", "query"]
 
 THREATS = ["ioc", "sensitive_path", "web_scan", "auth_fail", "root_ssh", "any"]
 
 # 上の各リストがTaxonomy外KEYを含んでいないことを起動時に検証する（v12 §15）。
-# 実装時に「実データにあるから」という理由でTaxonomy外KEY（例: request, Message）を
-# 混ぜてしまう事故を、起動を止めることで確実に防ぐ。
+# 実装時に「実データにあるから」という理由でTaxonomy外KEYを混ぜてしまう事故を、
+# 起動を止めることで確実に防ぐ。使いたいKEYがあるときは、まず docs/taxonomy.md に
+# 追加してから taxonomy_master.py を再生成する（backend/tools/gen_taxonomy.py）。
 for _name, _keys in (("SRC_IP_KEYS", SRC_IP_KEYS), ("RESULT_KEYS", RESULT_KEYS),
                      ("USER_KEYS", USER_KEYS), ("STATUS_KEYS", STATUS_KEYS),
                      ("URI_KEYS", URI_KEYS), ("DEFAULT_DASHBOARD_AXES", DEFAULT_DASHBOARD_AXES),
@@ -263,7 +270,7 @@ class EventQuery:
     def __init__(self, db: Session, class_value: str | None, q: str | None,
                  start: datetime | None, end: datetime | None,
                  rep_value: str | None, field: str | None, value: str | None,
-                 attention: bool = False, threat: str | None = None):
+                 attention: bool = False, threat: str | None = None, source: str | None = None):
         self.db = db
         self.class_value = class_value
         self.q = q
@@ -274,11 +281,15 @@ class EventQuery:
         self.value = value
         self.attention = attention
         self.threat = threat if threat in THREATS else None
+        # ログソース(LogSeeker管理メタデータ)での絞り込み。Dashboardの「ログソース別」から遷移する
+        self.source = source
 
     def apply(self, stmt, ev):
         """CTE(ev)の列だけで条件を組む。期間はCTE側で適用済み。"""
         if self.class_value:
             stmt = stmt.where(_cls(ev) == self.class_value)
+        if self.source:
+            stmt = stmt.where(ev.c.source == self.source)
         if self.field and self.value is not None:
             stmt = stmt.where(_pv(ev, self.field) == self.value)
         if self.rep_value is not None:
@@ -303,8 +314,9 @@ class EventQuery:
 def event_query(db: Session = Depends(get_db), class_value: str | None = None, q: str | None = None,
                 start: datetime | None = None, end: datetime | None = None,
                 rep_value: str | None = None, field: str | None = None, value: str | None = None,
-                attention: bool = False, threat: str | None = None) -> EventQuery:
-    return EventQuery(db, class_value, q, start, end, rep_value, field, value, attention, threat)
+                attention: bool = False, threat: str | None = None,
+                source: str | None = None) -> EventQuery:
+    return EventQuery(db, class_value, q, start, end, rep_value, field, value, attention, threat, source)
 
 
 # ---------------------------------------------------------------- 行の組み立て
@@ -557,41 +569,53 @@ def overview(qy: EventQuery = Depends(event_query), db: Session = Depends(get_db
     集計軸にする（未指定ならそのClassの既定表示列を使う）。特定KEYを実装側で決め打ちすると、
     送信元がどのTaxonomy KEYを使っているかによって画面が空になるため。"""
     ev = _ev(qy)
-
-    def top(col, limit=12):
-        stmt = qy.apply(select(col.label("v"), func.count()).select_from(ev), ev).where(col.isnot(None))
-        stmt = stmt.group_by(text("1")).order_by(func.count().desc()).limit(limit)
-        return [{"value": v, "count": n} for v, n in db.execute(stmt).all()]
-
-    def ndistinct(col):
-        return db.scalar(qy.apply(select(func.count(func.distinct(col))).select_from(ev), ev)
-                         .where(col.isnot(None))) or 0
-
     priority = _priority(db)
     rep = qy.rep_expr(ev)
     extras = _keep_taxonomy([x for x in extra_fields.split(",") if x.strip()])
     axes = _keep_taxonomy([x for x in fields.split(",") if x.strip()]) or \
         _keep_taxonomy(DEFAULT_DASHBOARD_AXES)
 
+    # ---- 全部の内訳を1回のスキャンで集計する ----
+    # 軸ごとに別クエリを流すと、軸の数だけCTE（payloadのJSONB展開）が再計算されて
+    # 非常に遅くなる（軸13本で実測10秒超）。unnestで「軸名, 値」の組へ展開し、
+    # ウィンドウ関数で軸ごとの上位だけを1文で取り出す。
+    axis_defs: list[tuple[str, object]] = [(f"f:{k}", _pv(ev, k)) for k in axes]
+    axis_defs += [(f"x:{k}", _pv(ev, k)) for k in extras]
+    axis_defs += [("_rep", rep), ("_class", _cls(ev)), ("_source", ev.c.source)]
+
+    # render_derived() で `AS t(k, v)` の列リストまで出力させる（無いと列名が解決できない）
+    t = (func.unnest(pg_array([literal(n) for n, _ in axis_defs]),
+                     pg_array([e for _, e in axis_defs]))
+         .table_valued("k", "v").render_derived(name="ax", with_types=False).lateral())
+    base = qy.apply(select(t.c.k.label("k"), t.c.v.label("v"), func.count().label("c"))
+                    .select_from(ev).join(t, true()), ev).where(t.c.v.isnot(None)).group_by(text("1"), text("2"))
+    sub = base.subquery()
+    ranked = select(sub.c.k, sub.c.v, sub.c.c,
+                    func.row_number().over(partition_by=sub.c.k,
+                                           order_by=sub.c.c.desc()).label("rn")).subquery()
+    rows = db.execute(select(ranked.c.k, ranked.c.v, ranked.c.c)
+                      .where(ranked.c.rn <= TOP_N).order_by(ranked.c.k, ranked.c.c.desc())).all()
+
+    got: dict[str, list[dict]] = {}
+    for k, v, c in rows:
+        got.setdefault(k, []).append({"value": v, "count": c})
+
     total = db.scalar(qy.apply(select(func.count()).select_from(ev), ev))
-    # 値が0件の軸はカードを描画しないため、ここで除いて返す（空カードを並べない）
-    breakdowns = [{"field": k, "label": label_of(k), "values": top(_pv(ev, k))} for k in axes]
+    breakdowns = [{"field": k, "label": label_of(k), "values": got.get(f"f:{k}", [])} for k in axes]
     return {
         "total": total,
         "period": {"start": qy.start.isoformat(), "end": qy.end.isoformat()},
         # ログソース(source)はLogSeeker管理メタデータ。§4.1.1により表示・集計に使ってよい
-        "by_source": top(ev.c.source, 12),
-        "source_count": ndistinct(ev.c.source),
-        "host_domain_count": ndistinct(rep),
+        "by_source": got.get("_source", []),
+        "source_count": len(got.get("_source", [])),
+        "host_domain_count": len(got.get("_rep", [])),
         "ingest_failed": db.scalar(select(func.count()).select_from(Event)
                                    .where(Event.parse_status == "failed",
                                           Event.received_at >= qy.start, Event.received_at <= qy.end)) or 0,
-        "by_class": [{"value": v, "count": n} for v, n in db.execute(
-            qy.apply(select(_cls(ev), func.count()).select_from(ev), ev)
-            .group_by(text("1")).order_by(func.count().desc())).all()],
+        "by_class": got.get("_class", []),
         # ドメイン/ホストは代表値優先順位で集約（v12 §5.3）
-        "domain_host": {"priority": priority, "representative": top(rep),
-                        "extra": {k: top(_pv(ev, k)) for k in extras}},
+        "domain_host": {"priority": priority, "representative": got.get("_rep", []),
+                        "extra": {k: got.get(f"x:{k}", []) for k in extras}},
         # 利用者が選んだTaxonomy KEYごとの内訳カード（既定はDEFAULT_DASHBOARD_AXES）
         "breakdowns": [b for b in breakdowns if b["values"]],
         "empty_axes": [b["field"] for b in breakdowns if not b["values"]],

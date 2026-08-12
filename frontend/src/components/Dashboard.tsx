@@ -19,6 +19,8 @@ type Props = {
   /** 個別Taxonomyフィールドのクリック（そのKEY:VALUEをそのまま条件に。同 §7.2） */
   onPickField: (field: string, value: string) => void;
   onPickClass: (classValue: string) => void;
+  /** ログソース別カードのクリック（LogSeeker管理メタデータ source での絞り込み） */
+  onPickSource: (source: string) => void;
   changelog: ChangelogState;
   onNavChangelog: () => void;
 };
@@ -34,7 +36,7 @@ const lsGet = <T,>(k: string, fb: T): T => {
 };
 const todayJst = () => new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10);
 
-export function Dashboard({ onPickRep, onPickField, onPickClass, changelog, onNavChangelog }: Props) {
+export function Dashboard({ onPickRep, onPickField, onPickClass, onPickSource, changelog, onNavChangelog }: Props) {
   const [periodKey, setPeriodKey] = useState("24h");
   const [classValue, setClassValue] = useState<string | null>(null);
   const [axes, setAxes] = useState<string[] | null>(() => lsGet<string[] | null>(LS_AXES, null));
@@ -161,10 +163,13 @@ export function Dashboard({ onPickRep, onPickField, onPickClass, changelog, onNa
                 <div className="row g-2">
                   {ov.by_source.map((s) => (
                     <div className="col-6 col-lg-3" key={String(s.value)}>
-                      <div className="card card-sm"><div className="card-body py-2">
-                        <div className="text-truncate" title={String(s.value)}>{s.value ?? "(空)"}</div>
-                        <div className="text-secondary small">{s.count.toLocaleString()} 件</div>
-                      </div></div>
+                      <div className="card card-sm" role="button" title="このログソースでEventsを開く"
+                        onClick={() => s.value && onPickSource(String(s.value))}>
+                        <div className="card-body py-2">
+                          <div className="text-truncate text-primary">{s.value ?? "(空)"}</div>
+                          <div className="text-secondary small">{s.count.toLocaleString()} 件</div>
+                        </div>
+                      </div>
                     </div>
                   ))}
                 </div>

@@ -91,6 +91,7 @@ export interface EventQuery {
   rep_value?: string;    // 代表値グループでの絞り込み（同 §7.1：集計時と同じ優先順位のOR条件）
   attention?: boolean;   // 「注目」のみ（payloadキーワード一致 or result/severity が失敗・高重大度）
   threat?: string;       // 脅威フィルタ: ioc / sensitive_path / web_scan / auth_fail / root_ssh / any
+  source?: string;       // ログソース(LogSeeker管理メタデータ)での絞り込み
 }
 
 function eq(qy: EventQuery, extra: Record<string, string | number> = {}): string {
@@ -101,6 +102,7 @@ function eq(qy: EventQuery, extra: Record<string, string | number> = {}): string
   put_("field", qy.field); put_("value", qy.value); put_("rep_value", qy.rep_value);
   if (qy.attention) p.set("attention", "true");
   put_("threat", qy.threat);
+  put_("source", qy.source);
   Object.entries(extra).forEach(([k, v]) => put_(k, v));
   const s = p.toString();
   return s ? `?${s}` : "";

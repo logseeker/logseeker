@@ -201,6 +201,7 @@ export default function App() {
   const drillRep = (value: string) => toEvents({ rep_value: value });
   const drillField = (field: string, value: string) => toEvents({ field, value });
   const drillClass = (class_value: string) => toEvents({ class_value });
+  const drillSource = (source: string) => toEvents({ source });
   // イベント等から「エンティティ調査」画面へ（IP/ユーザーの攻撃像を時系列で見る）
   const [entityInit, setEntityInit] = useState<{ type: string; value: string; nonce: number } | undefined>();
   const navEntity = (type: string, value: string) => {
@@ -246,7 +247,7 @@ export default function App() {
 
   const body = () => {
     switch (screen) {
-      case "dashboard": return <Dashboard onPickRep={drillRep} onPickField={drillField} onPickClass={drillClass} changelog={changelog} onNavChangelog={() => setScreen("changelog")} />;
+      case "dashboard": return <Dashboard onPickRep={drillRep} onPickField={drillField} onPickClass={drillClass} onPickSource={drillSource} changelog={changelog} onNavChangelog={() => setScreen("changelog")} />;
       case "changelog": return <Changelog />;
       case "events": return <Events onEntity={navEntity} onNav={setScreen} onOpenCase={navCase}
         onOpenIncident={navIncidentDetail} auth={auth ?? undefined} initialEventId={INIT_EVENT_ID} initialQuery={eventsQuery} />;

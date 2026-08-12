@@ -8,7 +8,7 @@ ALL_KEYS はClassに依存しない全体集合であり、Class VALUEはこの�
 ここに無いKEYを選べなくする用途には使わない。
 """
 
-# 全Taxonomy KEY（763件）: KEY -> 型
+# 全Taxonomy KEY（770件）: KEY -> 型
 ALL_KEYS: dict[str, str] = {
     'accesses': 'string',
     'accessgroup': 'string',
@@ -74,6 +74,9 @@ ALL_KEYS: dict[str, str] = {
     'attack': 'string',
     'attackinfo': 'string',
     'attemptingAcquire': 'boolean',
+    'audit_acct': 'string',
+    'audit_res': 'string',
+    'audit_type': 'string',
     'audititemid': 'string',
     'auth': 'string',
     'auth_success': 'boolean',
@@ -563,6 +566,7 @@ ALL_KEYS: dict[str, str] = {
     'recursionavailable': 'boolean',
     'recursiondesired': 'boolean',
     'referenceid': 'string',
+    'referer': 'string',
     'referrer': 'string',
     'referrer_domain': 'string',
     'referrer_uri': 'string',
@@ -576,6 +580,7 @@ ALL_KEYS: dict[str, str] = {
     'reply_msg': 'string',
     'replyto': 'string',
     'reportduration': 'integer',
+    'request': 'string',
     'requestduration': 'number',
     'requestid': 'string',
     'requesttime': 'string',
@@ -637,6 +642,7 @@ ALL_KEYS: dict[str, str] = {
     'snort_alert': 'string',
     'source': 'string',
     'sourceclass': 'string',
+    'sourceipaddress': 'string',
     'sourcemodulename': 'string',
     'sourcemoduletype': 'string',
     'srcareacode': 'string',
@@ -737,6 +743,7 @@ ALL_KEYS: dict[str, str] = {
     'uri': 'string',
     'uri_parsed': 'string',
     'url': 'string',
+    'user_agent': 'string',
     'useragent': 'string',
     'usercheck': 'string',
     'usercheckid': 'string',
@@ -775,11 +782,14 @@ ALL_KEYS: dict[str, str] = {
     'zone': 'string',
 }
 
-# 日本語表示名（112件）。未定義のKEYは画面でKEY名をそのまま表示する。
+# 日本語表示名（118件）。未定義のKEYは画面でKEY名をそのまま表示する。
 LABELS: dict[str, str] = {
     'accountdomain': 'アカウントドメイン',
     'accountname': 'アカウント名',
     'action': 'アクション',
+    'audit_acct': 'Auditアカウント',
+    'audit_res': 'Audit結果',
+    'audit_type': 'Audit種別',
     'audititemid': '監査項目ID',
     'authmethod': '認証方式',
     'bytes': 'バイト数',
@@ -841,9 +851,11 @@ LABELS: dict[str, str] = {
     'rcvdbytes': '受信バイト数',
     'reason': '理由',
     'recordid': 'レコードID',
-    'referrer': 'Referer',
+    'referer': 'Referer',
+    'referrer': 'Referrer',
     'referrer_domain': 'Refererドメイン',
     'referrer_uri': 'Referer URI',
+    'request': 'リクエスト',
     'requestid': 'リクエストID',
     'result': '結果',
     'sentbodybytes': '送信Bodyバイト数',
@@ -880,6 +892,7 @@ LABELS: dict[str, str] = {
     'uri': 'URI',
     'uri_parsed': '正規化URI',
     'url': 'URL',
+    'user_agent': 'User-Agent',
     'useragent': 'User-Agent',
     'username': 'ユーザー名',
     'usersecurityid': 'ユーザーSID',
@@ -897,6 +910,9 @@ CLASS_HINTS: dict[str, dict[str, dict]] = {
         'accountdomain': {'default_visible': True},
         'accountname': {'default_visible': True},
         'action': {'default_visible': True},
+        'audit_acct': {'default_visible': False},
+        'audit_res': {'default_visible': False},
+        'audit_type': {'default_visible': False},
         'audititemid': {'default_visible': False},
         'authmethod': {'default_visible': False},
         'category': {'default_visible': True},
@@ -1018,9 +1034,11 @@ CLASS_HINTS: dict[str, dict[str, dict]] = {
         'rcvdbodybytes': {'default_visible': False},
         'rcvdbytes': {'default_visible': False},
         'reason': {'default_visible': False},
+        'referer': {'default_visible': False},
         'referrer': {'default_visible': False},
         'referrer_domain': {'default_visible': False},
         'referrer_uri': {'default_visible': False},
+        'request': {'default_visible': False},
         'requestid': {'default_visible': False},
         'result': {'default_visible': True},
         'sentbodybytes': {'default_visible': False},
@@ -1045,6 +1063,7 @@ CLASS_HINTS: dict[str, dict[str, dict]] = {
         'uri': {'default_visible': True},
         'uri_parsed': {'default_visible': False},
         'url': {'default_visible': False},
+        'user_agent': {'default_visible': False},
         'useragent': {'default_visible': False},
         'username': {'default_visible': False},
         'vhost': {'default_visible': False},

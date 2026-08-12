@@ -140,6 +140,12 @@ export function Events({ onEntity, onNav, onOpenCase, onOpenIncident, auth, init
     clear: () => { const q = { ...applied, class_value: undefined }; setApplied(q); setDraft(q); } });
   if (applied.field) chips.push({ label: `${labelOf(applied.field)}: ${applied.value}`, clear: clearPivot });
   if (applied.rep_value) chips.push({ label: `ドメイン/ホスト: ${applied.rep_value}`, clear: clearPivot });
+  if (applied.source) chips.push({ label: `ログソース: ${applied.source}`,
+    clear: () => { const q = { ...applied, source: undefined }; setApplied(q); setDraft(q); } });
+  if (applied.threat) chips.push({ label: `脅威: ${THREATS.find((t) => t.value === applied.threat)?.label ?? applied.threat}`,
+    clear: () => { const q = { ...applied, threat: undefined }; setApplied(q); setDraft(q); } });
+  if (applied.attention) chips.push({ label: "注目のみ",
+    clear: () => { const q = { ...applied, attention: undefined }; setApplied(q); setDraft(q); } });
   if (applied.q) chips.push({ label: `検索 "${applied.q}"`,
     clear: () => { const q = { ...applied, q: undefined }; setApplied(q); setDraft(q); } });
 
