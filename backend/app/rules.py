@@ -21,6 +21,13 @@ FIELD_MAP: dict[str, Any] = {
 GROUPBY_FIELDS = ["source_ip", "actor_user", "device_name", "url_domain", "host_name", "source_country",
                   "source_as_org"]
 
+# サーバがエラー応答を返したことを示す本文パターン。
+# LiteSpeed/OpenLiteSpeed は自前でエラー応答を返す際に "oops! 500" のように書く。
+# web_error にはステータスコードのKEYが無く(本番実測: Message以外のフィールドを持たない)、
+# 本文からしか5xxを判別できないためこの形にしている。
+# 判定材料の Message は Taxonomy KEY なので、Taxonomy外KEYへの依存にはならない（v12 §15）。
+RE_HTTP_5XX = r"oops!\s*5[0-9]{2}"
+
 # しきい値（必要なら調整）
 WEB_SCAN_MIN = 10        # 同一IPからの 4xx 失敗リクエスト数
 AUTH_FAIL_MIN = 10       # 同一ユーザー/IPの認証失敗数
@@ -30,6 +37,10 @@ HOME_COUNTRY = "JP"      # 「海外」判定の基準国（ISOコード）。�
 SILENCE_MIN_EVENTS = 5   # ログ未達判定の対象にする最小実績件数（一度きりのテスト等のノイズを除外）
 DEFAULT_SILENCE_HOURS = 24
 WEBSHELL_PROBE_MIN = 5   # 同一IPが異なるファイル名で数字名.phpを試行した件数（同一パスの再試行は含めない）
+# 同一ログソースからのサーバエラー(5xx)応答の件数。本番実測(2026-08-13, 27日分)では
+# 1時間あたりの中央値3件・p90=31件、1日あたりの中央値126件だったため、
+# 短時間の単発バーストでは鳴らず、継続した5xxは拾える値として50を置いた。
+WEB_5XX_MIN = 50
 
 
 def get_silence_hours(db: Session) -> int:
@@ -144,6 +155,11 @@ RULE_DEFS = [
     {"id": "source_silent", "name": "ログ未達（送信元の停止疑い）", "severity": "warning", "category": "operations",
      "description": "これまで継続的に送信していたログソースから、一定時間データが届いていない。",
      "recommendation": "対象機器/エージェントの死活・ネットワーク疎通・NXLog等の転送設定を確認。"},
+    {"id": "web_5xx_burst", "name": "サーバエラー(5xx)の多発", "severity": "warning", "category": "operations",
+     "description": "同一のログソースで、サーバ側エラー(5xx)の応答が多発している。攻撃ではなくサイト側の不具合・過負荷・設定ミスの疑い。",
+     "recommendation": "対象サイトのエラーログ本文を確認し、5xxの直接原因（PHPの致命的エラー・DB接続失敗・タイムアウト・メモリ不足等）を特定する。"
+                       "直前のデプロイ・プラグイン更新・設定変更が無いか確認。"
+                       "特定URLに集中していれば該当ページ、全体に及んでいればWebサーバ/DB/リソース側を疑う。"},
     {"id": "build_failure", "name": "ビルド失敗", "severity": "warning", "category": "operations",
      "description": "Astroサイトのビルド（npm run build）が失敗した。",
      "recommendation": "手動で `npm run build` を再実行し再現するか確認。error内容と直近のコンテンツ変更・依存パッケージ更新を確認。"
@@ -342,6 +358,21 @@ def evaluate(db: Session, conds: list | None = None) -> list[dict[str, Any]]:
     ).all()
     for source, cnt in rows:
         add("build_failure", f"ビルド失敗: {source}", f"ビルド失敗 {cnt} 件", cnt,
+            pivot={"field": "source", "value": source})
+
+    # --- サーバエラー(5xx)多発: 運用監視系。ログソース単位で件数がしきい値を超えたら通知 ---
+    # 期間は呼び出し側の絞り込み(w)に従う（画面で未指定なら直近24時間）。
+    rows = db.execute(
+        select(Event.source, func.count())
+        .select_from(Event)
+        .where(Event.message.op("~*")(RE_HTTP_5XX), Event.source.isnot(None), *w)
+        .group_by(Event.source)
+        .having(func.count() >= WEB_5XX_MIN)
+        .order_by(func.count().desc()).limit(MAX_HITS_PER_RULE)
+    ).all()
+    for source, cnt in rows:
+        add("web_5xx_burst", f"サーバエラー(5xx)の多発: {source}",
+            f"5xx応答 {cnt} 件", cnt,
             pivot={"field": "source", "value": source})
 
     # --- カスタムルール（ユーザー定義。DB保存分を動的評価）---
