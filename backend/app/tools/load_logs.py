@@ -4,7 +4,7 @@
   cd backend && ../venv/bin/python -m app.tools.load_logs --reset
 
 - 入力: data/input 配下（JSON_STORE_DIR の親ディレクトリ。.envで変更可）
-- payload は無改変で events.payload に保存し、normalized_events を派生生成。
+- payload は無改変で events.payload に保存し、導出値は events の列へ入れる。
 - 変換JSON: data/json/converted_<file>.json に出力（目視確認用）。
 """
 import argparse
@@ -17,7 +17,7 @@ from typing import Iterator
 from ..config import settings
 from ..converters import CONVERTERS
 from ..db import Base, SessionLocal, engine
-from ..models import DeadLetter, Event, NormalizedEvent  # noqa: F401 (テーブル登録)
+from ..models import DeadLetter, Event  # noqa: F401 (テーブル登録)
 from ..pipeline import ingest_one
 
 INPUT_DIR = settings.JSON_STORE_DIR.parent / "input"

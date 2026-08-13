@@ -253,7 +253,6 @@ export const api = {
 
   // マッピング（正規化キー対応表）
   mappings: () => get<MappingsResponse>(`/api/mappings`),
-  downloadMappingsCsv: () => downloadFile(`/api/mappings.csv`, "logseeker_mappings.csv"),
 
   // 管理
   adminOverview: () => get<AdminOverview>(`/api/admin/overview`),

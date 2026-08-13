@@ -7,16 +7,15 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from .models import CustomRule, Event, EventEntity, IOC, Setting
-from .models import NormalizedEvent as N
 
 # カスタムルールが対象にできる正規化フィールド（安全なホワイトリスト。任意コード実行はしない）。
 FIELD_MAP: dict[str, Any] = {
-    "message": N.message, "url_path": N.url_path, "url_domain": N.url_domain,
-    "actor_user": N.actor_user, "source_ip": N.source_ip, "device_name": N.device_name,
-    "event_category": N.event_category, "event_action": N.event_action, "event_result": N.event_result,
-    "http_status_code": N.http_status_code, "service_name": N.service_name,
-    "source_country": N.source_country, "host_name": N.host_name,
-    "source_asn": N.source_asn, "source_as_org": N.source_as_org,
+    "message": Event.message, "url_path": Event.url_path, "url_domain": Event.url_domain,
+    "actor_user": Event.actor_user, "source_ip": Event.source_ip, "device_name": Event.device_name,
+    "event_category": Event.event_category, "event_action": Event.event_action, "event_result": Event.event_result,
+    "http_status_code": Event.http_status_code, "service_name": Event.service_name,
+    "source_country": Event.source_country, "host_name": Event.host_name,
+    "source_asn": Event.source_asn, "source_as_org": Event.source_as_org,
 }
 # 集計軸（group_by）に使える項目（Eventsの絞り込みキーと一致させる＝クリックで絞込可能にするため）
 GROUPBY_FIELDS = ["source_ip", "actor_user", "device_name", "url_domain", "host_name", "source_country",
@@ -175,7 +174,6 @@ def evaluate(db: Session, conds: list | None = None) -> list[dict[str, Any]]:
                func.count(func.distinct(EventEntity.event_id)))
         .join(IOC, (IOC.value == EventEntity.entity_value) & (IOC.indicator_type == EventEntity.entity_type))
         .join(Event, Event.id == EventEntity.event_id)
-        .join(N, N.event_id == EventEntity.event_id)
         .where(*w)
         .group_by(EventEntity.entity_value, IOC.indicator_type)
         .order_by(func.count(func.distinct(EventEntity.event_id)).desc()).limit(MAX_HITS_PER_RULE)
@@ -188,12 +186,12 @@ def evaluate(db: Session, conds: list | None = None) -> list[dict[str, Any]]:
 
     # --- 攻撃ペイロード検知: URL(パス/クエリ)に既知の攻撃シグネチャ（閾値なし）---
     rows = db.execute(
-        select(N.source_ip, func.count())
-        .select_from(Event).join(N, N.event_id == Event.id)
-        .where(N.source_ip.isnot(None),
-               or_(*[N.url_path.ilike(f"%{p}%") for p in PAYLOAD_SIGNATURES],
-                   *[N.url_query.ilike(f"%{p}%") for p in PAYLOAD_SIGNATURES]), *w)
-        .group_by(N.source_ip)
+        select(Event.source_ip, func.count())
+        .select_from(Event)
+        .where(Event.source_ip.isnot(None),
+               or_(*[Event.url_path.ilike(f"%{p}%") for p in PAYLOAD_SIGNATURES],
+                   *[Event.url_query.ilike(f"%{p}%") for p in PAYLOAD_SIGNATURES]), *w)
+        .group_by(Event.source_ip)
         .order_by(func.count().desc()).limit(MAX_HITS_PER_RULE)
     ).all()
     for ip, cnt in rows:
@@ -203,10 +201,10 @@ def evaluate(db: Session, conds: list | None = None) -> list[dict[str, Any]]:
 
     # --- Webスキャン: 同一IPの 4xx 失敗多発 ---
     rows = db.execute(
-        select(N.source_ip, func.count())
-        .select_from(Event).join(N, N.event_id == Event.id)
-        .where(N.event_category == "web", N.event_result == "failure", N.source_ip.isnot(None), *w)
-        .group_by(N.source_ip).having(func.count() >= WEB_SCAN_MIN)
+        select(Event.source_ip, func.count())
+        .select_from(Event)
+        .where(Event.event_category == "web", Event.event_result == "failure", Event.source_ip.isnot(None), *w)
+        .group_by(Event.source_ip).having(func.count() >= WEB_SCAN_MIN)
         .order_by(func.count().desc()).limit(MAX_HITS_PER_RULE)
     ).all()
     for ip, cnt in rows:
@@ -215,11 +213,11 @@ def evaluate(db: Session, conds: list | None = None) -> list[dict[str, Any]]:
 
     # --- 危険パスへのアクセス（webshell/.env/wp-login 等）---
     rows = db.execute(
-        select(N.source_ip, func.count())
-        .select_from(Event).join(N, N.event_id == Event.id)
-        .where(N.source_ip.isnot(None),
-               or_(*[N.url_path.ilike(f"%{p}%") for p in SENSITIVE_PATHS]), *w)
-        .group_by(N.source_ip).having(func.count() >= SENSITIVE_MIN)
+        select(Event.source_ip, func.count())
+        .select_from(Event)
+        .where(Event.source_ip.isnot(None),
+               or_(*[Event.url_path.ilike(f"%{p}%") for p in SENSITIVE_PATHS]), *w)
+        .group_by(Event.source_ip).having(func.count() >= SENSITIVE_MIN)
         .order_by(func.count().desc()).limit(MAX_HITS_PER_RULE)
     ).all()
     for ip, cnt in rows:
@@ -228,13 +226,13 @@ def evaluate(db: Session, conds: list | None = None) -> list[dict[str, Any]]:
 
     # --- Webshell探索の疑い: 同一IPが異なるファイル名で数字名.phpへ404を連発 ---
     rows = db.execute(
-        select(N.source_ip, func.count(func.distinct(N.url_path)))
-        .select_from(Event).join(N, N.event_id == Event.id)
-        .where(N.event_category == "web", N.http_status_code == "404",
-               N.url_path.op("~*")(WEBSHELL_PROBE_RE),
-               N.source_ip.isnot(None), *w)
-        .group_by(N.source_ip).having(func.count(func.distinct(N.url_path)) >= WEBSHELL_PROBE_MIN)
-        .order_by(func.count(func.distinct(N.url_path)).desc()).limit(MAX_HITS_PER_RULE)
+        select(Event.source_ip, func.count(func.distinct(Event.url_path)))
+        .select_from(Event)
+        .where(Event.event_category == "web", Event.http_status_code == "404",
+               Event.url_path.op("~*")(WEBSHELL_PROBE_RE),
+               Event.source_ip.isnot(None), *w)
+        .group_by(Event.source_ip).having(func.count(func.distinct(Event.url_path)) >= WEBSHELL_PROBE_MIN)
+        .order_by(func.count(func.distinct(Event.url_path)).desc()).limit(MAX_HITS_PER_RULE)
     ).all()
     for ip, cnt in rows:
         add("webshell_probe", f"Webshell探索の疑い: {ip}",
@@ -243,11 +241,11 @@ def evaluate(db: Session, conds: list | None = None) -> list[dict[str, Any]]:
 
     # --- 認証総当たり（ユーザー単位）---
     rows = db.execute(
-        select(N.actor_user, func.count())
-        .select_from(Event).join(N, N.event_id == Event.id)
-        .where(N.event_category.in_(["authentication", "security"]),
-               N.event_result == "failure", N.actor_user.isnot(None), *w)
-        .group_by(N.actor_user).having(func.count() >= AUTH_FAIL_MIN)
+        select(Event.actor_user, func.count())
+        .select_from(Event)
+        .where(Event.event_category.in_(["authentication", "security"]),
+               Event.event_result == "failure", Event.actor_user.isnot(None), *w)
+        .group_by(Event.actor_user).having(func.count() >= AUTH_FAIL_MIN)
         .order_by(func.count().desc()).limit(MAX_HITS_PER_RULE)
     ).all()
     for user, cnt in rows:
@@ -256,11 +254,11 @@ def evaluate(db: Session, conds: list | None = None) -> list[dict[str, Any]]:
 
     # --- 認証総当たり（送信元IP単位）---
     rows = db.execute(
-        select(N.source_ip, func.count())
-        .select_from(Event).join(N, N.event_id == Event.id)
-        .where(N.event_category.in_(["authentication", "security"]),
-               N.event_result == "failure", N.source_ip.isnot(None), *w)
-        .group_by(N.source_ip).having(func.count() >= AUTH_FAIL_MIN)
+        select(Event.source_ip, func.count())
+        .select_from(Event)
+        .where(Event.event_category.in_(["authentication", "security"]),
+               Event.event_result == "failure", Event.source_ip.isnot(None), *w)
+        .group_by(Event.source_ip).having(func.count() >= AUTH_FAIL_MIN)
         .order_by(func.count().desc()).limit(MAX_HITS_PER_RULE)
     ).all()
     for ip, cnt in rows:
@@ -269,13 +267,13 @@ def evaluate(db: Session, conds: list | None = None) -> list[dict[str, Any]]:
 
     # --- root SSH 試行（1件でも要注意。閾値なし）---
     rows = db.execute(
-        select(N.source_ip, func.count())
-        .select_from(Event).join(N, N.event_id == Event.id)
-        .where(N.event_category == "authentication",
-               N.event_result == "failure",
-               N.actor_user == "root",
-               N.source_ip.isnot(None), *w)
-        .group_by(N.source_ip)
+        select(Event.source_ip, func.count())
+        .select_from(Event)
+        .where(Event.event_category == "authentication",
+               Event.event_result == "failure",
+               Event.actor_user == "root",
+               Event.source_ip.isnot(None), *w)
+        .group_by(Event.source_ip)
         .order_by(func.count().desc()).limit(MAX_HITS_PER_RULE)
     ).all()
     for ip, cnt in rows:
@@ -285,15 +283,15 @@ def evaluate(db: Session, conds: list | None = None) -> list[dict[str, Any]]:
 
     # --- SSH 不正ユーザー試行（root以外。閾値なし）---
     rows = db.execute(
-        select(N.source_ip, N.actor_user, func.count())
-        .select_from(Event).join(N, N.event_id == Event.id)
-        .where(N.event_category == "authentication",
-               N.event_result == "failure",
-               N.service_name == "sshd",
-               N.actor_user.isnot(None),
-               N.actor_user != "root",
-               N.source_ip.isnot(None), *w)
-        .group_by(N.source_ip, N.actor_user)
+        select(Event.source_ip, Event.actor_user, func.count())
+        .select_from(Event)
+        .where(Event.event_category == "authentication",
+               Event.event_result == "failure",
+               Event.service_name == "sshd",
+               Event.actor_user.isnot(None),
+               Event.actor_user != "root",
+               Event.source_ip.isnot(None), *w)
+        .group_by(Event.source_ip, Event.actor_user)
         .order_by(func.count().desc()).limit(MAX_HITS_PER_RULE)
     ).all()
     for ip, user, cnt in rows:
@@ -303,10 +301,10 @@ def evaluate(db: Session, conds: list | None = None) -> list[dict[str, Any]]:
 
     # --- 海外アクセス: GeoIP mmdb 設置時のみ評価（未設置なら source_country は常に null で0件）---
     rows = db.execute(
-        select(N.source_country, N.source_ip, func.count())
-        .select_from(Event).join(N, N.event_id == Event.id)
-        .where(N.source_country.isnot(None), N.source_country != HOME_COUNTRY, N.source_ip.isnot(None), *w)
-        .group_by(N.source_country, N.source_ip)
+        select(Event.source_country, Event.source_ip, func.count())
+        .select_from(Event)
+        .where(Event.source_country.isnot(None), Event.source_country != HOME_COUNTRY, Event.source_ip.isnot(None), *w)
+        .group_by(Event.source_country, Event.source_ip)
         .order_by(func.count().desc()).limit(MAX_HITS_PER_RULE)
     ).all()
     for country, ip, cnt in rows:
@@ -318,7 +316,7 @@ def evaluate(db: Session, conds: list | None = None) -> list[dict[str, Any]]:
     cutoff = datetime.now(timezone.utc) - timedelta(hours=silence_hours)
     rows = db.execute(
         select(Event.source, Event.source_type, func.max(Event.received_at), func.count())
-        .select_from(Event).join(N, N.event_id == Event.id)
+        .select_from(Event)
         .where(Event.source.isnot(None), *w)
         .group_by(Event.source, Event.source_type)
         .having(func.count() >= SILENCE_MIN_EVENTS)
@@ -336,8 +334,8 @@ def evaluate(db: Session, conds: list | None = None) -> list[dict[str, Any]]:
     # --- ビルド失敗（Astro, source_type=astro_build）: 運用監視系。1件でも要対応。閾値なし ---
     rows = db.execute(
         select(Event.source, func.count())
-        .select_from(Event).join(N, N.event_id == Event.id)
-        .where(Event.source_type == "astro_build", N.event_result == "failure",
+        .select_from(Event)
+        .where(Event.source_type == "astro_build", Event.event_result == "failure",
                Event.source.isnot(None), *w)
         .group_by(Event.source)
         .order_by(func.count().desc()).limit(MAX_HITS_PER_RULE)
@@ -371,7 +369,7 @@ def _evaluate_custom(db: Session, w: list) -> list[dict[str, Any]]:
         if group_col is not None:
             rows2 = db.execute(
                 select(group_col, func.count())
-                .select_from(Event).join(N, N.event_id == Event.id)
+                .select_from(Event)
                 .where(group_col.isnot(None), match_clause, *w)
                 .group_by(group_col).having(func.count() >= r.min_count)
                 .order_by(func.count().desc()).limit(MAX_HITS_PER_RULE)
@@ -385,7 +383,7 @@ def _evaluate_custom(db: Session, w: list) -> list[dict[str, Any]]:
                 })
         else:
             cnt = db.scalar(
-                select(func.count()).select_from(Event).join(N, N.event_id == Event.id)
+                select(func.count()).select_from(Event)
                 .where(match_clause, *w)
             ) or 0
             if cnt >= r.min_count:

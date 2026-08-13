@@ -2,10 +2,9 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { MappingsResponse, LogSample } from "../types";
 
-// マッピング画面。
-// 1) 取り込みの現行方式（受信キーがTaxonomy KEYと一致したものだけを使う）
-// 2) 送信側の設定サンプル（このとおり出せば正規化なしでそのまま画面に出る）
-// 3) 正規化マッピング（検知ルール・相関分析が使う normalized_events 向け。イベント画面は使わない）
+// マッピング画面。取り込みの規則と、送信側の設定サンプルを示す。
+// 旧「正規化マッピング」（source_typeごとにTaxonomy外の別名キーを並べた対応表）は廃止した。
+// 表示・検索・集計・検知はすべて Taxonomy KEY だけを使う。
 export function Mappings() {
   const [d, setD] = useState<MappingsResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -31,16 +30,12 @@ export function Mappings() {
 
   return (
     <div className="row row-cards">
-      {/* ---------------- 1) 取り込みの考え方 ---------------- */}
+      {/* ---------------- 取り込みの考え方 ---------------- */}
       <div className="col-12">
         <div className="card">
           <div className="card-header">
             <h3 className="card-title">取り込みの仕組み（受信JSONキー → 画面）</h3>
-            <div className="card-actions d-flex gap-2 d-print-none">
-              <button className="btn btn-sm btn-outline-primary"
-                onClick={() => api.downloadMappingsCsv().catch((e) => setErr((e as Error).message))}>
-                ⬇ CSVダウンロード
-              </button>
+            <div className="card-actions d-print-none">
               <button className="btn btn-sm btn-outline-secondary" onClick={() => window.print()}>
                 🖨 印刷 / PDF保存
               </button>
@@ -55,7 +50,7 @@ export function Mappings() {
         </div>
       </div>
 
-      {/* ---------------- 2) よく使うTaxonomy KEY ---------------- */}
+      {/* ---------------- よく使うTaxonomy KEY ---------------- */}
       <div className="col-12">
         <div className="card">
           <div className="card-header">
@@ -84,7 +79,7 @@ export function Mappings() {
         </div>
       </div>
 
-      {/* ---------------- 3) 送信設定サンプル ---------------- */}
+      {/* ---------------- 送信設定サンプル ---------------- */}
       <div className="col-12">
         <div className="card">
           <div className="card-header">
@@ -140,56 +135,6 @@ export function Mappings() {
           )}
         </div>
       </div>
-
-      {/* ---------------- 4) 正規化マッピング（他機能用） ---------------- */}
-      <div className="col-12">
-        <div className="card">
-          <div className="card-header">
-            <h3 className="card-title">正規化マッピング（検知ルール・相関分析用）</h3>
-          </div>
-          <div className="card-body py-2">
-            <p className="text-secondary mb-1">{d.normalize_note}</p>
-            <p className="text-secondary mb-0 small">{d.note}</p>
-          </div>
-        </div>
-      </div>
-
-      {d.groups.map((g) => (
-        <div className="col-12 col-xl-6" key={g.source_type}>
-          <div className="card">
-            <div className="card-header">
-              <h3 className="card-title">{g.source_type_label}</h3>
-              <span className="card-subtitle ms-2 text-secondary">{g.source_type}</span>
-            </div>
-            <div className="table-responsive">
-              <table className="table table-vcenter table-sm card-table">
-                <thead><tr>
-                  <th style={{ width: "40%" }}>正規化フィールド</th>
-                  <th>候補キー（優先順・受信JSON側）</th>
-                </tr></thead>
-                <tbody>
-                  {g.fields.map((f) => (
-                    <tr key={f.field}>
-                      <td>
-                        <div>{f.field_label}</div>
-                        <code className="text-secondary small">{f.field}</code>
-                      </td>
-                      <td>
-                        {f.candidate_keys.map((k, i) => (
-                          <span key={k}>
-                            <code className={i === 0 ? "text-primary" : "text-secondary"}>{k}</code>
-                            {i < f.candidate_keys.length - 1 && <span className="text-secondary"> → </span>}
-                          </span>
-                        ))}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      ))}
     </div>
   );
 }

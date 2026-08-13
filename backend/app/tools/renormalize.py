@@ -3,7 +3,7 @@
 
 対象: source_type が "secure" / "messages" のまま保存されている Event
 （本来は "linux" に統一される想定。§ CLAUDE.md「syslogを分類として使わない」）。
-payload は無改変。source_type / normalized_events / event_entities のみ更新する。
+payload は無改変。source_type / events の導出列 / event_entities のみ更新する。
 
   docker compose exec backend python -m app.tools.renormalize
 """
@@ -11,9 +11,9 @@ import argparse
 
 from ..db import SessionLocal
 from ..geoip import asn_of, country_of
-from ..models import Event, EventEntity, NormalizedEvent
+from ..models import Event, EventEntity
 from ..normalize import normalize
-from ..pipeline import _NORM_COLS, _entities
+from ..pipeline import _EVENT_DERIVED_COLS, _entities
 
 TARGET_SOURCE_TYPES = ("secure", "messages")
 
@@ -49,12 +49,13 @@ def main() -> None:
             if as_org:
                 norm["source_as_org"] = as_org
 
-        db.query(NormalizedEvent).filter(NormalizedEvent.event_id == ev.id).delete()
+        # 導出値は events 自身の列。行を消さず上書きする（旧 events の導出列 は廃止）。
         db.query(EventEntity).filter(EventEntity.event_id == ev.id).delete()
         db.flush()
 
-        ne = NormalizedEvent(event_id=ev.id, **{k: v for k, v in norm.items() if k in _NORM_COLS})
-        db.add(ne)
+        for _k, _v in norm.items():
+            if _k in _EVENT_DERIVED_COLS:
+                setattr(ev, _k, _v)
         for etype, evalue, role in _entities(norm):
             db.add(EventEntity(event_id=ev.id, entity_type=etype, entity_value=evalue, role=role))
 

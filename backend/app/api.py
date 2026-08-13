@@ -14,7 +14,6 @@ from .models import Asset, Case, CaseComment, CaseEvent, CustomRule, DeadLetter,
 from .models import Incident, IncidentAuditLog, IncidentComment, IncidentResponseAction, IncidentResponseActionType
 from .models import IncidentStatus, IncidentStatusHistory
 from .models import IocFeed, Setting, User, UserSettings
-from .models import NormalizedEvent as N
 from .schema import (AssetCreate, AssetDisplayNameUpdate, AssetUpdate, CustomRuleCreate,
                      CustomRuleUpdate, DismissedRelease, FeedUpdate,
                      LicenseApply, NotificationConfig, SilenceSettings, SyncSettings)
@@ -32,24 +31,24 @@ TAX_COLS = {
     "source": Event.source,
     "source_type": Event.source_type,
     "parse_status": Event.parse_status,
-    "event_category": N.event_category,
-    "event_action": N.event_action,
-    "event_result": N.event_result,
-    "event_severity": N.event_severity,
-    "source_name": N.source_name,
-    "device_name": N.device_name,
-    "source_ip": N.source_ip,
-    "source_country": N.source_country,
-    "source_asn": N.source_asn,
-    "source_as_org": N.source_as_org,
-    "actor_user": N.actor_user,
-    "url_domain": N.url_domain,
-    "url_path": N.url_path,
-    "http_status_code": N.http_status_code,
-    "host_name": N.host_name,
-    "observer_name": N.observer_name,
-    "service_name": N.service_name,
-    "network_protocol": N.network_protocol,
+    "event_category": Event.event_category,
+    "event_action": Event.event_action,
+    "event_result": Event.event_result,
+    "event_severity": Event.event_severity,
+    "source_name": Event.source_name,
+    "device_name": Event.device_name,
+    "source_ip": Event.source_ip,
+    "source_country": Event.source_country,
+    "source_asn": Event.source_asn,
+    "source_as_org": Event.source_as_org,
+    "actor_user": Event.actor_user,
+    "url_domain": Event.url_domain,
+    "url_path": Event.url_path,
+    "http_status_code": Event.http_status_code,
+    "host_name": Event.host_name,
+    "observer_name": Event.observer_name,
+    "service_name": Event.service_name,
+    "network_protocol": Event.network_protocol,
 }
 CONTROL = {"q", "start", "end", "limit", "offset", "interval", "groupby", "field", "top", "attention", "threat", "format"}
 
@@ -64,17 +63,15 @@ def _attention_clause():
     （is_event_attention。ケース管理機能設計書v2 2章）の両方から使う共通ロジック。"""
     payload_match = or_(*[cast(Event.payload, String).ilike(f"%{k}%") for k in ATTENTION_KEYWORDS])
     norm_match = or_(
-        N.event_result == "failure",
-        N.event_severity.in_(["warning", "error", "critical", "crit", "alert", "emerg"]),
+        Event.event_result == "failure",
+        Event.event_severity.in_(["warning", "error", "critical", "crit", "alert", "emerg"]),
     )
     return or_(payload_match, norm_match)
 
 
 def is_event_attention(db: Session, event_id: int) -> bool:
-    # _joined() は完成済みの select(Event, N).join(...) を返すため、select_from() で包まず
-    # そのまま .where() を重ねる（list_events/export_events と同じ使い方）。select_from(_joined())
-    # は Select を素の FROM 要素として扱おうとして events×normalized_events のカルテシアン積を
-    # 生んでしまい、実運用データで検証した際にバックエンド全体が長時間ハングする実害が出た。
+    # _joined() は完成済みの select(Event) を返すため、select_from() で包まずそのまま
+    # .where() を重ねる（list_events/export_events と同じ使い方）。
     stmt = _joined().where(Event.id == event_id, _attention_clause())
     return db.execute(stmt).first() is not None
 
@@ -113,9 +110,9 @@ def apply_filters(stmt, f: dict):
     for k, v in f["payload_kv"]:
         stmt = stmt.where(Event.payload[k].astext == v)
     if f["start"]:
-        stmt = stmt.where(N.event_time >= f["start"])
+        stmt = stmt.where(Event.event_time >= f["start"])
     if f["end"]:
-        stmt = stmt.where(N.event_time <= f["end"])
+        stmt = stmt.where(Event.event_time <= f["end"])
     if f["q"]:
         stmt = stmt.where(cast(Event.payload, String).ilike(f"%{f['q']}%"))
     clause = _license_clause(f.get("blocked") or set())
@@ -125,29 +122,30 @@ def apply_filters(stmt, f: dict):
 
 
 def _joined():
-    return select(Event, N).join(N, Event.id == N.event_id)
+    # 導出値は events 自身の列になったので結合は不要（旧 normalized_events は廃止）。
+    return select(Event)
 
 
 def _agg(*cols):
-    return select(*cols).select_from(Event).join(N, Event.id == N.event_id)
+    return select(*cols).select_from(Event)
 
 
-def _row(ev: Event, n: N) -> dict:
+def _row(ev: Event) -> dict:
     return {
         "id": ev.id, "source": ev.source, "source_type": ev.source_type,
         "parse_status": ev.parse_status,
         "received_at": ev.received_at.isoformat() if ev.received_at else None,
-        "event_time": n.event_time.isoformat() if n.event_time else None,
-        "event_time_confidence": n.event_time_confidence,
-        "event_category": n.event_category, "event_action": n.event_action,
-        "event_result": n.event_result, "event_severity": n.event_severity,
-        "source_name": n.source_name, "device_name": n.device_name,
-        "source_ip": n.source_ip, "source_country": n.source_country,
-        "source_asn": n.source_asn, "source_as_org": n.source_as_org, "actor_user": n.actor_user,
-        "url_domain": n.url_domain, "url_path": n.url_path, "url_query": n.url_query,
-        "http_method": n.http_method, "http_status_code": n.http_status_code,
-        "service_name": n.service_name,
-        "message": n.message,
+        "event_time": ev.event_time.isoformat() if ev.event_time else None,
+        "event_time_confidence": ev.event_time_confidence,
+        "event_category": ev.event_category, "event_action": ev.event_action,
+        "event_result": ev.event_result, "event_severity": ev.event_severity,
+        "source_name": ev.source_name, "device_name": ev.device_name,
+        "source_ip": ev.source_ip, "source_country": ev.source_country,
+        "source_asn": ev.source_asn, "source_as_org": ev.source_as_org, "actor_user": ev.actor_user,
+        "url_domain": ev.url_domain, "url_path": ev.url_path, "url_query": ev.url_query,
+        "http_method": ev.http_method, "http_status_code": ev.http_status_code,
+        "service_name": ev.service_name,
+        "message": ev.message,
         "resolved": ev.resolved,
         "payload": ev.payload,
     }
@@ -166,9 +164,9 @@ def update_event_resolved(event_id: int, body: EventResolvedUpdate, db: Session 
     return {"ok": True, "resolved": ev.resolved}
 
 
-def _auto_incident_title(ev: Event, n: N) -> str:
+def _auto_incident_title(ev: Event) -> str:
     """インシデントのタイトルを起因イベントから自動生成する（設計書v4 4.1節。手動編集は今回スコープ外）。"""
-    base = n.event_action or n.message or n.source_name or ev.source or f"イベント #{ev.id}"
+    base = ev.event_action or ev.message or ev.source_name or ev.source or f"イベント #{ev.id}"
     base = base.strip().splitlines()[0] if base else f"イベント #{ev.id}"
     return base[:255]
 
@@ -180,14 +178,14 @@ def create_incident_from_event(event_id: int, db: Session = Depends(get_db), use
     row = db.execute(_joined().where(Event.id == event_id)).first()
     if not row:
         return _err(404, "イベントが見つかりません")
-    ev, n = row
+    ev = row[0]
     if not is_event_attention(db, event_id):
         return _err(400, "「注目」イベントのみインシデント化できます")
     existing = db.execute(select(Incident.id).where(Incident.event_id == event_id)).scalar_one_or_none()
     if existing:
         return _err(409, "このイベントは既にインシデント化されています")
     default_status = _default_status(db)
-    inc = Incident(event_id=event_id, title=_auto_incident_title(ev, n),
+    inc = Incident(event_id=event_id, title=_auto_incident_title(ev),
                    status_id=default_status.id if default_status else None)
     db.add(inc)
     db.flush()
@@ -237,8 +235,7 @@ def entities(db: Session = Depends(get_db), type: str | None = None, q: str | No
     （個別調査は引き続き「アセット」画面の「詳細」から可能）。
     除外後にlimit件になるよう、SQL側ではlimitせずPython側でフィルタしてから切り詰める。"""
     stmt = (select(EventEntity.entity_type, EventEntity.entity_value, func.count(),
-                   func.min(N.event_time), func.max(N.event_time))
-            .join(N, N.event_id == EventEntity.event_id)
+                   func.min(Event.event_time), func.max(Event.event_time))
             .join(Event, Event.id == EventEntity.event_id)
             .group_by(EventEntity.entity_type, EventEntity.entity_value))
     lc = _license_clause(_blocked(db))
@@ -275,7 +272,7 @@ def _entity_event_ids(db: Session, etype: str, evalue: str):
 @router.get("/entity")
 def entity_detail(type: str, value: str, db: Session = Depends(get_db)):
     ids = _entity_event_ids(db, type, value).subquery()
-    base = select(Event, N).join(N, Event.id == N.event_id).where(Event.id.in_(select(ids.c.event_id)))
+    base = select(Event).where(Event.id.in_(select(ids.c.event_id)))
     rows = db.execute(base).all()
     times = [n.event_time for _, n in rows if n.event_time]
     return {
@@ -291,10 +288,10 @@ def entity_detail(type: str, value: str, db: Session = Depends(get_db)):
 def entity_events(type: str, value: str, db: Session = Depends(get_db),
                   limit: int = Query(200, ge=1, le=1000)):
     ids = _entity_event_ids(db, type, value).subquery()
-    stmt = (select(Event, N).join(N, Event.id == N.event_id)
+    stmt = (select(Event)
             .where(Event.id.in_(select(ids.c.event_id)))
-            .order_by(nulls_last(N.event_time.desc()), Event.id.desc()).limit(limit))
-    return [_row(e, n) for e, n in db.execute(stmt).all()]
+            .order_by(nulls_last(Event.event_time.desc()), Event.id.desc()).limit(limit))
+    return [_row(e) for (e,) in db.execute(stmt).all()]
 
 
 # ============================ Assets（資産） §10.7 ============================
@@ -328,8 +325,7 @@ def _asset_reg_dict(a: Asset) -> dict:
 
 @router.get("/assets")
 def list_assets(db: Session = Depends(get_db)):
-    stmt = (select(EventEntity.entity_value, func.count(), func.min(N.event_time), func.max(N.event_time))
-            .join(N, N.event_id == EventEntity.event_id)
+    stmt = (select(EventEntity.entity_value, func.count(), func.min(Event.event_time), func.max(Event.event_time))
             .join(Event, Event.id == EventEntity.event_id)
             .where(EventEntity.entity_type == "ip")
             .group_by(EventEntity.entity_value))
@@ -432,11 +428,11 @@ def related_events(event_id: int, db: Session = Depends(get_db), limit: int = Qu
         return {"keys": [], "items": []}
     conds = [(EventEntity.entity_type == t) & (EventEntity.entity_value == v) for t, v in my]
     peer_ids = select(EventEntity.event_id).where(or_(*conds)).where(EventEntity.event_id != event_id)
-    stmt = (select(Event, N).join(N, Event.id == N.event_id)
+    stmt = (select(Event)
             .where(Event.id.in_(peer_ids))
-            .order_by(nulls_last(N.event_time.desc()), Event.id.desc()).limit(limit))
+            .order_by(nulls_last(Event.event_time.desc()), Event.id.desc()).limit(limit))
     return {"keys": [{"entity_type": t, "entity_value": v} for t, v in my],
-            "items": [_row(e, n) for e, n in db.execute(stmt).all()]}
+            "items": [_row(e) for (e,) in db.execute(stmt).all()]}
 
 
 # ============================ 相関分析（AI不要・SQL結合ベース）============================
@@ -450,15 +446,14 @@ def correlations(db: Session = Depends(get_db), entity_type: str = "ip",
     blocked = _blocked(db)
     stc = func.count(func.distinct(Event.source_type))
     evc = func.count(func.distinct(EventEntity.event_id))
-    fails = func.sum(case((N.event_result == "failure", 1), else_=0))
+    fails = func.sum(case((Event.event_result == "failure", 1), else_=0))
     stmt = (
         select(EventEntity.entity_value, evc.label("ev"), stc.label("stc"),
                func.array_agg(func.distinct(Event.source_type)),
-               func.array_agg(func.distinct(N.source_name)),
-               func.min(N.event_time), func.max(N.event_time), fails.label("fails"))
+               func.array_agg(func.distinct(Event.source_name)),
+               func.min(Event.event_time), func.max(Event.event_time), fails.label("fails"))
         .select_from(EventEntity)
         .join(Event, Event.id == EventEntity.event_id)
-        .join(N, N.event_id == EventEntity.event_id)
         .where(EventEntity.entity_type == entity_type)
     )
     if blocked:
@@ -545,13 +540,12 @@ def case_detail(case_id: int, db: Session = Depends(get_db)):
     if not c:
         return {"error": "not found"}
     links = db.execute(
-        select(CaseEvent, Event, N)
+        select(CaseEvent, Event)
         .join(Event, Event.id == CaseEvent.event_id)
-        .join(N, N.event_id == Event.id)
         .where(CaseEvent.case_id == case_id)
-        .order_by(nulls_last(N.event_time.desc()))
+        .order_by(nulls_last(Event.event_time.desc()))
     ).all()
-    events = [{**_row(e, n), "note": le.note} for le, e, n in links]
+    events = [{**_row(e), "note": le.note} for le, e in links]
     return {
         "id": c.id, "title": c.title,
         "created_at": c.created_at.isoformat() if c.created_at else None,
@@ -644,13 +638,13 @@ def add_case_comment(case_id: int, body: CaseCommentCreate, db: Session = Depend
 @router.get("/incidents")
 def list_incidents(db: Session = Depends(get_db)):
     """インシデント単体の一覧（ケースを経由せず左メニューから直接アクセスする）。
-    normalized_eventsとは outerjoin（inner joinだと、元イベントが保持期間切れ等で削除され
+    起因イベントとは outerjoin（inner joinだと、元イベントが保持期間切れ等で削除され
     event_idがNULLになったインシデントが一覧から消えてしまうため。models.py Incident参照）。"""
     rows = db.execute(
-        select(Incident, IncidentStatus, User.display_name, User.username, N)
+        select(Incident, IncidentStatus, User.display_name, User.username, Event)
         .outerjoin(IncidentStatus, IncidentStatus.id == Incident.status_id)
         .outerjoin(User, User.id == Incident.assignee_user_id)
-        .outerjoin(N, N.event_id == Incident.event_id)
+        .outerjoin(Event, Event.id == Incident.event_id)
         .order_by(Incident.updated_at.desc())
     ).all()
     return [{
@@ -677,7 +671,7 @@ def incident_detail(incident_id: int, db: Session = Depends(get_db)):
     # None となり、Event.id == None は自動的に IS NULL 判定されるため row は None のままになる
     # （インシデント本体は残り、主役アラート情報のみ「取得できません」表示になる。models.py参照）。
     row = db.execute(_joined().where(Event.id == inc.event_id)).first()
-    event = _row(*row) if row else None
+    event = _row(row[0]) if row else None
     return {
         "id": inc.id, "event_id": inc.event_id, "title": inc.title,
         "status_id": inc.status_id, "status_name": status.name if status else None,
@@ -924,9 +918,9 @@ def _conds(f: dict) -> list:
     for k, v in f["payload_kv"]:
         c.append(Event.payload[k].astext == v)
     if f["start"]:
-        c.append(N.event_time >= f["start"])
+        c.append(Event.event_time >= f["start"])
     if f["end"]:
-        c.append(N.event_time <= f["end"])
+        c.append(Event.event_time <= f["end"])
     if f["q"]:
         c.append(cast(Event.payload, String).ilike(f"%{f['q']}%"))
     lc = _license_clause(f.get("blocked") or set())
@@ -1203,54 +1197,17 @@ def dead_letters(db: Session = Depends(get_db), limit: int = Query(200, ge=1, le
     }
 
 
-# ============================ マッピング（正規化のキー対応表）============================
-# 正規化フィールドの日本語ラベル（画面/CSV表示用）
-_FIELD_LABEL = {
-    "source_ip": "送信元IP", "destination_ip": "宛先IP", "source_port": "送信元ポート",
-    "url_domain": "ドメイン(vhost)", "url_path": "URLパス", "url_query": "URLクエリ",
-    "request": "リクエスト行", "http_method": "HTTPメソッド", "http_status_code": "HTTPステータス",
-    "http_user_agent": "User-Agent", "http_referer": "Referer",
-    "actor_user": "ユーザー(主体)", "target_user": "対象ユーザー",
-    "observer_name": "観測ホスト名", "host_name": "ホスト名", "device_name": "機器名",
-    "service_name": "サービス/プロセス", "message": "メッセージ", "event_severity": "重大度",
-    "event_action": "アクション", "target_resource": "対象リソース", "request_id": "リクエストID",
-    "mac_address": "MACアドレス", "network_protocol": "プロトコル",
-}
-
-
-def _mapping_rows() -> list[dict]:
-    from .normalize import MAPPINGS
-    from .labels_backend import ST_LABEL
-    out = []
-    for st, fields in MAPPINGS.items():
-        for field, keys in fields.items():
-            out.append({
-                "source_type": st, "source_type_label": ST_LABEL.get(st, st),
-                "field": field, "field_label": _FIELD_LABEL.get(field, field),
-                "candidate_keys": keys,
-            })
-    return out
-
-
+# ============================ マッピング（取り込みキーの対応）============================
 @router.get("/mappings")
 def mappings(db: Session = Depends(get_db)):
-    """マッピング画面。取り込みの現行方式（Taxonomy KEY直接）＋送信設定サンプル＋
-    正規化マッピング（検知ルール・相関分析が使う normalized_events 向け）を返す。"""
-    from .normalize import MAPPINGS
-    from .labels_backend import ST_LABEL
+    """マッピング画面。取り込みの規則と、送信側の設定サンプルを返す。
+
+    旧「正規化マッピング」（source_typeごとに remote_addr / http_host / HTTPMethod 等の
+    Taxonomy外の別名を並べた対応表）は廃止した。設計書v12で表示・検索・集計・検知は
+    すべて Taxonomy KEY だけを使う方針に統一されたため、別名の読み替えは行わない。"""
     from .log_samples import SAMPLES
     from .taxonomy_master import ALL_KEYS, LABELS
 
-    groups = []
-    for st, fields in MAPPINGS.items():
-        groups.append({
-            "source_type": st, "source_type_label": ST_LABEL.get(st, st),
-            "fields": [{"field": f, "field_label": _FIELD_LABEL.get(f, f), "candidate_keys": k}
-                       for f, k in fields.items()],
-        })
-
-    # 画面の「よく使うキー」に出す代表例。ALL_KEYSは770個あり全部は出せないので、
-    # ラベル付き（＝画面で日本語表示できる）ものだけを用途別に抜粋する。
     common = [
         ("分類", ["class", "source"]),
         ("時刻", ["eventtime"]),
@@ -1270,10 +1227,10 @@ def mappings(db: Session = Depends(get_db)):
     return {
         "taxonomy_total": len(ALL_KEYS),
         "ingest_note": (
-            "受信したJSONのキー名が Taxonomy KEY と一致したものだけを、画面の表示・検索・集計に使う。"
-            "一致は大文字小文字を無視して行うので EventTime / EVENTTIME / eventtime はすべて同じ扱いになる。"
-            "一致しないキーも値は無改変で保存されるが、表示・検索・集計には使われない。"
-            "別名は同一視しないため host と hostname、client と srcipv4 は別のキーとして扱う。"
+            "受信したJSONのキー名が Taxonomy KEY と一致したものだけを、画面の表示・検索・集計・"
+            "検知に使う。一致は大文字小文字を無視して行うので EventTime / EVENTTIME / eventtime は"
+            "すべて同じ扱いになる。一致しないキーも値は無改変で保存されるが、表示・検索・集計には"
+            "使われない。別名は同一視しないため host と hostname、client と srcipv4 は別のキーとして扱う。"
         ),
         "class_note": (
             "クラスは受信JSONの class キーの値だけで決まる。推定はしない。"
@@ -1281,29 +1238,7 @@ def mappings(db: Session = Depends(get_db)):
         ),
         "key_groups": key_groups,
         "samples": SAMPLES,
-        "note": "候補キーは先頭から順に探索し、最初に見つかった値を採用（値は無改変でコピー）。"
-                "event_category/result/severity 等はメッセージ本文からの分類で導出（キー直写しではない）。",
-        "normalize_note": (
-            "以下は normalized_events（軽量タクソノミー）への対応表で、検知ルール・相関分析・"
-            "調査支援が使う。イベント画面とダッシュボードはこの表を使わず、上のTaxonomy KEYを直接読む。"
-        ),
-        "groups": groups,
     }
-
-
-@router.get("/mappings.csv")
-def mappings_csv():
-    import csv
-    import io
-    buf = io.StringIO()
-    w = csv.writer(buf)
-    w.writerow(["source_type", "種別(表示名)", "正規化フィールド", "フィールド(表示名)", "候補キー(優先順)"])
-    for r in _mapping_rows():
-        w.writerow([r["source_type"], r["source_type_label"], r["field"],
-                    r["field_label"], " | ".join(r["candidate_keys"])])
-    data = "﻿" + buf.getvalue()  # BOM付きでExcel文字化け回避
-    return Response(content=data, media_type="text/csv; charset=utf-8",
-                    headers={"Content-Disposition": "attachment; filename=logseeker_mappings.csv"})
 
 
 # ============================ お知らせ・更新履歴 ============================
@@ -1358,7 +1293,6 @@ def admin_overview(db: Session = Depends(get_db)):
     return {
         "counts": {
             "events": db.scalar(select(func.count()).select_from(Event)),
-            "normalized": db.scalar(select(func.count()).select_from(N)),
             "entities": db.scalar(select(func.count()).select_from(EventEntity)),
             "cases": db.scalar(select(func.count()).select_from(Case)),
             "incidents": db.scalar(select(func.count()).select_from(Incident)),

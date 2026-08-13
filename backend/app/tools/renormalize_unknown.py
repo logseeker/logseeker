@@ -2,7 +2,7 @@
 現在の SourceTypeDetector ルールで再判定し、マッチすれば再正規化する。
 detectors.py に windows_event ルールを追加した際の遡及適用のために作成したが、
 今後同種のルール追加時にも使い回せる汎用ツール。
-payload は無改変。source_type / normalized_events / event_entities のみ更新する。
+payload は無改変。source_type / events の導出列 / event_entities のみ更新する。
 どのルールにもマッチしなければ何もしない（従来通りNULL・Unknown表示のまま）。
 
   docker compose exec backend python -m app.tools.renormalize_unknown [--dry-run]
@@ -12,9 +12,9 @@ import argparse
 from ..db import SessionLocal
 from ..detectors import detect_source_type
 from ..geoip import asn_of, country_of
-from ..models import Event, EventEntity, NormalizedEvent
+from ..models import Event, EventEntity
 from ..normalize import PARSER_VERSION, normalize
-from ..pipeline import _NORM_COLS, _entities
+from ..pipeline import _EVENT_DERIVED_COLS, _entities
 
 
 def main() -> None:
@@ -52,12 +52,13 @@ def main() -> None:
             if as_org:
                 norm["source_as_org"] = as_org
 
-        db.query(NormalizedEvent).filter(NormalizedEvent.event_id == ev.id).delete()
+        # 導出値は events 自身の列。行を消さず上書きする（旧 events の導出列 は廃止）。
         db.query(EventEntity).filter(EventEntity.event_id == ev.id).delete()
         db.flush()
 
-        ne = NormalizedEvent(event_id=ev.id, **{k: v for k, v in norm.items() if k in _NORM_COLS})
-        db.add(ne)
+        for _k, _v in norm.items():
+            if _k in _EVENT_DERIVED_COLS:
+                setattr(ev, _k, _v)
         for etype, evalue, role in _entities(norm):
             db.add(EventEntity(event_id=ev.id, entity_type=etype, entity_value=evalue, role=role))
 

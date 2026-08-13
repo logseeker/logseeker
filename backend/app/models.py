@@ -1,13 +1,13 @@
 """DBスキーマ（PROJECT.md §9）。
-payload は受信JSONを無改変で保存し、その外側に正規化(normalized_events)を派生生成する。
-MVP1/2 範囲: events / normalized_events / dead_letters。
+payload は受信JSONを無改変で保存する。検索・集計に使う値は events の列として持つ
+（時刻解決・分類・GeoIP等の計算結果と、Taxonomy KEYから優先順で選んだ代表値）。
 （event_entities / annotations / incidents / rule_hits などは後続MVPで追加）
 """
 from datetime import datetime
 
 from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
 
@@ -35,73 +35,43 @@ class Event(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     resolved: Mapped[bool] = mapped_column(Boolean, default=False)  # 対応済み/未対応（ケース紐付けとは独立）
 
-    normalized: Mapped["NormalizedEvent"] = relationship(
-        back_populates="event", uselist=False, cascade="all, delete-orphan"
-    )
-
-
-class NormalizedEvent(Base):
-    """検索・集計・相関に使う正規化済みフィールド（軽量タクソノミー §8）。不明は null。"""
-    __tablename__ = "normalized_events"
-
-    event_id: Mapped[int] = mapped_column(ForeignKey("events.id", ondelete="CASCADE"), primary_key=True)
-
-    # event 系
+    # ---- 検索・集計・検知に使う導出値 ---------------------------------------
+    # payload から取れる値は payload の Taxonomy KEY を直接読むのが原則（設計書v12 §4.1.1）。
+    # ここに列として持つのは「受信キーのコピーでは作れない＝計算した結果」だけ。
+    #   event_time            多様な時刻表記から解決した時刻
+    #   event_category/action/result/severity   本文からの分類
+    #   source_country/asn/as_org               送信元IPからのGeoIP付与
+    #   source_name/device_name                 表示用の名前解決
+    # 旧 normalized_events テーブルの置き換え。あちらは source_type ごとに別名キー
+    # （remote_addr / http_host 等のTaxonomy外の名前）を並べた対応表に依存していたため廃止した。
     event_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True, nullable=True)
     event_time_original: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    event_time_confidence: Mapped[str | None] = mapped_column(String(8), nullable=True)  # high/medium/low/none
+    event_time_confidence: Mapped[str | None] = mapped_column(String(8), nullable=True)
     event_category: Mapped[str | None] = mapped_column(String(32), index=True, nullable=True)
-    event_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
     event_action: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     event_result: Mapped[str | None] = mapped_column(String(16), index=True, nullable=True)
     event_severity: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    event_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
-    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_name: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
+    device_name: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
+    source_country: Mapped[str | None] = mapped_column(String(4), index=True, nullable=True)
+    source_asn: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    source_as_org: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
 
-    # source/observer 系
-    source_name: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)  # 表示用ログソース名
-    device_name: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)  # 機器/ホスト（推定しない）
-    observer_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    observer_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    service_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
-
-    # actor/user 系
-    actor_user: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
-    actor_host: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    target_user: Mapped[str | None] = mapped_column(String(255), nullable=True)
-
-    # network 系
+    # ---- Taxonomy KEY から優先順で選んだ代表値 ------------------------------
+    # 値の出所は payload の Taxonomy KEY のみ（taxonomy_fields.py の優先順）。
+    # 毎回JSONBを展開すると検知ルールや相関の集計が遅くなるため、取り込み時に確定して持つ。
     source_ip: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
-    source_country: Mapped[str | None] = mapped_column(String(4), index=True, nullable=True)  # ISO国コード（GeoIP mmdb 未設定時は null）
-    source_asn: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # AS番号（GeoIP ASN mmdb 未設定時は null）
-    source_as_org: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)  # AS組織名（同上）
-    source_port: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    destination_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    destination_port: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    network_protocol: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    network_transport: Mapped[str | None] = mapped_column(String(8), nullable=True)
-    mac_address: Mapped[str | None] = mapped_column(String(32), nullable=True)
-
-    # host 系
-    host_name: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
-    target_host: Mapped[str | None] = mapped_column(String(255), nullable=True)
-
-    # web 系
+    actor_user: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
     url_domain: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
     url_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     url_query: Mapped[str | None] = mapped_column(Text, nullable=True)
     http_method: Mapped[str | None] = mapped_column(String(16), nullable=True)
     http_status_code: Mapped[str | None] = mapped_column(String(8), index=True, nullable=True)
-    http_user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
-    http_referer: Mapped[str | None] = mapped_column(Text, nullable=True)
-    request: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    # resource/file 系
-    target_resource: Mapped[str | None] = mapped_column(Text, nullable=True)
-    file_path: Mapped[str | None] = mapped_column(Text, nullable=True)
-    request_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
-
-    event: Mapped["Event"] = relationship(back_populates="normalized")
+    host_name: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
+    observer_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    service_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    network_protocol: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class DeadLetter(Base):
@@ -435,7 +405,7 @@ class CustomRule(Base):
 # よく使う正規化軸の複合インデックス
 from sqlalchemy import Index  # noqa: E402
 
-Index("ix_norm_cat_time", NormalizedEvent.event_category, NormalizedEvent.event_time)
-Index("ix_norm_result_time", NormalizedEvent.event_result, NormalizedEvent.event_time)
+Index("ix_events_cat_time", Event.event_category, Event.event_time)
+Index("ix_events_result_time", Event.event_result, Event.event_time)
 Index("ix_entity_type_value", EventEntity.entity_type, EventEntity.entity_value)
 Index("ix_ioc_type_value", IOC.indicator_type, IOC.value)

@@ -296,8 +296,6 @@ export interface DeadLetterRow {
 }
 export interface DeadLettersResponse { total: number; items: DeadLetterRow[]; }
 
-export interface MappingField { field: string; field_label: string; candidate_keys: string[]; }
-export interface MappingGroup { source_type: string; source_type_label: string; fields: MappingField[]; }
 export interface TaxonomyKeyRef { key: string; label: string; }
 export interface TaxonomyKeyGroup { title: string; keys: TaxonomyKeyRef[]; }
 export interface LogSample {
@@ -310,9 +308,6 @@ export interface MappingsResponse {
   class_note: string;
   key_groups: TaxonomyKeyGroup[];
   samples: LogSample[];
-  note: string;
-  normalize_note: string;
-  groups: MappingGroup[];
 }
 
 export interface AdminOverview {

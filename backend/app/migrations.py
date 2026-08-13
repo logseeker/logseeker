@@ -150,6 +150,7 @@ def run(db: Session) -> None:
     _fix_user_fk_ondelete(db)
     _fix_incident_event_id_nullable(db)
     _add_user_settings_events_columns(db)
+    _move_normalized_into_events(db)
     log.info("case/incident management migrations: done.")
 
 
@@ -158,6 +159,83 @@ def _add_user_settings_events_columns(db: Session) -> None:
     if not _table_exists(db, "user_settings"):
         return
     db.execute(text("ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS events_columns TEXT"))
+    db.commit()
+
+
+# events へ移す列。旧 normalized_events の同名列から値をそのまま移送する
+# （移送なので値は変わらない＝既存の検知結果・集計結果が動かない）。
+_EVENT_DERIVED_COLUMNS = [
+    ("event_time", "TIMESTAMPTZ"),
+    ("event_time_original", "VARCHAR(64)"),
+    ("event_time_confidence", "VARCHAR(8)"),
+    ("event_category", "VARCHAR(32)"),
+    ("event_action", "VARCHAR(64)"),
+    ("event_result", "VARCHAR(16)"),
+    ("event_severity", "VARCHAR(16)"),
+    ("source_name", "VARCHAR(255)"),
+    ("device_name", "VARCHAR(255)"),
+    ("source_country", "VARCHAR(4)"),
+    ("source_asn", "BIGINT"),
+    ("source_as_org", "VARCHAR(255)"),
+    ("source_ip", "VARCHAR(64)"),
+    ("actor_user", "VARCHAR(255)"),
+    ("url_domain", "VARCHAR(255)"),
+    ("url_path", "TEXT"),
+    ("url_query", "TEXT"),
+    ("http_method", "VARCHAR(16)"),
+    ("http_status_code", "VARCHAR(8)"),
+    ("host_name", "VARCHAR(255)"),
+    ("observer_name", "VARCHAR(128)"),
+    ("service_name", "VARCHAR(128)"),
+    ("network_protocol", "VARCHAR(16)"),
+    ("message", "TEXT"),
+]
+
+_EVENT_DERIVED_INDEXES = [
+    "event_time", "event_category", "event_action", "event_result", "source_name",
+    "device_name", "source_country", "source_as_org", "source_ip", "actor_user",
+    "url_domain", "http_status_code", "host_name",
+]
+
+
+def _move_normalized_into_events(db: Session) -> None:
+    """normalized_events を廃止し、検索・集計に使う値を events の列へ移す。
+
+    旧テーブルは source_type ごとに候補キー（remote_addr / http_host / HTTPMethod 等の
+    Taxonomy外の別名）を並べた対応表に依存していた。設計書v12で表示・検索・集計は
+    Taxonomy KEY だけを使う方針に統一されたため、対応表ごと廃止する。
+    既存行の値は旧テーブルからそのまま移すので、検知結果や集計値は変わらない。
+
+    冪等。列が既にあれば追加せず、旧テーブルが無ければ移送もしない。
+    """
+    for col, typ in _EVENT_DERIVED_COLUMNS:
+        db.execute(text(f"ALTER TABLE events ADD COLUMN IF NOT EXISTS {col} {typ}"))
+    db.commit()
+
+    if _table_exists(db, "normalized_events"):
+        cols = [c for c, _ in _EVENT_DERIVED_COLUMNS
+                if _column_exists(db, "normalized_events", c)]
+        if cols:
+            setter = ", ".join(f"{c} = n.{c}" for c in cols)
+            # 1.4M行規模でも1トランザクションが肥大しないよう、id範囲で刻んで移送する。
+            lo = db.execute(text("SELECT COALESCE(MIN(id), 0) FROM events")).scalar() or 0
+            hi = db.execute(text("SELECT COALESCE(MAX(id), 0) FROM events")).scalar() or 0
+            step, moved = 50000, 0
+            while lo <= hi:
+                r = db.execute(text(
+                    f"UPDATE events e SET {setter} FROM normalized_events n "
+                    "WHERE n.event_id = e.id AND e.id >= :lo AND e.id < :hi"
+                ), {"lo": lo, "hi": lo + step})
+                moved += r.rowcount or 0
+                db.commit()
+                lo += step
+            log.info("normalized_events -> events: %d rows moved", moved)
+        db.execute(text("DROP TABLE IF EXISTS normalized_events CASCADE"))
+        db.commit()
+        log.info("normalized_events dropped")
+
+    for col in _EVENT_DERIVED_INDEXES:
+        db.execute(text(f"CREATE INDEX IF NOT EXISTS ix_events_{col} ON events ({col})"))
     db.commit()
 
 

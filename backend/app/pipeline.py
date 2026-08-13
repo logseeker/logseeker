@@ -1,16 +1,23 @@
 """ingest pipeline（PROJECT.md §6）。REST/TCP/connector/file すべてここを通る。
-受信 → payload保存 → timestamp/parser/taxonomy → normalized_events 保存。payload は無改変。"""
+受信 → payload保存 → 時刻解決/分類/GeoIP → events の導出列へ保存。payload は無改変。"""
 import logging
 
 from sqlalchemy.orm import Session
 
 from .detectors import detect_source_type
 from .geoip import asn_of, country_of
-from .models import DeadLetter, Event, EventEntity, NormalizedEvent
+from .models import DeadLetter, Event, EventEntity
 from .normalize import PARSER_VERSION, normalize
 
 log = logging.getLogger("pipeline")
-_NORM_COLS = set(NormalizedEvent.__table__.columns.keys()) - {"event_id"}
+# normalize() が返した値のうち、events の列として持っているものだけを書き戻す。
+_EVENT_DERIVED_COLS = {
+    "event_time", "event_time_original", "event_time_confidence", "event_category",
+    "event_action", "event_result", "event_severity", "source_name", "device_name",
+    "source_country", "source_asn", "source_as_org", "source_ip", "actor_user",
+    "url_domain", "url_path", "url_query", "http_method", "http_status_code", "host_name",
+    "observer_name", "service_name", "network_protocol", "message",
+}
 
 # syslogのファシリティ/ログファイル名（secure, messages等）はPROJECT.mdの方針により
 # source_type として使わない。NXLog経由のLinuxログは source_type="linux" に一本化する
@@ -99,10 +106,12 @@ def ingest_one(
         log.warning("normalize failed: %s", e)
         norm, ev.parse_status, ev.parse_error = {}, "failed", str(e)
 
+    # 導出値は events 自身の列に持つ（旧 normalized_events は廃止）。
+    for k, v in norm.items():
+        if k in _EVENT_DERIVED_COLS:
+            setattr(ev, k, v)
     db.add(ev)
     db.flush()  # ev.id を確定
-    ne = NormalizedEvent(event_id=ev.id, **{k: v for k, v in norm.items() if k in _NORM_COLS})
-    db.add(ne)
     for etype, evalue, role in _entities(norm):
         db.add(EventEntity(event_id=ev.id, entity_type=etype, entity_value=evalue, role=role))
     return ev

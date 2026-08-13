@@ -7,93 +7,29 @@ import re
 from typing import Any
 
 from . import extractors
+from . import taxonomy_fields as tf
 from .timeparse import resolve_time
 
-# source_type → { taxonomy_field: [payload候補キー...] }（直接コピー）
-MAPPINGS: dict[str, dict[str, list[str]]] = {
-    # 候補キーは小文字系(LiteSpeed/自前) + NXLog の PascalCase を両対応。
-    "web_access": {
-        "source_ip": ["client", "MessageSourceAddress", "SourceIPAddress", "RemoteIPAddress",
-                      "ClientAddress", "RemoteIP", "remote_addr"],
-        "url_domain": ["vhost", "ServerName", "http_host", "Host"],
-        "request": ["request"],
-        "http_method": ["HTTPMethod", "RequestMethod", "request_method"],
-        "url_path": ["HTTPURL", "RequestURI", "HTTPURI", "request_uri", "uri"],
-        "http_status_code": ["status", "HTTPResponseStatus", "ResponseStatus", "StatusCode", "code"],
-        "http_user_agent": ["user_agent", "HTTPUserAgent", "UserAgent", "http_user_agent"],
-        "http_referer": ["referer", "HTTPReferer", "Referer", "http_referer"],
-        "actor_user": ["user", "RemoteUser", "UserName", "remote_user"],
-        "observer_name": ["Hostname"],
-    },
-    "web_error": {
-        "message": ["message", "Message"],
-        "service_name": ["context", "ApacheModule"],
-        "event_severity": ["level", "ApacheLogLevel", "Severity"],
-        "source_ip": ["ClientAddress", "client", "MessageSourceAddress"],
-    },
-    "application": {
-        "message": ["message", "raw"],
-    },
-    "google_workspace_audit": {
-        "event_action": ["イベント"],
-        "message": ["説明"],
-        "actor_user": ["アクター"],
-        "source_ip": ["IP アドレス", "IPアドレス"],
-        "target_resource": ["リソース"],
-    },
-    "router": {
-        "message": ["message"],
-    },
-    "nas": {
-        "observer_name": ["host"],
-        "service_name": ["process"],
-        "message": ["message"],
-    },
-    "auth": {
-        "actor_user": ["user"],
-        "observer_name": ["host"],
-        "service_name": ["process"],
-        "message": ["message", "raw"],
-    },
-    # メール（NXLog Postfix / Exchange）
-    "mail": {
-        "source_ip": ["ClientIP", "RelayIP", "client_ip"],
-        "actor_user": ["Sender", "From", "sender"],
-        "target_user": ["Recipient", "To", "recipient"],
-        "observer_name": ["HostName", "Hostname"],
-        "service_name": ["Component", "SourceName"],
-        "request_id": ["QueueID", "MessageID"],
-        "message": ["Message", "message"],
-        "event_severity": ["Severity"],
-    },
-    # Windows イベントログ（NXLog im_msvistalog）。EventIDによって含まれるフィールドが
-    # 異なる（例: 4672にはIpAddressが無いが4624にはある）ため、actor_user/source_ip/
-    # service_nameはここでは拾わず _category_extras 側でフィールド有無を都度チェックして導出する。
-    "windows_event": {
-        "observer_name": ["Hostname", "HostName"],
-        "host_name": ["Hostname", "HostName"],
-        "message": ["Message", "message"],
-        "event_severity": ["Severity"],
-    },
-    # Linux ログ（NXLog: syslog/journald。認証の user/IP は Message 内なので下で抽出）
-    "linux": {
-        "observer_name": ["Hostname"],
-        "host_name": ["Hostname"],
-        "service_name": ["ProcessName", "SourceName", "SystemdUnit"],
-        "actor_user": ["User"],
-        "message": ["Message", "message"],
-        "event_severity": ["Severity"],
-    },
-    # auditd監査ログ（NXLog im_audit/im_file。2026-08-09以降、nxlog側でtype/res/acct/exe/
-    # SourceIPAddressをフィールド化して送るようになったため、Message本文の正規表現抽出はしない）。
-    "audit": {
-        "source_ip": ["SourceIPAddress"],
-        "actor_user": ["audit_acct"],
-        "service_name": ["audit_exe"],
-        "observer_name": ["Hostname"],
-        "message": ["Message", "message"],
-    },
+# 意味ごとのTaxonomy KEY（優先順）→ 導出フィールド名。
+# 旧 MAPPINGS（source_typeごとに remote_addr / http_host / HTTPMethod 等のTaxonomy外の
+# 別名を並べた対応表）は廃止した。設計書v12で表示・検索・集計はTaxonomy KEYだけを使う
+# 方針に統一されたため、別名の読み替えはもう行わない。
+_FIELD_KEYS: dict[str, list[str]] = {
+    "source_ip": tf.SRC_IP_KEYS,
+    "actor_user": tf.USER_KEYS,
+    "url_domain": tf.DOMAIN_HOST_KEYS,
+    "url_path": tf.URI_KEYS,
+    "url_query": tf.QUERY_KEYS,
+    "http_status_code": tf.STATUS_KEYS,
+    "host_name": tf.HOST_KEYS,
+    "observer_name": tf.HOST_KEYS,
+    "service_name": tf.SERVICE_KEYS,
+    "network_protocol": tf.PROTOCOL_KEYS,
+    "message": tf.MESSAGE_KEYS,
+    "event_severity": tf.SEVERITY_KEYS,
+    "request": tf.REQUEST_KEYS,
 }
+
 
 _RE_FOR_USER = re.compile(r"for (?:invalid user )?(?P<user>[\w.\-@$]+)")
 _RE_AUTH_USER = re.compile(r"(?:authenticating user|disconnected from(?: authenticating)?|Accepted \S+ for) (?P<user>[\w.\-@$]+)")
@@ -147,11 +83,11 @@ _AUTH_FAIL = ("fail", "failed", "failure", "denied", "invalid", "wrong_password"
 _AUTH_OK = ("succeeded", "accepted", "success", "opened")
 
 
-def _first(payload: dict, keys: list[str]) -> Any:
-    for k in keys:
-        v = payload.get(k)
-        if v not in (None, ""):
-            return v
+def _pick_class(payload: dict) -> str | None:
+    """受信JSONの class（大文字小文字を問わない）。無ければ None。"""
+    for k, v in payload.items():
+        if str(k).lower() == "class" and v not in (None, ""):
+            return str(v)
     return None
 
 
@@ -450,13 +386,18 @@ def _identity(source: str | None, source_type: str | None, payload: dict, norm: 
 def normalize(payload: dict, source: str | None, source_type: str | None) -> tuple[dict, str]:
     """payload を正規化フィールド dict にする。戻り: (norm, parse_status)。"""
     norm: dict[str, Any] = {}
-    st = source_type or "unknown"
+    # どの表を引くかは class を優先する。設計書v12でイベントの分類は受信JSONの class だけで
+    # 決まるようになったが、ここが source_type しか見ていなかったため、class だけを送る
+    # (＝v12に沿った)送信元では正規化が全く行われず、検知ルール・相関分析が無反応になっていた。
+    # class を送らない従来の送信元は source_type にフォールバックするので挙動は変わらない。
+    st = _pick_class(payload) or source_type or "unknown"
 
-    # 1) mapping による直接コピー（値は文字列化して保持・改変しない）
-    for field, keys in MAPPINGS.get(st, {}).items():
-        v = _first(payload, keys)
+    # 1) Taxonomy KEY から代表値を取る（値は無改変。別名の読み替えはしない）
+    lp = tf.lower_map(payload)
+    for field, keys in _FIELD_KEYS.items():
+        v = tf.pick(lp, keys)
         if v is not None:
-            norm[field] = str(v)
+            norm[field] = v
 
     # 2) event_time（派生・confidence付き）
     dt, original, conf = resolve_time(payload)

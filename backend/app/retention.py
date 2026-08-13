@@ -27,7 +27,7 @@ def cleanup_once(db) -> dict:
         return {"enabled": False, "retention_days": -1, "deleted_events": 0, "deleted_dead_letters": 0}
 
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    # normalized_events / event_entities は ondelete=CASCADE なので Event 削除で連動して消える
+    # event_entities は ondelete=CASCADE なので Event 削除で連動して消える（導出値は events 自身の列）
     ev_count = db.scalar(select(func.count()).select_from(Event).where(Event.received_at < cutoff)) or 0
     if ev_count:
         db.execute(delete(Event).where(Event.received_at < cutoff))
