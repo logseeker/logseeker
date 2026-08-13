@@ -12,7 +12,7 @@ export function Assets({ onEntity, auth }: {
   auth?: AuthStatus;
 }) {
   const [rows, setRows] = useState<AssetRow[]>([]);
-  const [days, setDays] = useState(1);
+  const [days, setDays] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);

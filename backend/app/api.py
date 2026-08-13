@@ -339,7 +339,10 @@ def _asset_reg_dict(a: Asset) -> dict:
 
 
 @router.get("/assets")
-def list_assets(db: Session = Depends(get_db), days: int = Query(1, ge=0, le=3650)):
+def list_assets(db: Session = Depends(get_db), days: int = Query(0, ge=0, le=3650)):
+    """資産一覧は自社資産のインベントリなので、既定は全期間にする。
+    直近24時間を既定にすると、その間ログが出なかった資産が一覧から消えてしまう
+    （実際に本番で、24時間ではローカルIPが1件も出ず画面が空になった）。"""
     stmt = (select(EventEntity.entity_value, func.count(), func.min(Event.event_time), func.max(Event.event_time))
             .join(Event, Event.id == EventEntity.event_id)
             .where(EventEntity.entity_type == "ip")
