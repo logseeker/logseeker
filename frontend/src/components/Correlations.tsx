@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { PeriodSelect } from "./PeriodSelect";
 import { stLabel } from "../labels";
 import type { CorrelationItem } from "../types";
 
@@ -17,14 +18,15 @@ export function Correlations({ onPick, onEntity }: {
 }) {
   const [etype, setEtype] = useState("ip");
   const [minSources, setMinSources] = useState(1);
+  const [days, setDays] = useState(1);
   const [items, setItems] = useState<CorrelationItem[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     setErr(null);
-    api.correlations(etype, minSources, 150).then((r) => setItems(r.items))
+    api.correlations(etype, minSources, 150, days).then((r) => setItems(r.items))
       .catch((e) => setErr((e as Error).message));
-  }, [etype, minSources]);
+  }, [etype, minSources, days]);
 
   const pivotCol: Record<string, string> = {
     ip: "source_ip", user: "actor_user", domain: "url_domain",
@@ -72,6 +74,7 @@ export function Correlations({ onPick, onEntity }: {
         <div className="card">
           <div className="card-header">
             <h3 className="card-title">相関結果（{items.length}）</h3>
+            <div className="card-actions"><PeriodSelect value={days} onChange={setDays} /></div>
             <span className="card-subtitle ms-2 text-secondary">
               うち複数システム横断: <strong className="text-danger">{crossCount}</strong> 件
             </span>

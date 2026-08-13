@@ -121,6 +121,17 @@ def apply_filters(stmt, f: dict):
     return stmt
 
 
+def _period_clause(days: int):
+    """集計を直近 days 日に限る条件。0 なら全期間。
+
+    エンティティ・相関・資産の集計は期間指定が無く、毎回 events 全件を走査していた。
+    本番規模(147万件)で1回10秒かかり、実行計画上も events の全件シーケンシャルスキャンが
+    出ていたため、既定で直近24時間に絞る。received_at はインデックス済み。"""
+    if not days:
+        return None
+    return Event.received_at >= func.now() - text(f"interval '{int(days)} days'")
+
+
 def _joined():
     # 導出値は events 自身の列になったので結合は不要（旧 normalized_events は廃止）。
     return select(Event)
@@ -229,6 +240,7 @@ def fields(db: Session = Depends(get_db), f: dict = Depends(filters), top: int =
 # ============================ MVP3: エンティティ & 相関 ============================
 @router.get("/entities")
 def entities(db: Session = Depends(get_db), type: str | None = None, q: str | None = None,
+             days: int = Query(1, ge=0, le=3650),
              limit: int = Query(100, ge=1, le=500)):
     """観測された全識別子の調査・相関用一覧。ローカルIP・登録済みグローバルIPは
     「アセット」画面の対象であり自社資産一覧ではないため、ここでは除外する
@@ -238,6 +250,9 @@ def entities(db: Session = Depends(get_db), type: str | None = None, q: str | No
                    func.min(Event.event_time), func.max(Event.event_time))
             .join(Event, Event.id == EventEntity.event_id)
             .group_by(EventEntity.entity_type, EventEntity.entity_value))
+    pc = _period_clause(days)
+    if pc is not None:
+        stmt = stmt.where(pc)
     lc = _license_clause(_blocked(db))
     if lc is not None:
         stmt = stmt.where(lc)
@@ -324,11 +339,14 @@ def _asset_reg_dict(a: Asset) -> dict:
 
 
 @router.get("/assets")
-def list_assets(db: Session = Depends(get_db)):
+def list_assets(db: Session = Depends(get_db), days: int = Query(1, ge=0, le=3650)):
     stmt = (select(EventEntity.entity_value, func.count(), func.min(Event.event_time), func.max(Event.event_time))
             .join(Event, Event.id == EventEntity.event_id)
             .where(EventEntity.entity_type == "ip")
             .group_by(EventEntity.entity_value))
+    pc = _period_clause(days)
+    if pc is not None:
+        stmt = stmt.where(pc)
     lc = _license_clause(_blocked(db))
     if lc is not None:
         stmt = stmt.where(lc)
@@ -439,6 +457,7 @@ def related_events(event_id: int, db: Session = Depends(get_db), limit: int = Qu
 @router.get("/correlations")
 def correlations(db: Session = Depends(get_db), entity_type: str = "ip",
                  min_sources: int = Query(1, ge=1, le=5),
+                 days: int = Query(1, ge=0, le=3650),
                  limit: int = Query(100, ge=1, le=500)):
     """同一の資産/主体（IP・ユーザー等）が「複数のログソース種別にまたがって出現」する度合いで
     相関を出す。例: あるIPが web_access と linux(SSH) の両方に出れば“複数システムを触った攻撃者”。
@@ -456,6 +475,9 @@ def correlations(db: Session = Depends(get_db), entity_type: str = "ip",
         .join(Event, Event.id == EventEntity.event_id)
         .where(EventEntity.entity_type == entity_type)
     )
+    pc = _period_clause(days)
+    if pc is not None:
+        stmt = stmt.where(pc)
     if blocked:
         stmt = stmt.where(or_(Event.source_type.is_(None), Event.source_type.notin_(blocked)))
     stmt = (stmt.group_by(EventEntity.entity_value)

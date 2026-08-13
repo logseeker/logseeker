@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { PeriodSelect } from "./PeriodSelect";
 import { stLabel } from "../labels";
 import type { EntityDetail, EntityRow, EventRow, Screen } from "../types";
 
@@ -20,6 +21,7 @@ export function Entities({ onPick, initial, onNav }: {
 }) {
   const [type, setType] = useState(initial?.type ?? "");
   const [q, setQ] = useState("");
+  const [days, setDays] = useState(1);
   const [rows, setRows] = useState<EntityRow[]>([]);
   const [sel, setSel] = useState<{ type: string; value: string } | null>(
     initial ? { type: initial.type, value: initial.value } : null);
@@ -34,8 +36,8 @@ export function Entities({ onPick, initial, onNav }: {
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    api.entities(type || undefined, q || undefined).then(setRows).catch((e) => setErr((e as Error).message));
-  }, [type, q]);
+    api.entities(type || undefined, q || undefined, days).then(setRows).catch((e) => setErr((e as Error).message));
+  }, [type, q, days]);
 
   useEffect(() => {
     if (!sel) { setDetail(null); setEvents([]); return; }
@@ -77,7 +79,10 @@ export function Entities({ onPick, initial, onNav }: {
 
       <div className="col-lg-5">
         <div className="card">
-          <div className="card-header"><h3 className="card-title">エンティティ（{rows.length}）</h3></div>
+          <div className="card-header">
+            <h3 className="card-title">エンティティ（{rows.length}）</h3>
+            <div className="card-actions"><PeriodSelect value={days} onChange={setDays} /></div>
+          </div>
           <table className="table table-vcenter table-sm card-table table-hover">
             <thead><tr><th>種別</th><th>値</th><th className="text-end">件数</th></tr></thead>
             <tbody>

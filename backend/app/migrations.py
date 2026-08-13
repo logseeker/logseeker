@@ -236,6 +236,11 @@ def _move_normalized_into_events(db: Session) -> None:
 
     for col in _EVENT_DERIVED_INDEXES:
         db.execute(text(f"CREATE INDEX IF NOT EXISTS ix_events_{col} ON events ({col})"))
+    # エンティティ・相関・資産は event_entities と events を結合して集計する。
+    # events は payload を持ち1行が大きいので、結合のたびに全件走査すると本番規模(147万件)で
+    # 10秒かかっていた。集計に必要な列だけをインデックスに含めて走査を避ける(実測 0.82秒)。
+    db.execute(text("CREATE INDEX IF NOT EXISTS ix_events_join_cover ON events (id) "
+                    "INCLUDE (event_time, source_name, event_result, source_type)"))
     db.commit()
 
 

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
+import { PeriodSelect } from "./PeriodSelect";
 import type { AssetRow, AuthStatus } from "../types";
 
 const EMPTY_FORM = { ip: "", label: "", description: "", display_name: "" };
@@ -11,6 +12,7 @@ export function Assets({ onEntity, auth }: {
   auth?: AuthStatus;
 }) {
   const [rows, setRows] = useState<AssetRow[]>([]);
+  const [days, setDays] = useState(1);
   const [err, setErr] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -19,8 +21,9 @@ export function Assets({ onEntity, auth }: {
   const canManage = !auth?.auth_required
     || auth?.user?.role === "editor" || auth?.user?.role === "sysadmin" || auth?.user?.role === "admin";
 
-  const load = () => api.assets().then(setRows).catch((e) => setErr((e as Error).message));
-  useEffect(() => { load(); }, []);
+  const load = () => api.assets(days).then(setRows).catch((e) => setErr((e as Error).message));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { load(); }, [days]);
 
   const flash = (m: string) => { setMsg(m); setTimeout(() => setMsg(null), 2500); };
 
@@ -85,7 +88,10 @@ export function Assets({ onEntity, auth }: {
 
       <div className="col-12">
         <div className="card">
-          <div className="card-header"><h3 className="card-title">ローカルIP（自動判定・{local.length}）</h3></div>
+          <div className="card-header">
+            <h3 className="card-title">ローカルIP（自動判定・{local.length}）</h3>
+            <div className="card-actions"><PeriodSelect value={days} onChange={setDays} /></div>
+          </div>
           <div className="table-responsive">
             <table className="table table-vcenter table-sm card-table">
               <thead><tr><th>IP</th><th>バージョン</th><th>表示名</th><th className="text-end">件数</th><th>初回</th><th>最終</th><th></th></tr></thead>

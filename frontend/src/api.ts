@@ -151,14 +151,14 @@ export const api = {
   fields: (f: FilterState) => get<FieldInfo[]>(`/api/fields${qs(f)}`),
 
   // MVP3: エンティティ & 相関
-  entities: (type?: string, q?: string) =>
-    get<EntityRow[]>(`/api/entities?${new URLSearchParams({ ...(type ? { type } : {}), ...(q ? { q } : {}) })}`),
+  entities: (type?: string, q?: string, days = 1) =>
+    get<EntityRow[]>(`/api/entities?${new URLSearchParams({ ...(type ? { type } : {}), ...(q ? { q } : {}), days: String(days) })}`),
   entity: (type: string, value: string) => get<EntityDetail>(`/api/entity?type=${ev(type)}&value=${ev(value)}`),
   entityEvents: (type: string, value: string) => get<EventRow[]>(`/api/entity/events?type=${ev(type)}&value=${ev(value)}`),
   related: (id: number) => get<{ keys: { entity_type: string; entity_value: string }[]; items: EventRow[] }>(`/api/events/${id}/related`),
 
   // 資産（アセット）：ローカルIPは自動判定、グローバルIPは手動登録
-  assets: () => get<AssetRow[]>(`/api/assets`),
+  assets: (days = 1) => get<AssetRow[]>(`/api/assets?days=${days}`),
   createAsset: (b: { ip: string; label?: string; description?: string; display_name?: string }) =>
     post<{ id: number; ip: string; ip_version: string; label: string | null; description: string | null; display_name: string | null }>(`/api/assets`, b),
   updateAsset: (id: number, b: { label?: string; description?: string; display_name?: string }) =>
@@ -245,8 +245,8 @@ export const api = {
   iocSyncNow: () => post<{ results: { name: string; count: number; status: string }[] }>(`/api/ioc/sync`, {}),
 
   // 相関分析（AI不要・複数ソース横断）
-  correlations: (entity_type = "ip", min_sources = 1, limit = 100) =>
-    get<CorrelationResponse>(`/api/correlations?entity_type=${entity_type}&min_sources=${min_sources}&limit=${limit}`),
+  correlations: (entity_type = "ip", min_sources = 1, limit = 100, days = 1) =>
+    get<CorrelationResponse>(`/api/correlations?entity_type=${entity_type}&min_sources=${min_sources}&limit=${limit}&days=${days}`),
 
   // 取り込み失敗（Dead Letter）
   deadLetters: () => get<DeadLettersResponse>(`/api/dead-letters`),
