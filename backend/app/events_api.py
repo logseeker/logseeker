@@ -598,7 +598,9 @@ def export_events(qy: EventQuery = Depends(event_query), db: Session = Depends(g
                         media_type="application/json; charset=utf-8",
                         headers={"Content-Disposition": "attachment; filename=logseeker_events.json"})
     buf = io.StringIO()
-    head = ["id", "class", "受信時刻"] + [label_of(c) or c for c in cols]
+    # 見出しはKEY名を必ず含める。日本語名だけだと description と message がどちらも
+    # 「メッセージ」になり、表計算ソフトで同名の列が並んで区別が付かなくなる。
+    head = ["id", "クラス(画面の判定)", "受信時刻"] + [f"{label_of(c)} ({c})" if label_of(c) else c for c in cols]
     w = csv.writer(buf)
     w.writerow(head)
     for r in rows:
