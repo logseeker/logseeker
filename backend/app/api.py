@@ -1242,21 +1242,45 @@ def mappings(db: Session = Depends(get_db)):
     from .log_samples import SAMPLES
     from .taxonomy_master import ALL_KEYS, LABELS
 
+    # 「よく使うキー」の各グループ。ordered=True のグループは並び順に意味がある
+    # （先頭から順に探して最初に値があったものを代表値として使う。設計書v12 §5.2）。
     common = [
-        ("分類", ["class", "source"]),
-        ("時刻", ["eventtime"]),
-        ("ホスト/ドメイン", ["domain", "vhost", "virtualhost", "virtualdomain", "host", "hostname"]),
-        ("通信元", ["client", "srcipv4", "srcipv6", "sourceipaddress"]),
-        ("HTTP", ["request", "httpmethod", "uri", "url", "status", "statuscode",
-                  "size", "referer", "user_agent"]),
-        ("ユーザー", ["username", "accountname", "targetusername"]),
-        ("内容", ["message", "severity", "category", "action", "result"]),
-        ("Windows", ["eventid", "processid"]),
-        ("auditd", ["audit_type", "audit_res", "audit_acct"]),
+        ("分類", False,
+         "class はクラスを決める唯一のキー。無いと unknown になる。source はログの送り元の名前。",
+         ["class", "source"]),
+        ("時刻", False,
+         "イベントの発生時刻。大文字小文字は問わないので EventTime でも同じ扱いになる。",
+         ["eventtime"]),
+        ("ホスト/ドメイン", True,
+         "画面の「ドメイン/ホスト」列と円グラフはこの並び順で決まる。左から順に探し、"
+         "最初に値があったキーをそのイベントの代表値として使う。"
+         "似た名前だが同じものとして扱うわけではなく、host と hostname は別のキー。",
+         ["domain", "vhost", "virtualhost", "virtualdomain", "host", "hostname"]),
+        ("通信元", True,
+         "送信元IPを表しうるキー。脅威フィルタや相関分析はこの並び順で最初に値があったものを見る。",
+         ["client", "srcipv4", "srcipv6", "sourceipaddress"]),
+        ("HTTP", False,
+         "request は \"GET /path HTTP/1.1\" 形式のリクエスト行で、ここから uri と httpmethod を取り出せる。"
+         "uri を直接送れるならそちらの方が確実。",
+         ["request", "httpmethod", "uri", "url", "status", "statuscode",
+          "size", "referer", "user_agent"]),
+        ("ユーザー", True,
+         "ユーザー名を表しうるキー。並び順に探して最初に値があったものを使う。",
+         ["username", "accountname", "targetusername"]),
+        ("内容", False,
+         "message は本文。severity・category・action・result は、送られてくればそのまま使い、"
+         "無ければ本文から判定する。",
+         ["message", "severity", "category", "action", "result"]),
+        ("Windows", False,
+         "NXLog の im_msvistalog が出すキー。",
+         ["eventid", "processid"]),
+        ("auditd", False,
+         "auditd の本文は key=value 形式なので、送信側で切り出しておくと検索できる。",
+         ["audit_type", "audit_res", "audit_acct"]),
     ]
-    key_groups = [{"title": t,
+    key_groups = [{"title": t, "ordered": o, "note": n,
                    "keys": [{"key": k, "label": LABELS.get(k, "")} for k in ks]}
-                  for t, ks in common]
+                  for t, o, n, ks in common]
 
     return {
         "taxonomy_total": len(ALL_KEYS),

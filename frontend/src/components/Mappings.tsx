@@ -60,20 +60,34 @@ export function Mappings() {
             </span>
           </div>
           <div className="card-body">
-            <div className="row g-3">
-              {d.key_groups.map((g) => (
-                <div className="col-12 col-md-6 col-xl-4" key={g.title}>
-                  <div className="fw-bold mb-1">{g.title}</div>
-                  <div className="d-flex flex-wrap gap-1">
-                    {g.keys.map((k) => (
-                      <span key={k.key} className="badge bg-blue-lt" title={k.label}>
+            {d.key_groups.map((g) => (
+              <div className="mb-4" key={g.title}>
+                <div className="d-flex align-items-center gap-2 mb-1">
+                  <span className="fw-bold">{g.title}</span>
+                  {g.ordered && (
+                    <span className="badge bg-orange-lt">左から優先</span>
+                  )}
+                </div>
+                <div className="text-secondary small mb-2">{g.note}</div>
+                <div className="d-flex flex-wrap align-items-center gap-1">
+                  {g.keys.map((k, i) => (
+                    <span key={k.key} className="d-inline-flex align-items-center">
+                      {/* 並び順に意味があるグループは、優先順であることが見て分かるよう
+                          番号と矢印を出す。ただの候補の羅列と誤解されないようにする。 */}
+                      {g.ordered && i > 0 && <span className="text-secondary mx-1">›</span>}
+                      <span className="badge bg-blue-lt">
+                        {g.ordered && <span className="text-secondary me-1">{i + 1}.</span>}
                         <code>{k.key}</code>
                         {k.label && <span className="ms-1 text-secondary">{k.label}</span>}
                       </span>
-                    ))}
-                  </div>
+                    </span>
+                  ))}
                 </div>
-              ))}
+              </div>
+            ))}
+            <div className="text-secondary small border-top pt-2">
+              日本語名が付いているKEYは全{d.taxonomy_total.toLocaleString()}件のうち一部だけです。
+              名前が無いKEYは、画面でもKEY名のまま表示されます。
             </div>
           </div>
         </div>

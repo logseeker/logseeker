@@ -559,6 +559,7 @@ function ColumnsPanel({ fields, columns, sets, onApply, onSaveAs, onDeleteSet, o
           <p className="text-secondary small">
             docs/taxonomy.md の全Taxonomy KEY（{fields.length}件）から選べます。受信データの有無では
             選択肢は変わりません。★はこのClassの参考例に載っているKEYです。
+            日本語名が付いているKEYは一部だけなので、無いものはKEY名をそのまま表示します。
           </p>
           <input className="form-control form-control-sm mb-2" placeholder="フィールド名・表示名で検索"
             value={q} onChange={(e) => setQ(e.target.value)} />
@@ -580,7 +581,11 @@ function ColumnsPanel({ fields, columns, sets, onApply, onSaveAs, onDeleteSet, o
                     })} />
                   <span className="flex-fill">
                     {f?.recommended && <span className="text-warning me-1">★</span>}
-                    {f?.label ? <>{f.label} <span className="text-secondary small">({k})</span></> : k}
+                    {/* 770件中 日本語名があるのは118件だけ（docs/taxonomy.md §6に載っているKEYのみ）。
+                        日本語を主にすると、名前がある行と無い行で見え方が変わって並びが読みにくい。
+                        受信payloadに実際に入っているKEY名を常に主とし、日本語は補足として後ろに置く。 */}
+                    <code>{k}</code>
+                    {f?.label && <span className="text-secondary ms-2">{f.label}</span>}
                   </span>
                   <span className="text-secondary small">{f?.type}</span>
                 </div>

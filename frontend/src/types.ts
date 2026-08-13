@@ -297,7 +297,12 @@ export interface DeadLetterRow {
 export interface DeadLettersResponse { total: number; items: DeadLetterRow[]; }
 
 export interface TaxonomyKeyRef { key: string; label: string; }
-export interface TaxonomyKeyGroup { title: string; keys: TaxonomyKeyRef[]; }
+export interface TaxonomyKeyGroup {
+  title: string;
+  ordered: boolean;   // true なら並び順に意味がある（先頭から探して最初に値があったものを使う）
+  note: string;
+  keys: TaxonomyKeyRef[];
+}
 export interface LogSample {
   id: string; title: string; target: string; file: string;
   lang: string; note: string; keys: string[]; body: string;
