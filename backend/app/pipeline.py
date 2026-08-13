@@ -24,7 +24,7 @@ _EVENT_DERIVED_COLS = {
 # （どのログファイル由来かは payload の SourceModuleName 等、他フィールドで判別する）。
 # audit（auditd由来、type=USER_LOGIN等）は、nxlog側でtype/res/acct/exe/SourceIPAddressを
 # フィールド化して送るようになったため、2026-08-09以降はlinuxに寄せず独立source_typeとして
-# 扱う（MAPPINGS["audit"]で直接マッピング。Message本文の正規表現抽出はしない）。
+# 扱う（Taxonomy KEY の audit_type / audit_res / audit_acct を直接読む）。
 _SOURCE_TYPE_ALIASES = {"secure": "linux", "messages": "linux"}
 
 # 正規化フィールド → 相関エンティティ (entity_type, role)

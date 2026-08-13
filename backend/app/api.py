@@ -1,4 +1,6 @@
-"""検索・集計・ダッシュボードAPI（PROJECT.md §11）。events と normalized_events を結合して扱う。"""
+"""調査支援・相関・資産・エンティティ・インシデント等のAPI。
+検索や集計に使う値は events 自身の列にある（旧 normalized_events は廃止）。
+イベント一覧とダッシュボードは events_api.py 側で payload の Taxonomy KEY を直接読む。"""
 import ipaddress
 from datetime import date, datetime
 

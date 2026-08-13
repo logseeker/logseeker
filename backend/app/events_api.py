@@ -7,9 +7,9 @@
   §10.2   Events列はClassごとにLogSeeker利用者がTaxonomy受信フィールドから選ぶ。固定列にしない。
   §10.3   Event DetailにTaxonomy外KEYを表示しない。
 
-本モジュールは `normalized_events`（normalize.py の MAPPINGS によるKEY読み替えの産物）を
-値の取得元にしない。表示値は必ず events.payload 内のTaxonomy KEYから読む。
-`normalized_events` は他機能（相関・ルール・ケース等）が引き続き使うため削除しない。
+本モジュールは payload の Taxonomy KEY だけを読む（設計書v12 §4.1.1, §15）。
+旧 normalized_events（source_typeごとにTaxonomy外の別名キーを並べた対応表の産物）は
+全機能から参照が無くなったため廃止済み。検知・相関が使う導出値は events 自身の列にある。
 
 列の選択肢は taxonomy_master.ALL_KEYS（taxonomy.md §3から自動生成）だけで決まり、
 受信済みデータのサンプリングは行わない。実データの有無で選択肢が変わると、
@@ -248,9 +248,9 @@ def _SENSITIVE_RE(paths: tuple[str, ...]) -> str:
 
 
 def _threat_clause(db: Session, ev, threat: str):
-    """脅威フィルタ。**判定材料はTaxonomy KEYだけ**（v12 §15。normalized_eventsは使わない）。
+    """脅威フィルタ。**判定材料はTaxonomy KEYだけ**（v12 §15）。
 
-    旧実装は normalized_events（MAPPINGSによるKEY読み替えの産物）を見ていたが、
+    旧実装は別名キーの読み替え結果を見ていたが、
     同じ意味の判定をTaxonomy受信フィールドの上で組み直している。
     機微パス・攻撃シグネチャの定義は rules.py を単一の出処として読み取るだけに留める
     （rules.py 自体は変更しない）。"""
@@ -350,7 +350,7 @@ def event_query(db: Session = Depends(get_db), class_value: str | None = None, q
 # ---------------------------------------------------------------- 行の組み立て
 
 def _row(r, columns: list[str]) -> dict:
-    """1行分。値はpayloadのTaxonomy KEYからのみ取り出す（normalized_eventsは使わない）。"""
+    """1行分。値はpayloadのTaxonomy KEYからのみ取り出す。"""
     p = r.payload if isinstance(r.payload, dict) else {}
     return {
         "id": r.id,
@@ -591,7 +591,7 @@ def export_events(qy: EventQuery = Depends(event_query), db: Session = Depends(g
 def overview(qy: EventQuery = Depends(event_query), db: Session = Depends(get_db),
              fields: str = Query("", description="内訳カードにするTaxonomy KEY(カンマ区切り)"),
              extra_fields: str = Query("", description="代表値グループに追加表示するTaxonomy KEY")):
-    """Dashboard。集計軸はすべてTaxonomy KEY。normalized_eventsは使わない。
+    """Dashboard。集計軸はすべてTaxonomy KEY。
 
     **どのKEYを集計するかは固定しない。** `fields` でLogSeeker利用者が選んだTaxonomy KEYを
     集計軸にする（未指定ならそのClassの既定表示列を使う）。特定KEYを実装側で決め打ちすると、

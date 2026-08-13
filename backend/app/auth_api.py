@@ -14,7 +14,6 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from . import auth as A
-from .config import settings
 from .db import get_db
 from .models import AuditLog, User
 from .schema import AuthToggle, IpRestrictSave, LoginRequest, SSOConfig, UserCreate, UserUpdate
@@ -107,7 +106,6 @@ def admin_status(user: User | None = Depends(A.get_current_user)):
 @router.post("/auth/logout")
 def logout(request: Request, authorization: str | None = None,
            user: User | None = Depends(A.get_current_user), db: Session = Depends(get_db)):
-    from fastapi import Header  # local import avoids shadowing
     auth = request.headers.get("authorization")
     token = A._bearer(auth)
     if token:

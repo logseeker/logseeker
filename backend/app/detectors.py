@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from .models import SourceTypeDetector
 
-# auth の required/optional は normalize.py の MAPPINGS["auth"] が参照するキー
+# auth の required/optional は source_type 自動判定に使うキー
 # (user/host/process/message/raw) を根拠にしているが、実データ（converters.conv_samba,
 # nas/smbd.log 由来）では host/process/message は出現せず {time, user, raw} のみが実際に埋まる。
 # host/process/message はMAPPINGS上は宣言されているが現行の実データでは空振りする（PROJECT.md 12.6

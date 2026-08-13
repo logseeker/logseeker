@@ -47,8 +47,14 @@ def resolve_time(payload: dict) -> tuple[datetime | None, str | None, str]:
     """payload の時刻フィールドを探して (datetime, 元文字列, confidence) を返す。"""
     if not isinstance(payload, dict):
         return None, None, "none"
+    # 突合は大文字小文字を無視する（設計書v12 §4.1.1と同じ規則）。
+    # TS_KEYS には EventTime / eventTime はあったが eventtime（全小文字＝Taxonomy KEY）が
+    # 無く、完全一致で引いていたため、Taxonomy KEYどおり eventtime を送ると時刻が
+    # 解決されず event_time が NULL になっていた。
+    # 優先順は変えていない（実データ5,000件で解決結果に変化が無いことを確認済み）。
+    lp = {str(k).lower(): v for k, v in payload.items()}
     for key in TS_KEYS:
-        v = payload.get(key)
+        v = lp.get(key.lower())
         if isinstance(v, (str, int, float)) and str(v).strip():
             dt, conf = parse_time(str(v))
             if dt:

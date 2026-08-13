@@ -1,4 +1,4 @@
-"""payload → 軽量タクソノミー(normalized_events) への正規化（PROJECT.md §7,8,10,14）。
+"""payload → events の導出列（時刻解決・分類・代表値）への変換。
 - payload は読むだけ・改変しない。
 - 正規化できない項目は null。無理に推定しすぎない（§19.2）。
 - source_type ごとの mapping(候補キー) + 汎用 extractor + 種別ごとの分類で導出する。
@@ -27,6 +27,9 @@ _FIELD_KEYS: dict[str, list[str]] = {
     "network_protocol": tf.PROTOCOL_KEYS,
     "message": tf.MESSAGE_KEYS,
     "event_severity": tf.SEVERITY_KEYS,
+    # request は "GET /path HTTP/1.1" のリクエスト行。これ自体は列に保存せず、
+    # 下の 3) で url_path / http_method へ分解するためだけに使う中間値。
+    # 元の値が要るときは payload の request KEY を直接読む（Taxonomy KEYなので画面から引ける）。
     "request": tf.REQUEST_KEYS,
 }
 
