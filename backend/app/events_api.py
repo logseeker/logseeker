@@ -40,6 +40,28 @@ router = APIRouter(prefix="/api")
 UNKNOWN_CLASS = "unknown"
 
 
+# 本文を表しうるTaxonomy KEY。既定列の補完に使う（下の _default_columns 参照）。
+BODY_KEYS = ["message", "description"]
+
+
+def _default_columns(class_value: str | None) -> list[str]:
+    """そのClassの既定表示列。taxonomy.md §6 の「初期表示」に本文列の補完を加えたもの。
+
+    §6 は description を初期表示にしているが、実際に送られてくるのは message の方で、
+    本番147万件のうち description を持つイベントは0件、message は79.8%だった。
+    §6 の表は参考例であり受信データを保証するものではないため、そのまま使うと
+    列設定を触っていない利用者には本文が空の表が見える。
+    本文列がどれも入っていない場合に限り message を足す（§6 の指定は消さない）。
+    """
+    cols = list(default_columns(class_value))
+    if not any(c in BODY_KEYS for c in cols):
+        return cols
+    if "message" not in cols:
+        # description だけが指定されている場合。message を本文の実体として併記する。
+        cols.insert(cols.index("description") + 1 if "description" in cols else len(cols), "message")
+    return [c for c in cols if is_taxonomy_key(c)]
+
+
 def _lc_payload():
     """payloadのKEYを小文字化したコピー（SQL式）。**受信payloadは変更しない。**
 
@@ -376,7 +398,7 @@ def events_fields(class_value: str | None = None):
             for k in ALL_KEYS]
     keys.sort(key=lambda x: (not x["recommended"], x["key"]))
     return {"class_value": class_value, "total": len(keys), "keys": keys,
-            "default_columns": default_columns(class_value)}
+            "default_columns": _default_columns(class_value)}
 
 
 # ================================================================ 列セット
@@ -387,7 +409,7 @@ def get_column_sets(class_value: str | None = None, user: User | None = Depends(
     """現在の表示列と、名前を付けて保存した列セット（プリセット）一覧。
     未ログイン時はサーバーに保存しないためnullを返し、フロントはlocalStorageへ退避する。"""
     key = class_value or "__all__"
-    defaults = default_columns(class_value)
+    defaults = _default_columns(class_value)
     if not user:
         return {"class_value": class_value, "columns": None, "default_columns": defaults, "sets": {}}
     prefs = _prefs(db.get(UserSettings, user.id))
@@ -477,7 +499,7 @@ def set_classes(body: EventsClassesUpdate, user: User | None = Depends(get_curre
 def search_events(qy: EventQuery = Depends(event_query), db: Session = Depends(get_db),
                   columns: str = Query("", description="表示するTaxonomy KEY(カンマ区切り)"),
                   limit: int = Query(50, ge=1, le=1000), offset: int = Query(0, ge=0)):
-    cols = _keep_taxonomy([c for c in columns.split(",") if c.strip()]) or default_columns(qy.class_value)
+    cols = _keep_taxonomy([c for c in columns.split(",") if c.strip()]) or _default_columns(qy.class_value)
     ev = _ev(qy)
     base = qy.apply(select(ev).select_from(ev), ev)
     total = db.scalar(select(func.count()).select_from(base.subquery()))
@@ -563,7 +585,7 @@ def export_events(qy: EventQuery = Depends(event_query), db: Session = Depends(g
                   columns: str = Query(""), format: str = Query("csv", pattern="^(csv|json)$"),
                   actor=Depends(require_login)):
     """現在の絞り込み・表示列でCSV/JSON出力（画面のExport Table相当）。"""
-    cols = _keep_taxonomy([c for c in columns.split(",") if c.strip()]) or default_columns(qy.class_value)
+    cols = _keep_taxonomy([c for c in columns.split(",") if c.strip()]) or _default_columns(qy.class_value)
     ev = _ev(qy)
     stmt = qy.apply(select(ev).select_from(ev), ev).order_by(ev.c.received_at.desc(), ev.c.id.desc()).limit(EXPORT_MAX_ROWS)
     rows = [_row(r, cols) for r in db.execute(stmt).all()]
