@@ -948,6 +948,13 @@ def _conds(f: dict) -> list:
         c.append(Event.event_time >= f["start"])
     if f["end"]:
         c.append(Event.event_time <= f["end"])
+    if not f["start"] and not f["end"]:
+        # 期間の指定が無いと全イベントを評価してしまう（本番147万件で36秒かかっていた）。
+        # 検知ルールは「いま攻撃を受けていないか」を見るものなので直近24時間を既定にする。
+        # 画面で期間を指定すればそちらが優先される。
+        pc = _period_clause(1)
+        if pc is not None:
+            c.append(pc)
     if f["q"]:
         c.append(cast(Event.payload, String).ilike(f"%{f['q']}%"))
     lc = _license_clause(f.get("blocked") or set())
