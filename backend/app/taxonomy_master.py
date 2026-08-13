@@ -8,7 +8,7 @@ ALL_KEYS はClassに依存しない全体集合であり、Class VALUEはこの�
 ここに無いKEYを選べなくする用途には使わない。
 """
 
-# 全Taxonomy KEY（770件）: KEY -> 型
+# 全Taxonomy KEY（772件）: KEY -> 型
 ALL_KEYS: dict[str, str] = {
     'accesses': 'string',
     'accessgroup': 'string',
@@ -75,6 +75,7 @@ ALL_KEYS: dict[str, str] = {
     'attackinfo': 'string',
     'attemptingAcquire': 'boolean',
     'audit_acct': 'string',
+    'audit_exe': 'string',
     'audit_res': 'string',
     'audit_type': 'string',
     'audititemid': 'string',
@@ -645,6 +646,7 @@ ALL_KEYS: dict[str, str] = {
     'sourceipaddress': 'string',
     'sourcemodulename': 'string',
     'sourcemoduletype': 'string',
+    'sourcename': 'string',
     'srcareacode': 'string',
     'srcasn': 'string',
     'srcasorg': 'string',
@@ -782,12 +784,13 @@ ALL_KEYS: dict[str, str] = {
     'zone': 'string',
 }
 
-# 日本語表示名（118件）。未定義のKEYは画面でKEY名をそのまま表示する。
+# 日本語表示名（120件）。未定義のKEYは画面でKEY名をそのまま表示する。
 LABELS: dict[str, str] = {
     'accountdomain': 'アカウントドメイン',
     'accountname': 'アカウント名',
     'action': 'アクション',
     'audit_acct': 'Auditアカウント',
+    'audit_exe': 'Audit実行ファイル',
     'audit_res': 'Audit結果',
     'audit_type': 'Audit種別',
     'audititemid': '監査項目ID',
@@ -869,6 +872,7 @@ LABELS: dict[str, str] = {
     'sessionid': 'セッションID',
     'severity': '重大度',
     'severityvalue': '重大度値',
+    'sourcename': '送信元プロセス名',
     'srcasn': '送信元ASN',
     'srcasorg': '送信元AS組織',
     'srccountry': '送信元国',
@@ -911,6 +915,7 @@ CLASS_HINTS: dict[str, dict[str, dict]] = {
         'accountname': {'default_visible': True},
         'action': {'default_visible': True},
         'audit_acct': {'default_visible': False},
+        'audit_exe': {'default_visible': False},
         'audit_res': {'default_visible': False},
         'audit_type': {'default_visible': False},
         'audititemid': {'default_visible': False},
@@ -986,6 +991,7 @@ CLASS_HINTS: dict[str, dict[str, dict]] = {
         'sessionid': {'default_visible': False},
         'severity': {'default_visible': True},
         'severityvalue': {'default_visible': False},
+        'sourcename': {'default_visible': False},
         'srcipv4': {'default_visible': True},
         'srcipv6': {'default_visible': True},
         'srcport': {'default_visible': False},
