@@ -4,9 +4,12 @@ from datetime import datetime, timedelta, timezone
 
 JST = timezone(timedelta(hours=9))
 
+# 上から順に評価し、最初に解釈できた値を event_time にする。
+# EventTime（発生時刻）は EventReceivedTime（LogSeekerが受け取った時刻）より先に置く。
+# 送信遅延があると受信時刻は実際に起きた時刻とズレるため、意味的に発生時刻が優先。
 TS_KEYS = [
     "event_time", "timestamp", "time", "ts", "datetime", "date",
-    "@timestamp", "EventReceivedTime", "EventTime", "eventTime",
+    "@timestamp", "EventTime", "EventReceivedTime",
     "日付", "Date", "Time", "Timestamp",
 ]
 
@@ -51,7 +54,8 @@ def resolve_time(payload: dict) -> tuple[datetime | None, str | None, str]:
     # TS_KEYS には EventTime / eventTime はあったが eventtime（全小文字＝Taxonomy KEY）が
     # 無く、完全一致で引いていたため、Taxonomy KEYどおり eventtime を送ると時刻が
     # 解決されず event_time が NULL になっていた。
-    # 優先順は変えていない（実データ5,000件で解決結果に変化が無いことを確認済み）。
+    # 2026-08-16: EventTime を EventReceivedTime より先に評価するよう優先順を変更した
+    # （発生時刻 > 受信時刻）。本番実測では linux のみが影響し、変化のほぼ全てが1秒。
     lp = {str(k).lower(): v for k, v in payload.items()}
     for key in TS_KEYS:
         v = lp.get(key.lower())
