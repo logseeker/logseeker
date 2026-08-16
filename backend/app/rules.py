@@ -31,6 +31,9 @@ RE_HTTP_5XX = r"oops!\s*5[0-9]{2}"
 # しきい値（必要なら調整）
 WEB_SCAN_MIN = 10        # 同一IPからの 4xx 失敗リクエスト数
 AUTH_FAIL_MIN = 10       # 同一ユーザー/IPの認証失敗数
+# 認証総当たり（IP単位）で数える対象。sshd(linux) と auditd(audit) が同一試行を
+# 二重に送ってくるため、片方に寄せる（二重カウント排除）。
+AUTH_BRUTEFORCE_IP_SOURCE_TYPE = "linux"
 SENSITIVE_MIN = 3        # 同一IPからの危険パスアクセス数（単発ノイズを除く）
 MAX_HITS_PER_RULE = 50   # 1ルールあたりの表示上限（画面が埋もれないように）
 HOME_COUNTRY = "JP"      # 「海外」判定の基準国（ISOコード）。将来設定化も可能。
@@ -269,10 +272,15 @@ def evaluate(db: Session, conds: list | None = None) -> list[dict[str, Any]]:
             f"認証失敗 {cnt} 件", cnt, pivot={"field": "actor_user", "value": user})
 
     # --- 認証総当たり（送信元IP単位）---
+    # 同一のSSH失敗試行が sshd(linux) と auditd(audit) の両方から届くため、絞り込まないと
+    # 件数が実際の試行回数の約2倍になる（本番実測: 163.7.4.169 = 合計1,679 / audit 884 / linux 795）。
+    # audit 側は audit_type が69%NULLで取りこぼしがある（未解決issue）ため、
+    # 母数として安定している linux(sshd) 側のみを数える。詳細は docs/detection-rules.md §6。
     rows = db.execute(
         select(Event.source_ip, func.count())
         .select_from(Event)
-        .where(Event.event_category.in_(["authentication", "security"]),
+        .where(Event.source_type == AUTH_BRUTEFORCE_IP_SOURCE_TYPE,
+               Event.event_category.in_(["authentication", "security"]),
                Event.event_result == "failure", Event.source_ip.isnot(None), *w)
         .group_by(Event.source_ip).having(func.count() >= AUTH_FAIL_MIN)
         .order_by(func.count().desc()).limit(MAX_HITS_PER_RULE)
