@@ -14,12 +14,18 @@ EventTime → EventReceivedTime へ変更した（発生時刻を受信時刻よ
   - --sleep でバッチ間に待ちを入れ、I/Oを譲る
 
 使い方:
-  python /app/tools/backfill_event_time.py --dry-run
-  python /app/tools/backfill_event_time.py --batch 5000 --sleep 0.2
+    # 開発(Docker)
+    docker exec logseeker-backend-1 python /app/tools/backfill_event_time.py --dry-run
+    # 本番(ネイティブ)
+    cd /opt/logseeker/backend && sudo -u logseeker env $(grep -h '^DATABASE_URL' .env | xargs)         ../venv/bin/python tools/backfill_event_time.py --dry-run
 """
-import argparse, sys, time
+import argparse
+import sys
+import time
+from pathlib import Path
 
-sys.path.insert(0, '/app')
+# 実行環境によっては backend/ が sys.path に無いので通す（check_unused_tables.py と同じ）
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy import select, func
 from app.db import SessionLocal
 from app.models import Event
