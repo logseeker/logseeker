@@ -18,7 +18,7 @@ type Props = {
 type Related = { keys: { entity_type: string; entity_value: string }[]; items: EventRow[] };
 
 // イベント詳細。表示するのは受信フィールド（payload内でTaxonomy KEYと完全一致するKEY）だけで、
-// Taxonomy外KEYは件数のみ知らせて中身を出さない（v12 §10.3）。
+// Taxonomy外KEYはDBに無改変で保存するが、画面には出さない（件数の注記も出さない。v12 §10.3）。
 export function EventDetail({ id, onClose, onPivot, onEntity, onOpenCase, onOpenIncident,
   variant = "modal" }: Props) {
   const [viewId, setViewId] = useState(id);
@@ -145,12 +145,6 @@ export function EventDetail({ id, onClose, onPivot, onEntity, onOpenCase, onOpen
                   </button>
                 </div>
               ))}
-            </div>
-          )}
-          {d.taxonomy_outside_count > 0 && (
-            <div className="text-secondary small mb-3">
-              このイベントにはTaxonomy外KEYが{d.taxonomy_outside_count}件あります（DBには無改変で
-              保存されていますが、画面には表示しません）。
             </div>
           )}
 
