@@ -120,6 +120,40 @@ LAN内の別ホストから接続を許可する場合は、`postgresql.conf` �
 
 テーブルはbackend初回起動時に自動作成されます（マイグレーション不要、`Base.metadata.create_all`）。
 
+### 2.1 プランナ設定（必ず実施）
+
+PostgreSQLの既定値は、HDD時代のディスクコストと、実メモリより大きいキャッシュ量を前提にしています。
+このままだと、期間で絞り込むDashboardの集計でも `received_at` のインデックスが選ばれず、
+`events` テーブル全体のシーケンシャルスキャンになります。
+
+実測（268万件・24時間ぶん45万件の環境）では、Dashboardの1クエリが **約9.9秒 → 約0.4秒**、
+画面全体で **約51秒 → 約5秒** の差になりました。イベント件数が増えるほど効きます。
+
+```bash
+sudo -u postgres psql <<'SQL'
+ALTER SYSTEM SET random_page_cost = 1.1;          -- SSD想定。既定の4はHDD前提で、インデックスが不当に高く見積もられる
+ALTER SYSTEM SET effective_cache_size = '1200MB'; -- 実メモリの6割程度。既定の4GBは実機より大きいことが多い
+ALTER SYSTEM SET work_mem = '16MB';               -- 集計のソートがディスクに落ちるのを減らす
+ALTER SYSTEM SET effective_io_concurrency = 200;  -- SSD
+SELECT pg_reload_conf();
+SQL
+```
+
+- `effective_cache_size` は**実メモリに合わせて調整**してください（上の値はメモリ2GBの機体向け）。
+  実機より大きい値を入れると、キャッシュに載る前提の計画が選ばれやすくなります。
+- `work_mem` は**接続ごと・ソートごと**に確保されます。メモリの小さい機体で大きくしすぎると
+  スワップの原因になるため、2GB程度の機体なら16MBまでに留めてください。
+- `shared_buffers` は既定(128MB)のままで構いません。変更する場合はPostgreSQLの再起動が必要です。
+- 反映確認: `sudo -u postgres psql -d logseeker -c "SHOW random_page_cost;"`
+- 設定後もDashboardが遅い場合は実行計画を確認してください。`Seq Scan on events` が出ていれば
+  設定が効いていません。
+  ```bash
+  sudo -u postgres psql -d logseeker -c "EXPLAIN SELECT count(*) FROM events WHERE received_at >= now() - interval '24 hours';"
+  ```
+
+> Docker構成（開発環境）では `docker-compose.yml` の db サービスに同じ設定を入れてあるため、
+> この手順は不要です。
+
 <details>
 <summary>誤って <code>loghub</code> の名前で作ってしまった場合の削除手順</summary>
 

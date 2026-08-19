@@ -24,8 +24,8 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Query, Response
-from sqlalchemy import String, and_, cast, func, literal, or_, select, text, true
-from sqlalchemy.dialects.postgresql import JSONB, array as pg_array
+from sqlalchemy import String, and_, cast, func, or_, select, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from .auth import get_current_user, require_login
@@ -110,29 +110,32 @@ def _cls(ev):
     return func.coalesce(_pv(ev, "class"), func.cast(UNKNOWN_CLASS, String))
 
 
-def _scoped(stmt, qy):
-    """Dashboard集計用に events へ直接かける共通条件（期間・Class・ログソース）。
-    KEY小文字化コピー(lp)を作らない経路で使う。"""
-    stmt = stmt.select_from(Event).where(Event.received_at >= qy.start, Event.received_at <= qy.end)
+def _scoped_sql(qy):
+    """Dashboard集計の共通条件（期間・Class・ログソース・列絞り込み）を生SQLの断片で返す。
+
+    Dashboardは「期間ぶんのpayloadを1回だけ展開して、内訳もClassも代表値もそこから出す」形に
+    したい。SQLAlchemyの式で組むと同じ期間を読むSELECTを何本も投げることになり、CTEを
+    共有できない。値は必ずバインドパラメータで渡す（文字列を連結しない）。
+
+    戻り値は (期間条件, 期間以外の条件のリスト, パラメータ)。取り込み失敗件数だけは
+    期間のみで数えるため（パースに失敗した行はClassを持たず、Class絞り込みをかけると
+    常に0件になってしまう）、期間とそれ以外を分けて返す。"""
+    period = "e.received_at >= :start AND e.received_at <= :end"
+    conds = []
+    p = {"start": qy.start, "end": qy.end}
     if qy.class_value:
-        stmt = stmt.where(_class_of(Event.payload) == qy.class_value)
+        conds.append("coalesce((SELECT c.value FROM jsonb_each_text(e.payload) c"
+                     " WHERE lower(c.key) = 'class' AND nullif(c.value, '') IS NOT NULL"
+                     " LIMIT 1), :unknown_class) = :class_value")
+        p["unknown_class"], p["class_value"] = UNKNOWN_CLASS, qy.class_value
     if qy.source:
-        stmt = stmt.where(Event.source == qy.source)
-    for f, v in qy.filters:
-        kvf = func.jsonb_each_text(Event.payload).table_valued("key", "value")
-        hit = select(kvf.c.value).where(func.lower(kvf.c.key) == f, kvf.c.value == v).limit(1).scalar_subquery()
-        stmt = stmt.where(hit.isnot(None))
-    return stmt
-
-
-def _class_of(payload_col):
-    """CTEを経由せずpayload列から直接Classを取り出す（大文字小文字は無視）。
-    Dashboardの内訳集計のように、KEY小文字化コピー(lp)を作らない経路で使う。"""
-    kv = func.jsonb_each_text(payload_col).table_valued("key", "value")
-    got = (select(kv.c.value).where(func.lower(kv.c.key) == "class",
-                                    func.nullif(kv.c.value, "").isnot(None))
-           .limit(1).scalar_subquery())
-    return func.coalesce(got, func.cast(UNKNOWN_CLASS, String))
+        conds.append("e.source = :source")
+        p["source"] = qy.source
+    for i, (f, v) in enumerate(qy.filters):
+        conds.append("EXISTS (SELECT 1 FROM jsonb_each_text(e.payload) f%d"
+                     " WHERE lower(f%d.key) = :fk%d AND f%d.value = :fv%d)" % (i, i, i, i, i))
+        p["fk%d" % i], p["fv%d" % i] = f, v
+    return period, conds, p
 
 
 def _pick(payload: dict, key: str):
@@ -622,57 +625,74 @@ def overview(qy: EventQuery = Depends(event_query), db: Session = Depends(get_db
     送信元がどのTaxonomy KEYを使っているかによって画面が空になるため。"""
     priority = _priority(db)
     extras = _keep_taxonomy([x for x in extra_fields.split(",") if x.strip()])
-    axes = _keep_taxonomy([x for x in fields.split(",") if x.strip()]) or \
-        _keep_taxonomy(DEFAULT_DASHBOARD_AXES)
+    axes = _keep_taxonomy([x for x in fields.split(",") if x.strip()]) \
+        or _keep_taxonomy(DEFAULT_DASHBOARD_AXES)
 
-    # ---- 内訳は payload を1回だけ展開して集計する ----
-    # 軸ごとに `lp->>'key'` を取り出すと、行あたり軸の数だけJSONB抽出が走って遅い
-    # （本番57,012件・軸16本で実測12.9秒）。jsonb_each_text で payload を1回展開し、
-    # lower(key) が対象軸に含まれる行だけを残して集計する。KEYの小文字化コピー(lp)を
-    # 作る必要もなくなるため、この経路ではCTEを使わない。
-    want = [k for k in axes] + [k for k in extras]
-    kv = func.jsonb_each_text(Event.payload).table_valued("key", "value") \
-             .render_derived(name="kv", with_types=False).lateral()
-    scan = _scoped(select(func.lower(kv.c.key).label("k"), kv.c.value.label("v"),
-                          func.count().label("c")).join(kv, true()), qy)         .where(func.lower(kv.c.key).in_(want), func.nullif(kv.c.value, "").isnot(None))         .group_by(text("1"), text("2")).subquery()
-    ranked = select(scan.c.k, scan.c.v, scan.c.c,
-                    func.row_number().over(partition_by=scan.c.k,
-                                           order_by=scan.c.c.desc()).label("rn")).subquery()
-    got: dict[str, list[dict]] = {}
-    for k, v, c in db.execute(select(ranked.c.k, ranked.c.v, ranked.c.c)
-                              .where(ranked.c.rn <= TOP_N).order_by(ranked.c.k, ranked.c.c.desc())).all():
-        got.setdefault(k, []).append({"value": v, "count": c})
+    # ---- 期間ぶんを1回読むだけで、内訳・Class・代表値をすべて出す ----
+    # 以前は同じ期間に対してSELECTを5本順に投げ、うち3本がそれぞれ payload を展開していた。
+    # 本番268万件・24時間ぶん45万件では1本あたり約10秒かかり、画面表示に約51秒かかっていた
+    # （events全件のシーケンシャルスキャンになっていた件はDB側のプランナ設定で別途対処）。
+    # payloadの展開結果を kv CTE に1回だけ作り、内訳(axis)・Class・代表値(rep)はそこから読む。
+    # 本番実測（24時間45万件）: payload展開3本で約8.0秒 → 共有1本で約4.2秒。
+    period, conds, base_params = _scoped_sql(qy)
+    where = " AND ".join([period] + conds)
+    axis_keys = list(dict.fromkeys(list(axes) + list(extras)))
+    wanted = list(dict.fromkeys(axis_keys + list(priority) + ["class"]))
+    kv_params = dict(base_params, wanted=wanted, axis_keys=axis_keys, prio=priority, top=TOP_N)
 
-    # ログソースと総数は payload に触れずに取れる（received_at のインデックスだけで済む）
-    src_q = _scoped(select(Event.source.label("s"), func.count().label("n")), qy).group_by(text("1"))
-    by_source: dict[str, int] = {}
+    got = {}
+    by_class = {}
+    by_rep = {}
+    for kind, k, v, c in db.execute(text("""
+        WITH kv AS MATERIALIZED (
+            SELECT e.id AS id, lower(x.key) AS k, x.value AS v
+            FROM events e, LATERAL jsonb_each_text(e.payload) x
+            WHERE %s
+              AND lower(x.key) = ANY(:wanted)
+              AND nullif(x.value, '') IS NOT NULL
+        ),
+        axis AS (SELECT k, v, count(*) AS c FROM kv GROUP BY 1, 2),
+        axis_top AS (SELECT k, v, c, row_number() OVER (PARTITION BY k ORDER BY c DESC, v) AS rn
+                     FROM axis WHERE k = ANY(:axis_keys)),
+        rep AS (SELECT v, count(*) AS c FROM (
+                    SELECT DISTINCT ON (id) id, v FROM kv WHERE k = ANY(:prio)
+                    ORDER BY id, array_position(:prio, k)) t
+                GROUP BY 1)
+        SELECT 'a' AS kind, k, v, c FROM axis_top WHERE rn <= :top
+        UNION ALL SELECT 'c', '', v, c FROM axis WHERE k = 'class'
+        UNION ALL SELECT 'r', '', v, c FROM rep
+    """ % where), kv_params).all():
+        if kind == "a":
+            got.setdefault(k, []).append({"value": v, "count": c})
+        elif kind == "c":
+            by_class[v] = c
+        else:
+            by_rep[v] = c
+    for vs in got.values():                      # UNION ALL は順序を保証しないので並べ直す
+        vs.sort(key=lambda x: -x["count"])
+
+    # ログソース・総数・取り込み失敗件数は payload に触れないので1本にまとめる
+    # （received_at のインデックスだけで済む）。失敗件数は期間のみで数える約束なので、
+    # 期間以外の絞り込みは WHERE ではなく FILTER 側に寄せてある。
+    scoped = ("FILTER (WHERE %s)" % " AND ".join(conds)) if conds else ""
+    by_source = {}
     total = 0
-    for s, n in db.execute(src_q).all():
+    ingest_failed = 0
+    for s, n, nf in db.execute(text("""
+        SELECT e.source AS s,
+               count(*) %s AS n,
+               count(*) FILTER (WHERE e.parse_status = 'failed') AS nf
+        FROM events e WHERE %s GROUP BY 1
+    """ % (scoped, period)), base_params).all():
         total += n
-        if s:
+        ingest_failed += nf
+        if s and n:
             by_source[s] = n
 
     # Class は class KEY を持つ行だけ集計し、残りを unknown として差分で求める
-    # （行ごとの相関サブクエリを避けるため）
-    by_class: dict[str, int] = {}
-    cls_q = _scoped(select(kv.c.value.label("v"), func.count().label("n")).join(kv, true()), qy) \
-        .where(func.lower(kv.c.key) == "class", func.nullif(kv.c.value, "").isnot(None)).group_by(text("1"))
-    named = 0
-    for v, n in db.execute(cls_q).all():
-        by_class[v] = n
-        named += n
+    named = sum(by_class.values())
     if total - named > 0:
         by_class[UNKNOWN_CLASS] = total - named
-
-    # 代表値は「優先順位の上から最初に見つかった非空VALUE」なので行ごとの解決が要る。
-    # DISTINCT ON で1行1件に絞ってから件数を数える（payload展開はここでも1回だけ）。
-    prio = pg_array([literal(p) for p in priority])
-    picked = _scoped(select(Event.id.label("id"), kv.c.value.label("v")).join(kv, true()), qy) \
-        .where(func.lower(kv.c.key).in_(priority), func.nullif(kv.c.value, "").isnot(None)) \
-        .distinct(Event.id) \
-        .order_by(Event.id, func.array_position(prio, func.lower(kv.c.key))).subquery()
-    by_rep = {v: n for v, n in db.execute(
-        select(picked.c.v, func.count()).group_by(text("1")).order_by(func.count().desc())).all()}
 
     def _top(d: dict) -> list[dict]:
         return [{"value": k, "count": v} for k, v in sorted(d.items(), key=lambda x: -x[1])[:TOP_N]]
@@ -684,9 +704,7 @@ def overview(qy: EventQuery = Depends(event_query), db: Session = Depends(get_db
         "by_source": _top(by_source),
         "source_count": len(by_source),
         "host_domain_count": len(by_rep),
-        "ingest_failed": db.scalar(select(func.count()).select_from(Event)
-                                   .where(Event.parse_status == "failed",
-                                          Event.received_at >= qy.start, Event.received_at <= qy.end)) or 0,
+        "ingest_failed": ingest_failed,
         "by_class": _top(by_class),
         # ドメイン/ホストは代表値優先順位で集約（v12 §5.3）
         "domain_host": {"priority": priority, "representative": _top(by_rep),
