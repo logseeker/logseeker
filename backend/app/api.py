@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import String, case, cast, func, nulls_last, or_, select, text
 from sqlalchemy.orm import Session
 
+from .advice import advise_for_payload
 from .auth import get_current_user, require_editor, require_login, require_sysadmin
 from .config import settings
 from .db import get_db
@@ -21,7 +22,7 @@ from .schema import (AssetCreate, AssetDisplayNameUpdate, AssetUpdate, CustomRul
                      LicenseApply, NotificationConfig, SilenceSettings, SyncSettings)
 
 from .incident_schema import (CaseCommentCreate, CaseCreate, CaseEventAdd, CaseEventNoteUpdate,
-                              CaseTitleUpdate, EventResolvedUpdate, IncidentAssigneeUpdate,
+                              CaseTitleUpdate, IncidentAssigneeUpdate,
                               IncidentCommentCreate, IncidentResponseActionCreate, IncidentResponseActionTypeCreate,
                               IncidentResponseActionTypeVisibilityUpdate, IncidentStatusCreate, IncidentStatusUpdate,
                               IncidentStatusVisibilityUpdate, IncidentVerdictUpdate)
@@ -164,17 +165,12 @@ def _row(ev: Event) -> dict:
     }
 
 
-@router.put("/events/{event_id}/resolved")
-def update_event_resolved(event_id: int, body: EventResolvedUpdate, db: Session = Depends(get_db),
-                          _a=Depends(require_login)):
-    """イベント単体の対応済み/未対応フラグ。ケースへの追加有無とは独立して切り替え可能
-    （設計書v2 2章。単発のアラートをケース化せずに処理できるようにするため）。"""
-    ev = db.get(Event, event_id)
-    if not ev:
-        return _err(404, "イベントが見つかりません")
-    ev.resolved = body.resolved
-    db.commit()
-    return {"ok": True, "resolved": ev.resolved}
+# イベント単体の「対応済み」更新API（PUT /events/{id}/resolved）は廃止した。
+# 設計書v2 2章では「単発のアラートをケース化せずに処理できるように」独立フラグにしていたが、
+# events.resolved はどこからも読まれておらず（絞り込み・集計・インシデントのいずれにも影響しない）、
+# 押しても何も起きない操作になっていた。対応状況はインシデントのステータス
+# （未対応/調査中/対応中/様子見/報告/完了/再オープン）に一本化する。
+# 列そのものは既存データを壊さないために残してある。
 
 
 def _auto_incident_title(ev: Event) -> str:
@@ -186,14 +182,20 @@ def _auto_incident_title(ev: Event) -> str:
 
 @router.post("/events/{event_id}/incident")
 def create_incident_from_event(event_id: int, db: Session = Depends(get_db), user=Depends(require_editor)):
-    """「注目」アラートに対して直接インシデントを生成する（設計書v4 4章。ケースには依存しない）。
-    1アラートにつき最大1件（event_id にUNIQUE制約。事前チェック＋DB制約の二重防御）。"""
+    """対応策が提示されるイベントから直接インシデントを生成する（設計書v4 4章。ケースには依存しない）。
+    1件につき最大1件（event_id にUNIQUE制約。事前チェック＋DB制約の二重防御）。
+
+    以前は is_event_attention（payload全文に fail/error/404 等が含まれるか）で可否を判定していたが、
+    これはキーワード部分一致で、web_access/auth では常時成立してしまい、事実上すべてのイベントに
+    「インシデント化」が出ていた。イベント一覧はアラート一覧ではないため、画面が対応策
+    （危険度と推奨アクション）を出せるイベントだけに限る。画面側の出し分けと同じ
+    advice.py で判定するので、ボタンが出ているのにAPIが400を返すことは起きない。"""
     row = db.execute(_joined().where(Event.id == event_id)).first()
     if not row:
         return _err(404, "イベントが見つかりません")
     ev = row[0]
-    if not is_event_attention(db, event_id):
-        return _err(400, "「注目」イベントのみインシデント化できます")
+    if advise_for_payload(ev.payload) is None:
+        return _err(400, "対応策が提示されるイベントのみインシデント化できます")
     existing = db.execute(select(Incident.id).where(Incident.event_id == event_id)).scalar_one_or_none()
     if existing:
         return _err(409, "このイベントは既にインシデント化されています")

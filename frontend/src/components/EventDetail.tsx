@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { adviseForEvent } from "../advice";
 import { api } from "../api";
 import { fmtTime } from "../labels";
 import type { EventDetailData, EventRow } from "../types";
@@ -13,6 +14,10 @@ type Props = {
   // "panel" ＝ Events画面の右側にそのまま埋め込む（既定の導線）
   // "modal" ＝ 中央ポップアップ。Cases.tsx / IncidentPanel.tsx からの従来の呼び出し用
   variant?: "modal" | "panel";
+  // Events画面の「⚒ 対応策を表示」がONか。ONで、かつこのイベントに対応策があるときだけ
+  // 「インシデント化」を出す（イベント一覧はアラート一覧ではないので、対応策も見ずに
+  // 片端からインシデント化できる状態にしない）。既定はOFF。
+  adviceVisible?: boolean;
 };
 
 type Related = { keys: { entity_type: string; entity_value: string }[]; items: EventRow[] };
@@ -20,7 +25,7 @@ type Related = { keys: { entity_type: string; entity_value: string }[]; items: E
 // イベント詳細。表示するのは受信フィールド（payload内でTaxonomy KEYと完全一致するKEY）だけで、
 // Taxonomy外KEYはDBに無改変で保存するが、画面には出さない（件数の注記も出さない。v12 §10.3）。
 export function EventDetail({ id, onClose, onPivot, onEntity, onOpenCase, onOpenIncident,
-  variant = "modal" }: Props) {
+  variant = "modal", adviceVisible = false }: Props) {
   const [viewId, setViewId] = useState(id);
   const [d, setD] = useState<EventDetailData | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -44,6 +49,19 @@ export function EventDetail({ id, onClose, onPivot, onEntity, onOpenCase, onOpen
     if (variant === "modal") onClose();
   };
 
+  // 一覧の「対応策」列（Events.tsx の AdviceCell）と同じ判定を、詳細の受信フィールド
+  // （Taxonomy KEY完全一致分）から行う。同じイベントなら一覧と必ず同じ結論になる。
+  const fv = (k: string) => {
+    const f = d?.fields.find((x) => x.key === k);
+    return f == null || f.value == null ? null : String(f.value);
+  };
+  const advice = d && adviseForEvent({
+    category: fv("category"), result: fv("result"), severity: fv("severity"),
+    username: fv("username"), accountname: fv("accountname"),
+    uri: fv("uri"), query: fv("query"),
+    statuscode: fv("statuscode"), status: fv("status"), class: d.class_value,
+  });
+
   const openInNewTab = () => {
     const u = new URL(window.location.href);
     u.search = `?screen=events&event=${viewId}`;
@@ -57,7 +75,11 @@ export function EventDetail({ id, onClose, onPivot, onEntity, onOpenCase, onOpen
           イベント #{viewId}
           {d?.class_value && <span className="badge bg-blue-lt ms-2">{d.class_value}</span>}
           {d?.is_attention && <span className="badge bg-red-lt ms-2">注目</span>}
-          {d?.resolved && <span className="badge bg-green-lt ms-2">対応済み</span>}
+          {/* 対応状況はインシデントのステータスで表す。インシデント化していないイベントには
+              「対応済み」という状態そのものが無い（events.resolved は画面から使わない）。 */}
+          {d?.linked_incident && (
+            <span className="badge bg-azure-lt ms-2">{d.linked_incident.status_name ?? "インシデント"}</span>
+          )}
         </h5>
         <div className="ms-auto d-flex align-items-center gap-1">
           <button className="btn btn-sm btn-ghost-secondary" title="新規タブで開く" onClick={openInNewTab}>⤢</button>
@@ -70,10 +92,6 @@ export function EventDetail({ id, onClose, onPivot, onEntity, onOpenCase, onOpen
       {!d ? <div className="p-5 text-center text-secondary">読み込み中...</div> : (
         <div className="modal-body" style={{ overflowY: "auto" }}>
           <div className="d-flex flex-wrap gap-2 mb-3">
-            <button className="btn btn-sm btn-outline-primary"
-              onClick={() => api.setEventResolved(d.id, !d.resolved).then(load)}>
-              {d.resolved ? "未対応に戻す" : "対応済みにする"}
-            </button>
             {d.linked_case ? (
               <button className="btn btn-sm btn-outline-secondary" onClick={() => onOpenCase?.(d.linked_case!.id)}>
                 ケース「{d.linked_case.title}」を開く
@@ -88,16 +106,37 @@ export function EventDetail({ id, onClose, onPivot, onEntity, onOpenCase, onOpen
               <button className="btn btn-sm btn-outline-danger" onClick={() => onOpenIncident?.(d.linked_incident!.id)}>
                 インシデント「{d.linked_incident.title}」を開く
               </button>
-            ) : d.is_attention ? (
-              <button className="btn btn-sm btn-outline-danger" disabled={busy}
-                onClick={() => {
-                  setBusy(true);
-                  api.createIncidentFromEvent(viewId)
-                    .then((r) => { load(); onOpenIncident?.(r.id); })
-                    .catch((e) => setErr((e as Error).message)).finally(() => setBusy(false));
-                }}>インシデント化</button>
             ) : null}
           </div>
+
+          {/* 対応策。Events画面で「⚒ 対応策を表示」がONのときだけ出す。
+              インシデント化はこの中に置く＝対応策を読んだ上で判断する導線にし、
+              対応策の無いイベント（ただのログ）をインシデント化できないようにする。 */}
+          {adviceVisible && advice && (
+            <div className={`card mb-3 ${advice.level === "danger" ? "border-danger" : "border-warning"}`}>
+              <div className="card-body py-2">
+                <div className="d-flex align-items-center gap-2 mb-1">
+                  <span className={`badge ${advice.level === "danger" ? "bg-red-lt" : "bg-yellow-lt"}`}>
+                    {advice.title}
+                  </span>
+                  <span className="text-secondary small">対応策</span>
+                </div>
+                <div className="small mb-2">{advice.rec}</div>
+                <div className="d-flex flex-wrap gap-1 mb-2">
+                  {advice.actions.map((x) => <span key={x} className="badge bg-secondary-lt">{x}</span>)}
+                </div>
+                {!d.linked_incident && (
+                  <button className="btn btn-sm btn-outline-danger" disabled={busy}
+                    onClick={() => {
+                      setBusy(true);
+                      api.createIncidentFromEvent(viewId)
+                        .then((r) => { load(); onOpenIncident?.(r.id); })
+                        .catch((e) => setErr((e as Error).message)).finally(() => setBusy(false));
+                    }}>インシデント化</button>
+                )}
+              </div>
+            </div>
+          )}
 
           {picker && (
             <div className="card mb-3">

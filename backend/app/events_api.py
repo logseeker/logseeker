@@ -562,11 +562,15 @@ def detail(event_id: int, db: Session = Depends(get_db)):
 
     # ケース/インシデントへの導線（調査支援機能。既存テーブルを読むだけで一切変更しない）
     from .api import is_event_attention
-    from .models import Case, CaseEvent, Incident
+    from .models import Case, CaseEvent, Incident, IncidentStatus
     link = db.execute(select(CaseEvent.case_id, Case.title)
                       .join(Case, Case.id == CaseEvent.case_id)
                       .where(CaseEvent.event_id == event_id)).first()
-    inc = db.execute(select(Incident.id, Incident.title).where(Incident.event_id == event_id)).first()
+    # 対応状況はインシデントのステータスで表す（events.resolved は画面から使わない）ため、
+    # 詳細でバッジ表示できるようステータス名も併せて返す。
+    inc = db.execute(select(Incident.id, Incident.title, IncidentStatus.name)
+                     .outerjoin(IncidentStatus, IncidentStatus.id == Incident.status_id)
+                     .where(Incident.event_id == event_id)).first()
 
     return {
         "id": ev.id,
@@ -579,7 +583,7 @@ def detail(event_id: int, db: Session = Depends(get_db)):
         "taxonomy_outside_count": hidden,   # 件数だけ知らせる（中身は出さない）
         "is_attention": is_event_attention(db, event_id),
         "linked_case": {"id": link[0], "title": link[1]} if link else None,
-        "linked_incident": {"id": inc[0], "title": inc[1]} if inc else None,
+        "linked_incident": {"id": inc[0], "title": inc[1], "status_name": inc[2]} if inc else None,
     }
 
 

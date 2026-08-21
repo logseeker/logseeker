@@ -7,11 +7,6 @@ from pydantic import BaseModel
 Verdict = Literal["unjudged", "true_positive", "false_positive", "over_detection", "other"]
 
 
-# ---- イベント ----
-class EventResolvedUpdate(BaseModel):
-    resolved: bool
-
-
 # ---- ケース ----
 class CaseCreate(BaseModel):
     title: str

@@ -167,8 +167,9 @@ export const api = {
   setLocalAssetDisplayName: (ip: string, display_name: string | null) =>
     put<{ id: number; ip: string; ip_version: string; label: string | null; description: string | null; display_name: string | null }>(`/api/assets/local/${ip}`, { display_name }),
 
-  setEventResolved: (id: number, resolved: boolean) =>
-    put<{ ok: boolean; resolved: boolean }>(`/api/events/${id}/resolved`, { resolved }),
+  // イベント単体の「対応済み」トグル（PUT /api/events/{id}/resolved）は廃止した。
+  // 対応状況はインシデントのステータスで管理する（イベント一覧はアラート一覧ではないため、
+  // 何もしていないイベントを「対応済み」にできるのはおかしい）。
 
   // ケース（設計書v4 3章）：複数イベントを束ねる調査ワークスペース。ステータス・判定結果・
   // 担当者は持たず、インシデントへの「昇格」概念も無い（インシデントとは完全に独立）

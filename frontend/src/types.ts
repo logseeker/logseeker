@@ -87,7 +87,7 @@ export interface EventDetailData {
   taxonomy_outside_count: number;    // Taxonomy外KEYは件数だけ（中身は返さない。v12 §10.3）
   is_attention: boolean;
   linked_case: { id: number; title: string } | null;
-  linked_incident: { id: number; title: string } | null;
+  linked_incident: { id: number; title: string; status_name: string | null } | null;
 }
 
 export interface DashboardBreakdown { field: string; label: string | null; values: Count[] }

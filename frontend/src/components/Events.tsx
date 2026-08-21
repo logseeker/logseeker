@@ -278,7 +278,8 @@ export function Events({ onEntity, onNav, onOpenCase, onOpenIncident, auth, init
             ⚙ 列を編集（現在{columns.length}列）
           </button>
           <button className={`btn btn-sm ${showAdvice ? "btn-warning" : "btn-outline-warning"}`}
-            onClick={() => setShowAdvice(!showAdvice)} title="危険度と対応策を一覧に表示する">
+            onClick={() => setShowAdvice(!showAdvice)}
+            title="危険度と対応策を一覧とイベント詳細に表示する（詳細の対応策からインシデント化できます）">
             ⚒ 対応策を{showAdvice ? "隠す" : "表示"}
           </button>
           <div className="btn-group btn-group-sm ms-auto">
@@ -316,7 +317,9 @@ export function Events({ onEntity, onNav, onOpenCase, onOpenIncident, auth, init
             <table className="table table-sm table-vcenter card-table">
               <thead>
                 <tr>
-                  <th style={{ width: 70 }}>対応</th>
+                  {/* 「対応」トグル列（events.resolved）は廃止した。対応状況はインシデントの
+                      ステータスで管理する（イベント一覧はアラート一覧ではないため、何もして
+                      いないイベントを一覧から「対応済み」にできるのはおかしい）。 */}
                   {/* Classは受信payloadのフィールドではなくLogSeeker管理情報。行の class_value を
                       そのまま出す（右パネルのバッジと必ず同じ値になるようにする）。 */}
                   <th className="text-nowrap">Class</th>
@@ -339,13 +342,6 @@ export function Events({ onEntity, onNav, onOpenCase, onOpenIncident, auth, init
                 {(rows?.items ?? []).map((r: EventSearchRow) => (
                   <tr key={r.id} className={sel === r.id ? "table-active" : ""} role="button"
                     onClick={() => setSel(r.id)}>
-                    <td onClick={(e) => e.stopPropagation()}>
-                      <div className="form-check form-switch mb-0">
-                        <input className="form-check-input" type="checkbox" checked={r.resolved}
-                          onChange={() => api.setEventResolved(r.id, !r.resolved)
-                            .then(() => api.searchEvents(applied, columns, limit, offset).then(setRows))} />
-                      </div>
-                    </td>
                     <td className="text-nowrap">
                       <span className={`badge ${r.class_value === "unknown" ? "bg-secondary-lt" : "bg-blue-lt"}`}>
                         {r.class_value}
@@ -370,7 +366,7 @@ export function Events({ onEntity, onNav, onOpenCase, onOpenIncident, auth, init
                   </tr>
                 ))}
                 {rows && rows.items.length === 0 && (
-                  <tr><td colSpan={columns.length + (showAdvice ? 3 : 2)} className="text-center text-secondary py-4">
+                  <tr><td colSpan={columns.length + (showAdvice ? 2 : 1)} className="text-center text-secondary py-4">
                     該当するイベントがありません
                   </td></tr>
                 )}
@@ -398,8 +394,10 @@ export function Events({ onEntity, onNav, onOpenCase, onOpenIncident, auth, init
 
       {sel != null && (
         <div style={{ flex: "0 0 38%", maxWidth: 540, position: "sticky", top: 8 }}>
+          {/* 「⚒ 対応策を表示」がONのときだけ、詳細にも対応策と「インシデント化」を出す */}
           <EventDetail id={sel} variant="panel" onClose={() => setSel(null)} onPivot={pivot}
-            onEntity={onEntity} onOpenCase={onOpenCase} onOpenIncident={onOpenIncident} />
+            onEntity={onEntity} onOpenCase={onOpenCase} onOpenIncident={onOpenIncident}
+            adviceVisible={showAdvice} />
         </div>
       )}
 
