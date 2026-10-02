@@ -935,8 +935,8 @@ def set_response_action_type_visibility(type_id: int, body: IncidentResponseActi
 
 @router.get("/rules")
 def rules_list():
-    from .rules import RULE_DEFS
-    return RULE_DEFS
+    from .rules import all_rule_defs
+    return all_rule_defs()
 
 
 def _conds(f: dict) -> list:

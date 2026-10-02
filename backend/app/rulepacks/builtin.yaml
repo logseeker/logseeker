@@ -1,0 +1,228 @@
+# LogSeeker 同梱ルールパック（書式: docs/rulepack.md）
+#
+# - 条件に書ける key は Taxonomy KEY のみ（docs/taxonomy.md）。照合は大文字小文字を区別しない。
+# - col は正規化済みの列（rulepack.COLS）。scope は col だけで書き、payload を展開する前に対象を絞る。
+# - 値の比較は大文字小文字を区別せず、前後の空白を除く。空文字と "-" は「値なし」として扱う。
+# - 正規表現は PostgreSQL の ~*（大文字小文字を区別しない）で評価する。\b は使えない。
+format: 1
+pack: builtin
+version: "2026.10.02-1"
+
+rules:
+  # ================================================================ Windows（windows_event）
+  # docs/detection-rules.md §14。taxonomy.md v1.13 で追加したKEYを使う。
+
+  - id: win_log_cleared
+    name: "[Windows] 監査ログの消去"
+    title: 監査ログの消去
+    severity: critical
+    category: security
+    description: Securityログ(1102)またはSystemログ(104)が消去された。侵入後の痕跡隠しで典型的に行われる。
+    recommendation: >-
+      消去した操作者（アカウント）と時刻を確認し、心当たりが無ければ侵害を前提に調査。消去前後のログオン・プロセス起動を確認し、本システム側に転送済みの記録を保全する。
+    scope: {source_type: windows_event, event_action: ["1102", "104"]}
+    match:
+      any:
+        - {col: event_action, eq: "1102"}
+        - all:
+            - {col: event_action, eq: "104"}
+            - {key: channel, eq: system}
+    group_by: [host_name]
+    evidence:
+      - {label: 操作者, key: subjectusername}
+
+  - id: win_pass_the_hash
+    name: "[Windows] Pass-the-Hashの疑い"
+    title: Pass-the-Hashの疑い
+    severity: high
+    category: security
+    description: >-
+      パスワードではなく盗んだNTLMハッシュでのログオンを示す形跡（4624: ネットワークログオン(3)+NTLM+セッションキー長0、または LogonType 9 + seclogo）。ドメイン非参加の環境では正規のログオンでも出ることがある。
+    recommendation: >-
+      該当アカウントのパスワードをリセットし、送信元端末を隔離して調査。ローカル管理者パスワードの使い回しを避ける（LAPS）。NTLMの利用制限を検討。
+    scope: {source_type: windows_event, event_action: ["4624"]}
+    match:
+      any:
+        - all:
+            - {key: logontype, eq: "3"}
+            - {key: authenticationpackagename, eq: NTLM}
+            - {key: keylength, eq: "0"}
+            - {key: targetusername, ne: ANONYMOUS LOGON}
+        - all:
+            - {key: logontype, eq: "9"}
+            - {key: logonprocessname, eq: seclogo}
+    group_by: [source_ip, host_name]
+    evidence:
+      - {label: 対象アカウント, key: targetusername}
+      - {label: ログオン先, col: host_name}
+
+  - id: win_suspicious_command
+    name: "[Windows] 不審なコマンド実行"
+    title: 不審なコマンド実行
+    severity: high
+    category: security
+    description: >-
+      プロセス作成(4688)で、エンコード済みPowerShell・資格情報窃取ツール・シャドウコピー削除・イベントログ消去など、攻撃でよく使われるコマンドを検出。コマンドラインの記録には監視対象側の監査ポリシー設定が必要。
+    recommendation: >-
+      実行したアカウント・親プロセスを確認し、正規の管理作業でなければ端末を隔離して調査。シャドウコピー削除・回復の無効化はランサムウェアの直前動作のことが多いので最優先で対応。
+    scope: {source_type: windows_event, event_action: ["4688"]}
+    match:
+      # CommandLine は監視対象で「プロセス作成イベントにコマンドラインを含める」を有効にしないと出ない。
+      # 未設定でも NewProcessName（実行ファイルパス）でツール名だけは拾える。
+      key: [commandline, newprocessname]
+      regex:
+        - 'powershell.*\s-(e|ec|enc|encodedcommand)\s'          # エンコード済みコマンドの実行
+        - 'frombase64string'
+        - 'downloadstring|downloadfile|invoke-webrequest|invoke-expression|iex\s*\('
+        - 'mimikatz|sekurlsa|lsadump|kerberos::'                 # 資格情報窃取ツール
+        - 'comsvcs(\.dll)?.*minidump|procdump.*lsass'            # LSASSのメモリダンプ
+        - 'vssadmin(\.exe)?\s+delete\s+shadows|wmic(\.exe)?\s+shadowcopy\s+delete|wbadmin(\.exe)?\s+delete'
+        - 'bcdedit(\.exe)?\s+/set'                               # 回復の無効化（ランサムウェアの典型）
+        - 'wevtutil(\.exe)?\s+cl\s'                              # イベントログの消去
+        - 'certutil(\.exe)?.*-urlcache|bitsadmin(\.exe)?.*/transfer'
+        - 'reg(\.exe)?\s+save\s+hklm\\(sam|system|security)'     # SAM/SYSTEMハイブの持ち出し
+        - 'ntdsutil'
+        - 'net1?(\.exe)?\s+(user|localgroup)\s.*/add'
+    group_by: [host_name]
+    evidence:
+      - {label: コマンド, key: [commandline, newprocessname], limit: 2, truncate: 160}
+      - {label: 実行者, key: subjectusername}
+
+  - id: win_rdp_external
+    name: "[Windows] 外部IPからのRDPログオン成功"
+    title: 外部IPからのRDPログオン成功
+    severity: high
+    category: security
+    description: グローバルIPからのリモートデスクトップ(4624 LogonType 10)でログオンに成功した。
+    recommendation: >-
+      接続元と利用者に心当たりが無ければ該当アカウントを無効化。RDPをインターネットへ直接公開せず、VPN経由・IP制限・NLA・MFAを導入。
+    scope: {source_type: windows_event, event_action: ["4624"]}
+    match:
+      all:
+        - {key: logontype, eq: "10"}
+        - {col: source_ip, ip_global: true}
+    group_by: [source_ip]
+    evidence:
+      - {label: アカウント, col: actor_user}
+      - {label: ログオン先, col: host_name}
+
+  - id: win_logon_failure_ip
+    name: "[Windows] ログオン失敗の多発（送信元IP単位）"
+    title: ログオン失敗の多発
+    severity: high
+    category: security
+    description: 同一送信元IPからのWindowsログオン失敗(4625)が多発。
+    recommendation: 該当IPを遮断。RDP/SMBの外部公開を見直し、アカウントロックアウトポリシーを設定。
+    scope: {source_type: windows_event, event_action: ["4625"]}
+    match: {col: source_ip, exists: true}
+    group_by: [source_ip]
+    threshold: {count: 10}
+    evidence:
+      - {label: 対象アカウント数, col: actor_user, show: count}
+      - {label: 対象アカウント, col: actor_user}
+
+  - id: win_password_spray
+    name: "[Windows] パスワードスプレーの疑い"
+    title: パスワードスプレーの疑い
+    severity: high
+    category: security
+    description: >-
+      同一送信元IPから、多数の異なるアカウントへのログオン失敗(4625)。ロックアウトを避けて少数のパスワードを多数のアカウントに試す攻撃。
+    recommendation: 該当IPを遮断。狙われたアカウントに弱いパスワードが無いか確認し、MFAを導入。
+    scope: {source_type: windows_event, event_action: ["4625"]}
+    match: {col: source_ip, exists: true}
+    group_by: [source_ip]
+    threshold: {distinct: {col: actor_user}, min_distinct: 5}
+    evidence:
+      - {label: 対象アカウント数, col: actor_user, show: count}
+      - {label: 対象アカウント, col: actor_user}
+
+  - id: win_kerberoasting
+    name: "[Windows] Kerberoastingの疑い"
+    title: Kerberoastingの疑い
+    severity: high
+    category: security
+    description: >-
+      RC4暗号(0x17)のKerberosサービスチケット要求(4769)。サービスアカウントのパスワードをオフラインで解読する攻撃で使われる（ドメインコントローラーのログでのみ出る）。
+    recommendation: >-
+      要求元のアカウント・端末を確認。サービスアカウントは25文字以上の長いパスワードかgMSAにし、RC4を無効化してAESのみにする。
+    scope: {source_type: windows_event, event_action: ["4769"]}
+    match:
+      all:
+        - {key: ticketencryptiontype, eq: "0x17"}
+        - not: {key: servicename, endswith: "$"}   # コンピューターアカウント宛ては対象外
+        - {key: servicename, ne: krbtgt}
+    group_by: [source_ip, host_name]
+    evidence:
+      - {label: 要求されたサービス, key: servicename}
+      - {label: 要求元, col: actor_user}
+
+  - id: win_priv_group_add
+    name: "[Windows] 特権グループへのメンバー追加"
+    title: 特権グループへのメンバー追加
+    severity: high
+    category: security
+    description: Administrators・Domain Admins・Remote Desktop Users 等の特権グループにメンバーが追加された(4728/4732/4756)。
+    recommendation: 追加した操作者と追加されたアカウントを確認し、承認された変更でなければ直ちに取り消して調査。
+    scope: {source_type: windows_event, event_action: ["4728", "4732", "4756"]}
+    match:
+      # 対象グループ名。日本語版Windowsでも組み込みグループ名は英語のまま
+      key: targetusername
+      regex: 'admins|administrators|operators|remote desktop users|remote management users|group policy creator owners'
+    group_by: [host_name]
+    evidence:
+      - {label: グループ, key: targetusername}
+      - {label: 追加されたメンバー, key: [membername, membersid]}
+      - {label: 操作者, key: subjectusername}
+
+  - id: win_account_created
+    name: "[Windows] ユーザーアカウントの作成"
+    title: ユーザーアカウントの作成
+    severity: warning
+    category: security
+    description: ユーザーアカウントが作成された(4720)。攻撃者の永続化（裏口アカウント）でも使われる。
+    recommendation: 作成者と作成されたアカウントが承認済みの作業か確認。心当たりが無ければ無効化して調査。
+    scope: {source_type: windows_event, event_action: ["4720"]}
+    group_by: [host_name]
+    evidence:
+      - {label: 作成されたアカウント, key: targetusername}
+      - {label: 操作者, key: subjectusername}
+
+  - id: win_service_installed
+    name: "[Windows] サービスのインストール"
+    title: サービスのインストール
+    severity: warning
+    category: security
+    description: 新しいサービスがインストールされた(7045/4697)。PsExec等の横展開やマルウェアの永続化で使われる。
+    recommendation: >-
+      サービス名・実行ファイルパスを確認。一時フォルダ・ユーザーフォルダ上の実行ファイルや、cmd/powershellを直接起動するサービスは要注意。
+    scope: {source_type: windows_event, event_action: ["7045", "4697"]}
+    group_by: [host_name]
+    evidence:
+      - {label: サービス, key: servicename, limit: 2}
+      - {label: 実行パス, key: imagepath, limit: 2}
+
+  - id: win_scheduled_task
+    name: "[Windows] タスクスケジューラへの登録"
+    title: タスクスケジューラへの登録
+    severity: warning
+    category: security
+    description: スケジュールされたタスクが作成された(4698)。マルウェアの永続化・遠隔実行で使われる。
+    recommendation: タスク名と実行内容を確認し、承認されていない登録であれば削除して調査。
+    scope: {source_type: windows_event, event_action: ["4698"]}
+    group_by: [host_name]
+    evidence:
+      - {label: タスク, key: taskname}
+      - {label: 登録者, key: subjectusername}
+
+  - id: win_audit_policy_changed
+    name: "[Windows] 監査ポリシーの変更"
+    title: 監査ポリシーの変更
+    severity: warning
+    category: security
+    description: システムの監査ポリシーが変更された(4719)。検知を逃れるために監査を無効化する攻撃がある。
+    recommendation: 変更者と変更内容を確認し、意図しない変更であれば元に戻す。
+    scope: {source_type: windows_event, event_action: ["4719"]}
+    group_by: [host_name]
+    evidence:
+      - {label: 操作者, key: subjectusername}
