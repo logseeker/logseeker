@@ -73,9 +73,10 @@ def _php_level(text: str) -> tuple[str | None, str | None]:
 
 # source（取り込み元）ごとの表示名/機器名。ログにも設定にも無い機器名は作らない（§4）。
 # device_name はログに在ればそれを優先し、ここは設定値(source_config相当)のフォールバック。
+# 個別環境の実ホスト名をここに書かない（公開ソースのため。機器名はログの hostname/host から取る）。
 SOURCE_CONFIG: dict[str, dict[str, str | None]] = {
     "yamaha": {"source_name": "YAMAHAルーター", "device_name": "YAMAHAルーター"},
-    "nas": {"source_name": "NAS nas-36-8E-D6", "device_name": "nas-36-8E-D6"},
+    "nas": {"source_name": "NAS", "device_name": None},
     "litespeed": {"source_name": None, "device_name": None},  # Web: source_name=ドメイン(vhost)
     "google_workspace": {"source_name": "Google Workspace", "device_name": None},
 }
