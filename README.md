@@ -116,6 +116,15 @@ SaaS/マネージドホスティングとしての第三者提供、著作権表
 ## ディレクトリ構成（主要なもの）
 - `backend/app` … FastAPIアプリ本体、`backend/app/tools` … ライセンス発行・ログ取り込み等のCLIツール
 - `frontend/src` … React+TSのフロントエンドソース（`npm run build` で `frontend/dist` に静的ファイル生成）
-- `data/input` … ファイル取り込み補助ツール（`load_logs`）の入力置き場（任意・開発検証用）
+- `data/input` … ファイル取り込み補助ツール（`load_logs`）の入力置き場（任意・開発検証用）。
+  どのファイルをどの source として取り込むかを `data/input/routes.json` に書く（git管理外）:
+  ```json
+  [
+    {"pattern": "(^|/)access\\.log$", "converter": "lsws_access", "source": "litespeed", "source_type": "web_access"},
+    {"pattern": "(^|/)secure\\.json$", "converter": "jsonl", "source": "linux-secure", "source_type": "linux"}
+  ]
+  ```
+  `pattern` は data/input からの相対パスに対する正規表現。`converter` は `jsonl`（1行1JSON）・`csv`・
+  `backend/app/converters.py` の `CONVERTERS` のいずれか。
 - `data/json` … 取り込みJSONの控え（`JSON_STORE_DIR` で変更可）
 - `data/ioc` … 脅威インテリ（IOC）フィードの取り込み置き場（[docs/threat-intel.md](docs/threat-intel.md)）

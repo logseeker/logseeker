@@ -190,7 +190,7 @@ def _rec(rule_id: str) -> tuple[str, str, str, str]:
 
 
 def evaluate(db: Session, conds: list | None = None) -> list[dict[str, Any]]:
-    """conds: 現在の画面絞り込み（source_name=logw 等）の条件リスト。指定時はその範囲だけ評価。"""
+    """conds: 現在の画面絞り込み（source_name=example.com 等）の条件リスト。指定時はその範囲だけ評価。"""
     w = conds or []
     hits: list[dict[str, Any]] = []
 

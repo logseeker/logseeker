@@ -40,8 +40,8 @@ _RE_LSWS_ERROR = re.compile(
     r'(?:\[(?P<context>[^\]]*)\]\s*:?\s*)?(?P<message>.*)$'
 )
 _RE_TS_HEAD = re.compile(r"^(?P<time>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?)")
-# --- logw アクセスログ（行全体が " で囲まれる: "vhost ip - - [time] "req" status size"）---
-_RE_LOGW = re.compile(
+# --- vhost付きLiteSpeedアクセスログ（行全体が " で囲まれる: "vhost ip - - [time] "req" status size"）---
+_RE_LSWS_VHOST = re.compile(
     r'^"?(?P<vhost>\S+)\s+(?P<client>\S+)\s+\S+\s+\S+\s+\[(?P<time>[^\]]+)\]\s+'
     r'"(?P<request>[^"]*)"\s+(?P<status>\d{3})\s+(?P<size>\d+|-)"?\s*$'
 )
@@ -113,8 +113,8 @@ def conv_lsws_error(line: str) -> dict:
     return _clean(m.groupdict(), line)
 
 
-def conv_logw_access(line: str) -> dict:
-    m = _RE_LOGW.match(line)
+def conv_lsws_vhost_access(line: str) -> dict:
+    m = _RE_LSWS_VHOST.match(line)
     if not m:
         return {"raw": line}
     return _clean(m.groupdict(), line)
@@ -146,7 +146,7 @@ CONVERTERS = {
     "syslog": conv_syslog,
     "lsws_access": conv_lsws_access,
     "lsws_error": conv_lsws_error,
-    "logw_access": conv_logw_access,
+    "lsws_vhost_access": conv_lsws_vhost_access,
     "stderr": conv_stderr,
     "lsrestart": conv_lsrestart,
 }

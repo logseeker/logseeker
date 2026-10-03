@@ -418,8 +418,8 @@ google_workspace
 yamaha_router
 nas_01
 example_dev
-logw
-kantsuri
+example.net
+example.org
 ```
 
 ---
@@ -435,8 +435,8 @@ Google Workspace
 YAMAHAルーター
 NAS nas-01
 example.com
-logw
-kantsuri
+example.net
+example.org
 Unknown
 ```
 
@@ -1252,8 +1252,8 @@ Dashboard 画面イメージ:
 +--------------------------------------------------------------------------------+
 | ホスト/デバイス別              | ドメイン/vhost別                               |
 | NAS nas-01               | example.com                                  |
-| YAMAHAルーター                 | logw                                           |
-| Unknown                        | kantsuri                                       |
+| YAMAHAルーター                 | example.net                                    |
+| Unknown                        | example.org                                    |
 +--------------------------------------------------------------------------------+
 | 上位送信元IP                   | 上位URLパス                                    |
 +--------------------------------------------------------------------------------+
@@ -1392,8 +1392,8 @@ Google Workspace
 YAMAHAルーター
 NAS nas-01
 example.com
-logw
-kantsuri
+example.net
+example.org
 Unknown
 ```
 
@@ -1422,8 +1422,8 @@ Domains / vhosts:
 
 ```text
 example.com
-logw
-kantsuri
+example.net
+example.org
 ```
 
 ---

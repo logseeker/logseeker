@@ -6,6 +6,8 @@
 - 入力: data/input 配下（JSON_STORE_DIR の親ディレクトリ。.envで変更可）
 - payload は無改変で events.payload に保存し、導出値は events の列へ入れる。
 - 変換JSON: data/json/converted_<file>.json に出力（目視確認用）。
+- どのファイルをどの source として取り込むかは、入力ディレクトリの routes.json に書く
+  （環境ごとに違う内容なのでソースには持たない。data/input は git 管理外）。書式は README 参照。
 """
 import argparse
 import csv
@@ -24,28 +26,22 @@ INPUT_DIR = settings.JSON_STORE_DIR.parent / "input"
 OUTPUT_DIR = settings.JSON_STORE_DIR
 
 # 入力相対パス → (変換種別, source, source_type)。新しいログはここに1行。
-KIND_ROUTES: list[tuple[re.Pattern, str, str, str]] = [
-    (re.compile(r"(^|/)syslog_.*", re.I), "yamaha", "yamaha", "router"),
-    (re.compile(r"nas/ssl_access\.log$", re.I), "apache_access", "nas", "web_access"),
-    (re.compile(r"nas/http-access\.log$", re.I), "apache_access", "nas", "web_access"),
-    (re.compile(r"nas/error\.log$", re.I), "apache_error", "nas", "web_error"),
-    (re.compile(r"nas/smbd\.log$", re.I), "samba", "nas", "auth"),
-    (re.compile(r"nas/auth\.log$", re.I), "syslog", "nas", "nas"),
-    (re.compile(r"web/logw_accesslog", re.I), "logw_access", "logw", "web_access"),
-    (re.compile(r"web/logw_error", re.I), "lsws_error", "logw", "web_error"),
-    (re.compile(r"web/access\.log$", re.I), "lsws_access", "litespeed", "web_access"),
-    (re.compile(r"web/error\.log$", re.I), "lsws_error", "litespeed", "web_error"),
-    (re.compile(r"web/stderr\.log$", re.I), "stderr", "litespeed", "application"),
-    (re.compile(r"web/lsrestart\.log$", re.I), "lsrestart", "litespeed", "application"),
-    # NXLog等が既にJSON化したもの（NDJSON: 1行1JSON）。payloadはそのまま。
-    # source は EventDetail の source 欄に表示される（source_name は payload の Hostname から決まる）。
-    (re.compile(r"(^|/)messages\.json$", re.I), "jsonl", "linux-messages", "linux"),
-    (re.compile(r"(^|/)secure\.json$", re.I), "jsonl", "linux-secure", "linux"),
-    (re.compile(r"(^|/)kantsuri_accesslog\.json$", re.I), "jsonl", "kantsuri", "web_access"),
-    (re.compile(r"(^|/)logw_accesslog\.json$", re.I), "jsonl", "logw", "web_access"),
-    (re.compile(r"(^|/)logw_error\.json$", re.I), "jsonl", "logw", "web_error"),
-    (re.compile(r"\.csv$", re.I), "csv", "google_workspace", "google_workspace_audit"),
-]
+ROUTES_FILE = "routes.json"
+
+
+def load_routes(input_dir: Path) -> list[tuple[re.Pattern, str, str, str]]:
+    """入力相対パス(正規表現) → (変換種別, source, source_type) の対応表を routes.json から読む。"""
+    path = input_dir / ROUTES_FILE
+    if not path.exists():
+        raise SystemExit(f"[!] {path} がありません。取り込むファイルと source の対応を書いてください（README参照）")
+    out = []
+    for i, r in enumerate(json.loads(path.read_text(encoding="utf-8"))):
+        conv = r.get("converter")
+        if conv not in CONVERTERS and conv not in ("jsonl", "csv"):
+            raise SystemExit(f"[!] {path} の{i + 1}件目: 不明な converter '{conv}'"
+                             f"（使えるもの: jsonl, csv, {', '.join(sorted(CONVERTERS))}）")
+        out.append((re.compile(r["pattern"], re.I), conv, r["source"], r["source_type"]))
+    return out
 
 _SKIP = re.compile(r"^--\s*Logs begin at|^\s*$")
 _SMB_HEAD = re.compile(r"^\[\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}")
@@ -53,8 +49,8 @@ _TS_HEAD = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}")
 _DATE_HEAD = re.compile(r"^[A-Z][a-z]{2} [A-Z][a-z]{2}\s+\d+\s")
 
 
-def route_for(relpath: str):
-    for pat, conv, source, stype in KIND_ROUTES:
+def route_for(relpath: str, routes: list[tuple[re.Pattern, str, str, str]]):
+    for pat, conv, source, stype in routes:
         if pat.search(relpath):
             return conv, source, stype
     return None
@@ -130,6 +126,11 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=0,
                     help="各ファイル最大件数（0=無制限・既定）。解析時に絞りたい時だけ指定。")
     args = ap.parse_args()
+    input_dir = Path(args.input)
+    if not input_dir.exists():
+        print(f"[!] 入力ディレクトリがありません: {input_dir}")
+        return
+    routes = load_routes(input_dir)  # --reset より前に読む（設定不備で中断したときにDBを消さないため）
 
     # --reset はスキーマごと作り直す（旧 events/logs テーブルが残っていても新スキーマに合わせる）
     if args.reset:
@@ -137,10 +138,6 @@ def main() -> None:
         print("[reset] 既存テーブルを drop")
     Base.metadata.create_all(bind=engine)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    input_dir = Path(args.input)
-    if not input_dir.exists():
-        print(f"[!] 入力ディレクトリがありません: {input_dir}")
-        return
 
     db = SessionLocal()
 
@@ -150,7 +147,9 @@ def main() -> None:
         if not path.is_file():
             continue
         rel = path.relative_to(input_dir).as_posix()
-        route = route_for(rel)
+        if rel == ROUTES_FILE:
+            continue
+        route = route_for(rel, routes)
         if route is None:
             print(f"[skip] 対象外: {rel}")
             continue

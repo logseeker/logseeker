@@ -190,7 +190,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen]);
   const onThreat = (v: string) => setFilter((p) => ({ ...p, threat: v || undefined }));
-  // ダッシュボード/ルール/エンティティ等から Events へ。現在の絞り込み文脈（logw等）は維持して追加。
+  // ダッシュボード/ルール/エンティティ等から Events へ。現在の絞り込み文脈（ログソース等）は維持して追加。
   // ルール等は同じ絞り込みに追従して算出されるので、追加しても0件にならない。
   const drill = (k: string, v: string) => { onTax(k, v); setScreen("events"); };
   // Dashboardの代表値グループ（ドメイン/ホスト等）をクリックした場合の専用ドリルダウン。
