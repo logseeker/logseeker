@@ -395,7 +395,7 @@ export function Events({ onEntity, onNav, onOpenCase, onOpenIncident, auth, init
       {sel != null && (
         <div style={{ flex: "0 0 38%", maxWidth: 540, position: "sticky", top: 8 }}>
           {/* 「⚒ 対応策を表示」がONのときだけ、詳細にも対応策と「インシデント化」を出す */}
-          <EventDetail id={sel} variant="panel" onClose={() => setSel(null)} onPivot={pivot}
+          <EventDetail id={sel} variant="panel" onClose={() => setSel(null)}
             onEntity={onEntity} onOpenCase={onOpenCase} onOpenIncident={onOpenIncident}
             adviceVisible={showAdvice} />
         </div>

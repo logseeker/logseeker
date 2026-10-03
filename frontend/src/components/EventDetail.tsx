@@ -7,7 +7,6 @@ import type { EventDetailData, EventRow } from "../types";
 type Props = {
   id: number;
   onClose: () => void;
-  onPivot?: (key: string, value: string) => void;     // この値でEventsを絞り込む（未指定なら🔍を出さない）
   onEntity?: (entityType: string, value: string) => void;
   onOpenCase?: (caseId: number) => void;
   onOpenIncident?: (incidentId: number) => void;
@@ -24,7 +23,7 @@ type Related = { keys: { entity_type: string; entity_value: string }[]; items: E
 
 // イベント詳細。表示するのは受信フィールド（payload内でTaxonomy KEYと完全一致するKEY）だけで、
 // Taxonomy外KEYはDBに無改変で保存するが、画面には出さない（件数の注記も出さない。v12 §10.3）。
-export function EventDetail({ id, onClose, onPivot, onEntity, onOpenCase, onOpenIncident,
+export function EventDetail({ id, onClose, onEntity, onOpenCase, onOpenIncident,
   variant = "modal", adviceVisible = false }: Props) {
   const [viewId, setViewId] = useState(id);
   const [d, setD] = useState<EventDetailData | null>(null);
@@ -43,10 +42,26 @@ export function EventDetail({ id, onClose, onPivot, onEntity, onOpenCase, onOpen
   };
   useEffect(load, [viewId]);
 
-  const pivot = (key: string, value: unknown) => {
-    if (value === null || value === undefined || value === "") return;
-    onPivot?.(key, String(value));
-    if (variant === "modal") onClose();
+  // 値のコピー。開発環境のような http（非セキュアコンテキスト）では navigator.clipboard が
+  // 使えないため、選択範囲を作って execCommand("copy") する方法に切り替える。
+  const [copied, setCopied] = useState<string | null>(null);
+  const copy = (key: string, text: string) => {
+    const done = () => { setCopied(key); setTimeout(() => setCopied((c) => (c === key ? null : c)), 1500); };
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(done).catch(() => setErr("コピーできませんでした"));
+      return;
+    }
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try {
+      if (document.execCommand("copy")) done(); else setErr("コピーできませんでした");
+    } finally {
+      document.body.removeChild(ta);
+    }
   };
 
   // 一覧の「対応策」列（Events.tsx の AdviceCell）と同じ判定を、詳細の受信フィールド
@@ -162,7 +177,7 @@ export function EventDetail({ id, onClose, onPivot, onEntity, onOpenCase, onOpen
             </div>
           )}
 
-          {/* 受信フィールド：Taxonomy KEY完全一致分のみ。値の右の🔍でその値に絞り込む */}
+          {/* 受信フィールド：Taxonomy KEY完全一致分のみ。値の右の📋でコピー */}
           <div className="d-flex align-items-center mb-1">
             <strong className="small">受信フィールド</strong>
             <span className="text-secondary small ms-2">{d.fields.length}件</span>
@@ -178,14 +193,16 @@ export function EventDetail({ id, onClose, onPivot, onEntity, onOpenCase, onOpen
                   <div className="text-secondary small" style={{ minWidth: 170 }}>
                     {f.label ? <>{f.label}<span className="ms-1">({f.key})</span></> : f.key}
                   </div>
-                  {/* 値は選択・コピーできるようプレーンテキストにする（リンク化しない）。
-                      絞り込みは右の🔍から。Events画面以外（onPivot未指定）では出さない。 */}
+                  {/* 値は選択・コピーできるようプレーンテキストにする（リンク化しない）。右の📋で値をコピー。
+                      絞り込みはEvents一覧の各列（⌄）から行う。 */}
                   <div className="small text-start text-break flex-fill" style={{ userSelect: "text" }}>
                     {typeof f.value === "object" ? JSON.stringify(f.value) : String(f.value)}
                   </div>
-                  {onPivot && f.value !== null && f.value !== undefined && f.value !== "" && (
-                    <button className="btn btn-sm btn-ghost-secondary py-0 px-1 lh-1"
-                      title="この値でEventsを絞り込む" onClick={() => pivot(f.key, f.value)}>🔍</button>
+                  {f.value !== null && f.value !== undefined && f.value !== "" && (
+                    <button className="btn btn-sm btn-ghost-secondary py-0 px-1 lh-1" title="値をコピー"
+                      onClick={() => copy(f.key, typeof f.value === "object" ? JSON.stringify(f.value) : String(f.value))}>
+                      {copied === f.key ? "✓" : "📋"}
+                    </button>
                   )}
                 </div>
               ))}
