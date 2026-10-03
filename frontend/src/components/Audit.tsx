@@ -2,11 +2,15 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { AuditRow } from "../types";
 
-const ACTION_LABEL: Record<string, string> = {
-  login: "ログイン", logout: "ログアウト", "user.create": "ユーザー作成",
-  "user.update": "ユーザー更新", "user.delete": "ユーザー削除", "auth.toggle": "認証切替",
-  "sso.config": "SSO設定", "audit.download": "監査DL", "api.change": "変更操作",
+const ROLE_LABEL: Record<string, string> = {
+  viewer: "閲覧者", editor: "編集者", sysadmin: "システム管理者", admin: "管理者",
 };
+
+// 操作名はサーバー側(audit_log.py)で日本語化して返す（CSVと同じ表記にするため）。
+// 成否は success/failure か HTTPステータスで入っている。
+function isSuccess(s: string | null) {
+  return s === "success" || !!s?.startsWith("2");
+}
 
 export function Audit() {
   const [rows, setRows] = useState<AuditRow[]>([]);
@@ -30,8 +34,9 @@ export function Audit() {
     <div className="row row-cards">
       <div className="col-12">
         <div className="alert alert-info mb-0">
-          <strong>監査ログ</strong>：ログイン以降の<strong>変更操作・ログイン/ログアウト・ダウンロード</strong>を記録します
-          （閲覧のみのGETは記録しません）。改ざん防止のため保存され、CSVで書き出せます。
+          <strong>監査ログ</strong>：ログイン/ログアウト、設定やデータの<strong>変更操作</strong>（何をどう変えたか）、
+          エクスポート・ダウンロードを記録します。検索・画面の閲覧と、表示列などの個人の表示設定は記録しません。
+          パスワードやAPIキーは「変更した」ことだけを記録し、値そのものは残しません。
         </div>
       </div>
       <div className="col-12">
@@ -40,7 +45,7 @@ export function Audit() {
             <h3 className="card-title">監査ログ</h3>
             <span className="card-subtitle ms-2 text-secondary">{total.toLocaleString()} 件</span>
             <div className="card-actions d-flex gap-2">
-              <input className="form-control form-control-sm" placeholder="絞り込み（ユーザー/操作/IP…）"
+              <input className="form-control form-control-sm" placeholder="絞り込み（ユーザー/操作/対象/IP…）"
                 value={q} onChange={(e) => setQ(e.target.value)} style={{ minWidth: 220 }} />
               <button className="btn btn-sm btn-outline-primary"
                 onClick={() => api.downloadAuditCsv().catch((e) => setErr((e as Error).message))}>⬇ CSV</button>
@@ -51,34 +56,38 @@ export function Audit() {
           <div className="table-responsive" style={{ maxHeight: "70vh" }}>
             <table className="table table-vcenter table-sm card-table">
               <thead><tr>
-                <th>日時</th><th>ユーザー</th><th>ロール</th><th>操作</th>
-                <th>メソッド/パス</th><th>結果</th><th>対象/詳細</th><th>IP</th>
+                <th>日時</th><th>ユーザー</th><th>操作</th><th>対象</th><th>内容</th><th>結果</th><th>IP</th>
               </tr></thead>
               <tbody>
                 {filtered.map((r) => (
                   <tr key={r.id}>
                     <td className="text-nowrap">{ts(r.at)}</td>
-                    <td className="text-nowrap">{r.username ?? <span className="text-secondary">匿名</span>}</td>
-                    <td className="text-nowrap"><span className="text-secondary">{r.role ?? "-"}</span></td>
                     <td className="text-nowrap">
-                      <span className="badge bg-secondary-lt">{ACTION_LABEL[r.action] ?? r.action}</span>
+                      {r.username ?? <span className="text-secondary">匿名</span>}
+                      {r.role && <div className="small text-secondary">{ROLE_LABEL[r.role] ?? r.role}</div>}
                     </td>
-                    <td className="text-nowrap small">
-                      {r.method && <span className="text-secondary">{r.method} </span>}
-                      <code>{r.path ?? ""}</code>
+                    <td className="text-nowrap" title={r.method || r.path ? `${r.method ?? ""} ${r.path ?? ""}` : undefined}>
+                      <span className="badge bg-secondary-lt">{r.action_label ?? r.action}</span>
                     </td>
-                    <td>
+                    <td className="small" style={{ maxWidth: 260 }}>{r.target ?? <span className="text-secondary">-</span>}</td>
+                    <td className="small" style={{ minWidth: 240 }}>
+                      {/* サーバーは複数の変更点を " / " でつないで返す。1行1項目で見せる */}
+                      {r.detail
+                        ? r.detail.split(" / ").map((part, i) => <div key={i}>{part}</div>)
+                        : <span className="text-secondary">-</span>}
+                    </td>
+                    <td className="text-nowrap">
                       {r.status && (
-                        <span className={`badge ${r.status === "success" || r.status?.startsWith("2")
-                          ? "bg-green-lt" : r.status === "failure" || /^[45]/.test(r.status)
-                          ? "bg-red-lt" : "bg-secondary-lt"}`}>{r.status}</span>
+                        <span className={`badge ${isSuccess(r.status) ? "bg-green-lt" : "bg-red-lt"}`}
+                          title={r.status}>
+                          {isSuccess(r.status) ? "成功" : `失敗${/^\d+$/.test(r.status) ? ` (${r.status})` : ""}`}
+                        </span>
                       )}
                     </td>
-                    <td className="small">{[r.target, r.detail].filter(Boolean).join(" / ") || "-"}</td>
                     <td className="text-nowrap small text-secondary">{r.ip ?? "-"}</td>
                   </tr>
                 ))}
-                {filtered.length === 0 && <tr><td colSpan={8} className="text-secondary text-center py-4">記録なし</td></tr>}
+                {filtered.length === 0 && <tr><td colSpan={7} className="text-secondary text-center py-4">記録なし</td></tr>}
               </tbody>
             </table>
           </div>

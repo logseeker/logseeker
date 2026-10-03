@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import String, case, cast, func, nulls_last, or_, select, text
 from sqlalchemy.orm import Session
 
+from . import audit_log as L
 from .advice import advise_for_payload
 from .auth import get_current_user, require_editor, require_login, require_sysadmin
 from .config import settings
@@ -180,8 +181,19 @@ def _auto_incident_title(ev: Event) -> str:
     return base[:255]
 
 
+def _incident_target(inc: Incident) -> str:
+    return f"インシデント #{inc.id}「{L.fmt(inc.title, 60)}」"
+
+
+def _user_name(db: Session, user_id: int | None) -> str:
+    if not user_id:
+        return "未割り当て"
+    u = db.get(User, user_id)
+    return (u.display_name or u.username) if u else f"ユーザー #{user_id}"
+
+
 @router.post("/events/{event_id}/incident")
-def create_incident_from_event(event_id: int, db: Session = Depends(get_db), user=Depends(require_editor)):
+def create_incident_from_event(request: Request, event_id: int, db: Session = Depends(get_db), user=Depends(require_editor)):
     """対応策が提示されるイベントから直接インシデントを生成する（設計書v4 4章。ケースには依存しない）。
     1件につき最大1件（event_id にUNIQUE制約。事前チェック＋DB制約の二重防御）。
 
@@ -207,6 +219,7 @@ def create_incident_from_event(event_id: int, db: Session = Depends(get_db), use
     _incident_audit(db, incident_id=inc.id, action_type="incident.create",
                     before=None, after=f"イベント #{event_id} から生成", user=user)
     db.commit()
+    L.note(request, "incident.create", target=_incident_target(inc), detail=f"イベント #{event_id} から作成")
     return {"id": inc.id}
 
 
@@ -385,7 +398,7 @@ def list_assets(db: Session = Depends(get_db), days: int = Query(0, ge=0, le=365
 
 
 @router.put("/assets/local/{ip}")
-def set_local_asset_display_name(ip: str, body: AssetDisplayNameUpdate, db: Session = Depends(get_db),
+def set_local_asset_display_name(request: Request, ip: str, body: AssetDisplayNameUpdate, db: Session = Depends(get_db),
                                   actor=Depends(require_editor)):
     """ローカル(プライベート)IPは登録不要で自動判定される資産だが、表示名だけは
     軽量に付与できるようにする（label/descriptionを持つ「登録」とは別の軽量な経路）。"""
@@ -394,6 +407,8 @@ def set_local_asset_display_name(ip: str, body: AssetDisplayNameUpdate, db: Sess
         return Response(status_code=400, content='{"error":"ローカル(プライベート)IPのみ指定できます"}',
                         media_type="application/json")
     a = db.execute(select(Asset).where(Asset.ip == ip)).scalar_one_or_none()
+    L.note(request, "asset.local_name", target=ip,
+           detail=f"表示名: {L.fmt(a.display_name if a else None)} → {L.fmt(body.display_name)}")
     if a is None:
         a = Asset(ip=ip, ip_version=cls[0], display_name=body.display_name,
                   created_by=getattr(actor, "username", None))
@@ -405,7 +420,7 @@ def set_local_asset_display_name(ip: str, body: AssetDisplayNameUpdate, db: Sess
 
 
 @router.post("/assets")
-def create_asset(body: AssetCreate, db: Session = Depends(get_db), actor=Depends(require_editor)):
+def create_asset(request: Request, body: AssetCreate, db: Session = Depends(get_db), actor=Depends(require_editor)):
     cls = _classify_ip(body.ip)
     if not cls:
         return Response(status_code=400, content='{"error":"不正なIPアドレス"}', media_type="application/json")
@@ -420,25 +435,36 @@ def create_asset(body: AssetCreate, db: Session = Depends(get_db), actor=Depends
              display_name=body.display_name, created_by=getattr(actor, "username", None))
     db.add(a)
     db.commit()
+    L.note(request, "asset.create", target=body.ip,
+           detail=L.join([f"ラベル: {L.fmt(body.label)}", f"表示名: {L.fmt(body.display_name)}",
+                          f"説明: {L.fmt(body.description)}"]))
     return _asset_reg_dict(a)
 
 
+_ASSET_LABELS = {"label": "ラベル", "display_name": "表示名", "description": "説明"}
+
+
 @router.put("/assets/{asset_id}")
-def update_asset(asset_id: int, body: AssetUpdate, db: Session = Depends(get_db), _a=Depends(require_editor)):
+def update_asset(request: Request, asset_id: int, body: AssetUpdate, db: Session = Depends(get_db), _a=Depends(require_editor)):
     a = db.get(Asset, asset_id)
     if not a:
         return Response(status_code=404, content='{"error":"not found"}', media_type="application/json")
-    for k, v in body.model_dump(exclude_unset=True).items():
+    data = body.model_dump(exclude_unset=True)
+    L.note(request, "asset.update", target=a.ip,
+           detail=L.join(L.diff(_ASSET_LABELS, {k: getattr(a, k) for k in _ASSET_LABELS}, data)))
+    for k, v in data.items():
         setattr(a, k, v)
     db.commit()
     return _asset_reg_dict(a)
 
 
 @router.delete("/assets/{asset_id}")
-def delete_asset(asset_id: int, db: Session = Depends(get_db), _a=Depends(require_editor)):
+def delete_asset(request: Request, asset_id: int, db: Session = Depends(get_db), _a=Depends(require_editor)):
     a = db.get(Asset, asset_id)
     if not a:
         return Response(status_code=404, content='{"error":"not found"}', media_type="application/json")
+    L.note(request, "asset.delete", target=a.ip,
+           detail=L.join([f"ラベル: {L.fmt(a.label)}", f"表示名: {L.fmt(a.display_name)}"]))
     db.delete(a)
     db.commit()
     return {"ok": True}
@@ -555,11 +581,16 @@ def list_cases(db: Session = Depends(get_db)):
     return [_case_row(c, cnt or 0) for c, cnt in rows]
 
 
+def _case_target(c: Case) -> str:
+    return f"ケース #{c.id}「{L.fmt(c.title, 60)}」"
+
+
 @router.post("/cases")
-def create_case(body: CaseCreate, db: Session = Depends(get_db), _a=Depends(require_editor)):
+def create_case(request: Request, body: CaseCreate, db: Session = Depends(get_db), _a=Depends(require_editor)):
     c = Case(title=body.title)
     db.add(c)
     db.commit()
+    L.note(request, "case.create", target=_case_target(c))
     return {"id": c.id}
 
 
@@ -584,10 +615,12 @@ def case_detail(case_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/cases/{case_id}")
-def update_case_title(case_id: int, body: CaseTitleUpdate, db: Session = Depends(get_db), _a=Depends(require_login)):
+def update_case_title(request: Request, case_id: int, body: CaseTitleUpdate, db: Session = Depends(get_db), _a=Depends(require_login)):
     c = db.get(Case, case_id)
     if not c:
         return _err(404, "ケースが見つかりません")
+    L.note(request, "case.rename", target=f"ケース #{c.id}",
+           detail=f"名前: {L.fmt(c.title)} → {L.fmt(body.title)}")
     c.title = body.title
     c.updated_at = datetime.now().astimezone()
     db.commit()
@@ -595,7 +628,7 @@ def update_case_title(case_id: int, body: CaseTitleUpdate, db: Session = Depends
 
 
 @router.post("/cases/{case_id}/events")
-def add_case_event(case_id: int, body: CaseEventAdd, db: Session = Depends(get_db), _a=Depends(require_editor)):
+def add_case_event(request: Request, case_id: int, body: CaseEventAdd, db: Session = Depends(get_db), _a=Depends(require_editor)):
     """設計書v4 3章：「注目」以外のイベントも自由に追加できる（v3までの注目限定制限は撤廃）。"""
     c = db.get(Case, case_id)
     if not c:
@@ -609,28 +642,36 @@ def add_case_event(case_id: int, body: CaseEventAdd, db: Session = Depends(get_d
     db.add(CaseEvent(case_id=case_id, event_id=body.event_id, note=body.note))
     c.updated_at = datetime.now().astimezone()
     db.commit()
+    L.note(request, "case.event_add", target=_case_target(c),
+           detail=f"イベント #{body.event_id} を追加" + (f"（メモ: {L.fmt(body.note, 200)}）" if body.note else ""))
     return {"ok": True}
 
 
 @router.put("/cases/{case_id}/events/{event_id}")
-def update_case_event_note(case_id: int, event_id: int, body: CaseEventNoteUpdate,
+def update_case_event_note(request: Request, case_id: int, event_id: int, body: CaseEventNoteUpdate,
                            db: Session = Depends(get_db), _a=Depends(require_login)):
     link = db.execute(select(CaseEvent).where(
         CaseEvent.case_id == case_id, CaseEvent.event_id == event_id)).scalar_one_or_none()
     if not link:
         return _err(404, "紐付けが見つかりません")
+    c = db.get(Case, case_id)
+    L.note(request, "case.event_note", target=_case_target(c) if c else f"ケース #{case_id}",
+           detail=f"イベント #{event_id} のメモ: {L.fmt(link.note, 200)} → {L.fmt(body.note, 200)}")
     link.note = body.note
     db.commit()
     return {"ok": True}
 
 
 @router.delete("/cases/{case_id}/events/{event_id}")
-def remove_case_event(case_id: int, event_id: int, db: Session = Depends(get_db), _a=Depends(require_login)):
+def remove_case_event(request: Request, case_id: int, event_id: int, db: Session = Depends(get_db), _a=Depends(require_login)):
     """イベント自体は削除せず、ケースとの紐付け(リレーション)のみ解除する。"""
     link = db.execute(select(CaseEvent).where(
         CaseEvent.case_id == case_id, CaseEvent.event_id == event_id)).scalar_one_or_none()
     if not link:
         return _err(404, "紐付けが見つかりません")
+    c = db.get(Case, case_id)
+    L.note(request, "case.event_remove", target=_case_target(c) if c else f"ケース #{case_id}",
+           detail=f"イベント #{event_id} をケースから外した（イベント自体は削除していない）")
     db.delete(link)
     db.commit()
     return {"ok": True}
@@ -649,7 +690,7 @@ def list_case_comments(case_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/cases/{case_id}/comments")
-def add_case_comment(case_id: int, body: CaseCommentCreate, db: Session = Depends(get_db),
+def add_case_comment(request: Request, case_id: int, body: CaseCommentCreate, db: Session = Depends(get_db),
                      _a=Depends(require_login)):
     c = db.get(Case, case_id)
     if not c:
@@ -659,6 +700,7 @@ def add_case_comment(case_id: int, body: CaseCommentCreate, db: Session = Depend
     cm = CaseComment(case_id=case_id, body=body.body.strip(), created_by=_a.id if _a else None)
     db.add(cm)
     db.commit()
+    L.note(request, "case.comment", target=_case_target(c), detail=L.fmt(cm.body, 300))
     return {"id": cm.id}
 
 
@@ -714,7 +756,7 @@ def incident_detail(incident_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/incidents/{incident_id}/status")
-def update_incident_status(incident_id: int, body: IncidentStatusUpdate, db: Session = Depends(get_db),
+def update_incident_status(request: Request, incident_id: int, body: IncidentStatusUpdate, db: Session = Depends(get_db),
                            user=Depends(require_login)):
     inc = db.get(Incident, incident_id)
     if not inc:
@@ -737,11 +779,13 @@ def update_incident_status(incident_id: int, body: IncidentStatusUpdate, db: Ses
     _incident_audit(db, incident_id=incident_id, action_type="status_change",
                     before=from_status.name if from_status else None, after=to_status.name, user=user)
     db.commit()
+    L.note(request, "incident.status", target=_incident_target(inc),
+           detail=f"ステータス: {L.fmt(from_status.name if from_status else None)} → {to_status.name}")
     return {"ok": True, "status_id": inc.status_id, "assignee_user_id": inc.assignee_user_id}
 
 
 @router.put("/incidents/{incident_id}/assignee")
-def update_incident_assignee(incident_id: int, body: IncidentAssigneeUpdate, db: Session = Depends(get_db),
+def update_incident_assignee(request: Request, incident_id: int, body: IncidentAssigneeUpdate, db: Session = Depends(get_db),
                              user=Depends(require_login)):
     inc = db.get(Incident, incident_id)
     if not inc:
@@ -755,11 +799,13 @@ def update_incident_assignee(incident_id: int, body: IncidentAssigneeUpdate, db:
                     before=str(before) if before else None,
                     after=str(body.assignee_user_id) if body.assignee_user_id else None, user=user)
     db.commit()
+    L.note(request, "incident.assignee", target=_incident_target(inc),
+           detail=f"担当者: {_user_name(db, before)} → {_user_name(db, body.assignee_user_id)}")
     return {"ok": True, "assignee_user_id": inc.assignee_user_id}
 
 
 @router.put("/incidents/{incident_id}/verdict")
-def update_incident_verdict(incident_id: int, body: IncidentVerdictUpdate, db: Session = Depends(get_db),
+def update_incident_verdict(request: Request, incident_id: int, body: IncidentVerdictUpdate, db: Session = Depends(get_db),
                             user=Depends(require_login)):
     inc = db.get(Incident, incident_id)
     if not inc:
@@ -769,11 +815,14 @@ def update_incident_verdict(incident_id: int, body: IncidentVerdictUpdate, db: S
     inc.updated_at = datetime.now().astimezone()
     _incident_audit(db, incident_id=incident_id, action_type="verdict_change", before=before, after=body.verdict, user=user)
     db.commit()
+    L.note(request, "incident.verdict", target=_incident_target(inc),
+           detail=f"判定: {L.VERDICT_LABELS.get(before, L.fmt(before))} → "
+                  f"{L.VERDICT_LABELS.get(body.verdict, L.fmt(body.verdict))}")
     return {"ok": True, "verdict": inc.verdict}
 
 
 @router.post("/incidents/{incident_id}/comments")
-def add_incident_comment(incident_id: int, body: IncidentCommentCreate, db: Session = Depends(get_db),
+def add_incident_comment(request: Request, incident_id: int, body: IncidentCommentCreate, db: Session = Depends(get_db),
                          user=Depends(require_login)):
     inc = db.get(Incident, incident_id)
     if not inc:
@@ -783,11 +832,12 @@ def add_incident_comment(incident_id: int, body: IncidentCommentCreate, db: Sess
     c = IncidentComment(incident_id=incident_id, body=body.body.strip(), created_by=user.id if user else None)
     db.add(c)
     db.commit()
+    L.note(request, "incident.comment", target=_incident_target(inc), detail=L.fmt(c.body, 300))
     return {"id": c.id}
 
 
 @router.post("/incidents/{incident_id}/response-actions")
-def add_incident_response_action(incident_id: int, body: IncidentResponseActionCreate,
+def add_incident_response_action(request: Request, incident_id: int, body: IncidentResponseActionCreate,
                                  db: Session = Depends(get_db), user=Depends(require_login)):
     inc = db.get(Incident, incident_id)
     if not inc:
@@ -802,6 +852,8 @@ def add_incident_response_action(incident_id: int, body: IncidentResponseActionC
     _incident_audit(db, incident_id=incident_id, action_type="response_action.add",
                     before=None, after=at.name, user=user)
     db.commit()
+    L.note(request, "incident.response_action", target=_incident_target(inc),
+           detail=f"「{at.name}」を記録" + (f"（{L.fmt(body.detail, 300)}）" if body.detail else ""))
     return {"id": ra.id}
 
 
@@ -860,6 +912,12 @@ def list_assignable_users(db: Session = Depends(get_db), _a=Depends(require_logi
     return [{"id": i, "username": u, "display_name": d} for i, u, d in rows]
 
 
+def _visibility_text(before: bool, after: bool) -> str:
+    def v(x: bool) -> str:
+        return "表示" if x else "非表示"
+    return f"{v(before)} → {v(after)}"
+
+
 # ---- ステータスマスタ管理（sysadmin以上のみ追加・非表示化） ----
 @router.get("/incident-statuses")
 def list_incident_statuses(db: Session = Depends(get_db), show_hidden: bool = False):
@@ -870,7 +928,7 @@ def list_incident_statuses(db: Session = Depends(get_db), show_hidden: bool = Fa
 
 
 @router.post("/incident-statuses")
-def create_incident_status(body: IncidentStatusCreate, db: Session = Depends(get_db), user=Depends(require_sysadmin)):
+def create_incident_status(request: Request, body: IncidentStatusCreate, db: Session = Depends(get_db), user=Depends(require_sysadmin)):
     if not body.name.strip():
         return _err(400, "ステータス名を入力してください")
     max_sort = db.scalar(select(func.max(IncidentStatus.sort_order))) or 0
@@ -879,11 +937,12 @@ def create_incident_status(body: IncidentStatusCreate, db: Session = Depends(get
     db.flush()
     _incident_audit(db, incident_id=None, action_type="status_master.create", before=None, after=st.name, user=user)
     db.commit()
+    L.note(request, "incident_status.create", target=st.name)
     return _status_row(st)
 
 
 @router.put("/incident-statuses/{status_id}/visibility")
-def set_incident_status_visibility(status_id: int, body: IncidentStatusVisibilityUpdate,
+def set_incident_status_visibility(request: Request, status_id: int, body: IncidentStatusVisibilityUpdate,
                                    db: Session = Depends(get_db), user=Depends(require_sysadmin)):
     st = db.get(IncidentStatus, status_id)
     if not st:
@@ -893,6 +952,8 @@ def set_incident_status_visibility(status_id: int, body: IncidentStatusVisibilit
     _incident_audit(db, incident_id=None, action_type="status_master.visibility",
                     before=f"{st.name}: {before}", after=f"{st.name}: {body.is_visible}", user=user)
     db.commit()
+    L.note(request, "incident_status.visibility", target=st.name,
+           detail=_visibility_text(before, body.is_visible))
     return _status_row(st)
 
 
@@ -906,7 +967,7 @@ def list_response_action_types(db: Session = Depends(get_db), show_hidden: bool 
 
 
 @router.post("/incident-response-action-types")
-def create_response_action_type(body: IncidentResponseActionTypeCreate, db: Session = Depends(get_db),
+def create_response_action_type(request: Request, body: IncidentResponseActionTypeCreate, db: Session = Depends(get_db),
                                 user=Depends(require_sysadmin)):
     if not body.name.strip():
         return _err(400, "種別名を入力してください")
@@ -916,11 +977,12 @@ def create_response_action_type(body: IncidentResponseActionTypeCreate, db: Sess
     db.flush()
     _incident_audit(db, incident_id=None, action_type="response_action_type.create", before=None, after=t.name, user=user)
     db.commit()
+    L.note(request, "response_action_type.create", target=t.name)
     return _response_action_type_row(t)
 
 
 @router.put("/incident-response-action-types/{type_id}/visibility")
-def set_response_action_type_visibility(type_id: int, body: IncidentResponseActionTypeVisibilityUpdate,
+def set_response_action_type_visibility(request: Request, type_id: int, body: IncidentResponseActionTypeVisibilityUpdate,
                                         db: Session = Depends(get_db), user=Depends(require_sysadmin)):
     t = db.get(IncidentResponseActionType, type_id)
     if not t:
@@ -930,6 +992,8 @@ def set_response_action_type_visibility(type_id: int, body: IncidentResponseActi
     _incident_audit(db, incident_id=None, action_type="response_action_type.visibility",
                     before=f"{t.name}: {before}", after=f"{t.name}: {body.is_visible}", user=user)
     db.commit()
+    L.note(request, "response_action_type.visibility", target=t.name,
+           detail=_visibility_text(before, body.is_visible))
     return _response_action_type_row(t)
 
 
@@ -993,8 +1057,22 @@ def list_custom_rules(db: Session = Depends(get_db), _a=Depends(require_sysadmin
     }
 
 
+_RULE_LABELS = {"name": "ルール名", "enabled": "状態", "severity": "重大度", "match_field": "対象フィールド",
+                "match_op": "一致方法", "match_value": "値", "group_by": "集計軸", "min_count": "しきい値（件）",
+                "description": "説明", "recommendation": "推奨対応"}
+_RULE_FMT = {"severity": lambda v: L.SEVERITY_LABELS.get(v, L.fmt(v)),
+             "match_op": lambda v: L.MATCH_OP_LABELS.get(v, L.fmt(v))}
+
+
+def _rule_summary(r: CustomRule) -> str:
+    cond = f"{r.match_field} が「{L.fmt(r.match_value)}」に{L.MATCH_OP_LABELS.get(r.match_op, r.match_op)}"
+    count = f"{r.group_by}ごとに{r.min_count}件以上" if r.group_by else f"{r.min_count}件以上"
+    return L.join([f"条件: {cond}", f"しきい値: {count}",
+                   f"重大度: {L.SEVERITY_LABELS.get(r.severity, r.severity)}", L.fmt(r.enabled)])
+
+
 @router.post("/custom-rules")
-def create_custom_rule(body: CustomRuleCreate, db: Session = Depends(get_db),
+def create_custom_rule(request: Request, body: CustomRuleCreate, db: Session = Depends(get_db),
                        actor=Depends(require_sysadmin)):
     from .rules import FIELD_MAP, GROUPBY_FIELDS
     if body.match_field not in FIELD_MAP:
@@ -1012,11 +1090,12 @@ def create_custom_rule(body: CustomRuleCreate, db: Session = Depends(get_db),
     )
     db.add(r)
     db.commit()
+    L.note(request, "custom_rule.create", target=r.name, detail=_rule_summary(r))
     return _custom_rule_dict(r)
 
 
 @router.put("/custom-rules/{rule_id}")
-def update_custom_rule(rule_id: int, body: CustomRuleUpdate, db: Session = Depends(get_db),
+def update_custom_rule(request: Request, rule_id: int, body: CustomRuleUpdate, db: Session = Depends(get_db),
                        _a=Depends(require_sysadmin)):
     from .rules import FIELD_MAP, GROUPBY_FIELDS
     r = db.get(CustomRule, rule_id)
@@ -1027,6 +1106,8 @@ def update_custom_rule(rule_id: int, body: CustomRuleUpdate, db: Session = Depen
         return Response(status_code=400, content='{"error":"不正な対象フィールド"}', media_type="application/json")
     if data.get("group_by") and data["group_by"] not in GROUPBY_FIELDS:
         return Response(status_code=400, content='{"error":"不正な集計軸"}', media_type="application/json")
+    L.note(request, "custom_rule.update", target=r.name,
+           detail=L.join(L.diff(_RULE_LABELS, {k: getattr(r, k) for k in _RULE_LABELS}, data, _RULE_FMT)))
     for k, v in data.items():
         setattr(r, k, v)
     db.commit()
@@ -1034,10 +1115,11 @@ def update_custom_rule(rule_id: int, body: CustomRuleUpdate, db: Session = Depen
 
 
 @router.delete("/custom-rules/{rule_id}")
-def delete_custom_rule(rule_id: int, db: Session = Depends(get_db), _a=Depends(require_sysadmin)):
+def delete_custom_rule(request: Request, rule_id: int, db: Session = Depends(get_db), _a=Depends(require_sysadmin)):
     r = db.get(CustomRule, rule_id)
     if not r:
         return Response(status_code=404, content='{"error":"not found"}', media_type="application/json")
+    L.note(request, "custom_rule.delete", target=r.name, detail=_rule_summary(r))
     db.delete(r)
     db.commit()
     return {"ok": True}
@@ -1051,9 +1133,11 @@ def get_silence_settings(db: Session = Depends(get_db), _a=Depends(require_sysad
 
 
 @router.post("/monitor/silence")
-def save_silence_settings(body: SilenceSettings, db: Session = Depends(get_db), _a=Depends(require_sysadmin)):
-    from .rules import set_silence_hours
+def save_silence_settings(request: Request, body: SilenceSettings, db: Session = Depends(get_db), _a=Depends(require_sysadmin)):
+    from .rules import get_silence_hours, set_silence_hours
+    before = get_silence_hours(db)
     set_silence_hours(db, max(1, body.hours))
+    L.note(request, "silence.update", detail=f"しきい値: {before}時間 → {max(1, body.hours)}時間")
     return {"ok": True}
 
 
@@ -1079,12 +1163,14 @@ def get_license(db: Session = Depends(get_db)):
 
 
 @router.post("/license")
-def apply_license(body: LicenseApply, db: Session = Depends(get_db),
+def apply_license(request: Request, body: LicenseApply, db: Session = Depends(get_db),
                   _a=Depends(require_sysadmin)):
     from .license import apply_license_key
     data = apply_license_key(db, body.key)  # DBへ保存（真実源はDB）
     if not data:
+        L.note(request, "license.apply", detail="無効なライセンスキー（署名不一致または期限切れ）", status="failure")
         return {"error": "無効なライセンスキー（署名不一致または期限切れ）"}
+    L.note(request, "license.apply", target=data.get("name"), detail=f"ライセンシー: {L.fmt(data.get('name'))}")
     return {"ok": True, "licensee": data.get("name"), "tier": data.get("tier"), "api": data.get("api")}
 
 
@@ -1107,8 +1193,14 @@ def ioc_feeds(db: Session = Depends(get_db)):
 
 
 @router.post("/ioc/feeds")
-def update_feed(body: FeedUpdate, db: Session = Depends(get_db), _a=Depends(require_sysadmin)):
+def update_feed(request: Request, body: FeedUpdate, db: Session = Depends(get_db), _a=Depends(require_sysadmin)):
     feed = db.execute(select(IocFeed).where(IocFeed.name == body.name)).scalar_one_or_none()
+    changes = []
+    if not feed or bool(feed.enabled) != body.enabled:
+        changes.append("フィードを有効化" if body.enabled else "フィードを無効化")
+    if body.api_key:
+        changes.append("APIキーを変更")
+    L.note(request, "ioc.feed", target=body.name, detail=L.join(changes))
     if not feed:
         feed = IocFeed(name=body.name)
         db.add(feed)
@@ -1120,8 +1212,10 @@ def update_feed(body: FeedUpdate, db: Session = Depends(get_db), _a=Depends(requ
 
 
 @router.post("/ioc/settings")
-def ioc_settings(body: SyncSettings, db: Session = Depends(get_db), _a=Depends(require_sysadmin)):
+def ioc_settings(request: Request, body: SyncSettings, db: Session = Depends(get_db), _a=Depends(require_sysadmin)):
     row = db.get(Setting, "ioc_sync_hours")
+    L.note(request, "ioc.settings",
+           detail=f"同期間隔: {(row.value + '時間') if row and row.value else '（既定）'} → {body.sync_hours}時間")
     if not row:
         row = Setting(key="ioc_sync_hours")
         db.add(row)
@@ -1131,9 +1225,12 @@ def ioc_settings(body: SyncSettings, db: Session = Depends(get_db), _a=Depends(r
 
 
 @router.post("/ioc/sync")
-def ioc_sync_now(db: Session = Depends(get_db), _a=Depends(require_sysadmin)):
+def ioc_sync_now(request: Request, db: Session = Depends(get_db), _a=Depends(require_sysadmin)):
     from .ioc_sync import sync_all
-    return {"results": sync_all(db)}
+    results = sync_all(db)
+    L.note(request, "ioc.sync",
+           detail=L.join([f"{r['name']}: {r['status']}（{r['count']}件）" for r in results], "対象フィードなし"))
+    return {"results": results}
 
 
 @router.get("/notifications")
@@ -1143,38 +1240,54 @@ def get_notifications(db: Session = Depends(get_db)):
 
 
 @router.put("/notifications")
-def save_notifications(body: NotificationConfig, db: Session = Depends(get_db), _a=Depends(require_sysadmin)):
-    from .notify import save_config
-    save_config(db, body.model_dump())
+def save_notifications(request: Request, body: NotificationConfig, db: Session = Depends(get_db), _a=Depends(require_sysadmin)):
+    from .notify import get_config, save_config
+    before = get_config(db)
+    after = body.model_dump()
+    changes = L.diff({"email_enabled": "メール通知", "email_host": "SMTPホスト", "email_port": "SMTPポート",
+                      "email_user": "SMTPユーザー", "email_from": "送信元", "email_to": "送信先",
+                      "slack_enabled": "Slack通知", "min_severity": "通知する重大度"},
+                     before, after, {"min_severity": lambda v: L.SEVERITY_LABELS.get(v, L.fmt(v)) + "以上"})
+    if after.get("email_pass") and after["email_pass"] != "***":
+        changes.append("SMTPパスワードを変更")
+    if (after.get("slack_webhook") or "") != (before.get("slack_webhook") or ""):
+        changes.append("SlackのWebhook URLを変更")
+    save_config(db, after)
+    L.note(request, "notify.config", detail=L.join(changes))
     return {"ok": True}
 
 
 @router.post("/notifications/test/email")
-def test_email(db: Session = Depends(get_db), _a=Depends(require_sysadmin)):
+def test_email(request: Request, db: Session = Depends(get_db), _a=Depends(require_sysadmin)):
     from .notify import _get, K_EMAIL_TO, send_email
     to_raw = _get(db, K_EMAIL_TO)
     to_list = [a.strip() for a in to_raw.split(",") if a.strip()]
     if not to_list:
         return {"ok": False, "error": "送信先メールアドレスが未設定です"}
     err = send_email(to_list, "[LogSeeker] テスト通知", "LogSeekerのメール通知設定が正常に動作しています。", db)
+    L.note(request, "notify.test_email", target=", ".join(to_list),
+           detail="送信成功" if err is None else f"送信失敗: {err}", status="success" if err is None else "failure")
     return {"ok": err is None, "error": err}
 
 
 @router.post("/notifications/test/slack")
-def test_slack(db: Session = Depends(get_db), _a=Depends(require_sysadmin)):
+def test_slack(request: Request, db: Session = Depends(get_db), _a=Depends(require_sysadmin)):
     from .notify import _get, K_SLACK_WEBHOOK, send_slack
     webhook = _get(db, K_SLACK_WEBHOOK)
     err = send_slack("✅ [LogSeeker] Slack通知テスト：設定が正常に動作しています。", webhook)
+    L.note(request, "notify.test_slack",
+           detail="送信成功" if err is None else f"送信失敗: {err}", status="success" if err is None else "failure")
     return {"ok": err is None, "error": err}
 
 
 @router.post("/notifications/send-now")
-def notify_now(db: Session = Depends(get_db), _a=Depends(require_sysadmin)):
+def notify_now(request: Request, db: Session = Depends(get_db), _a=Depends(require_sysadmin)):
     """現在の全ルールヒットを即時通知（手動トリガー）。"""
     from .notify import notify_hits
     from .rules import evaluate
     hits = evaluate(db)
     result = notify_hits(db, hits)
+    L.note(request, "notify.send_now", detail=f"検知ルールのヒット{len(hits)}件を通知")
     return {"hits": len(hits), "result": result}
 
 

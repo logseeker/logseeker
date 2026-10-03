@@ -23,7 +23,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import String, and_, cast, func, or_, select, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
@@ -588,7 +588,7 @@ def detail(event_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/events/export")
-def export_events(qy: EventQuery = Depends(event_query), db: Session = Depends(get_db),
+def export_events(request: Request, qy: EventQuery = Depends(event_query), db: Session = Depends(get_db),
                   columns: str = Query(""), format: str = Query("csv", pattern="^(csv|json)$"),
                   actor=Depends(require_login)):
     """現在の絞り込み・表示列でCSV/JSON出力（画面のExport Table相当）。"""
@@ -597,8 +597,10 @@ def export_events(qy: EventQuery = Depends(event_query), db: Session = Depends(g
     stmt = qy.apply(select(ev).select_from(ev), ev).order_by(ev.c.received_at.desc(), ev.c.id.desc()).limit(EXPORT_MAX_ROWS)
     rows = [_row(r, cols) for r in db.execute(stmt).all()]
 
-    from .auth import audit
-    audit(db, action="events.export", user=actor, detail=f"format={format}, rows={len(rows)}")
+    from .audit_log import note
+    note(request, "events.export",
+         detail=f"{format.upper()}形式・{len(rows):,}件（Class: {qy.class_value or 'すべて'}"
+                + (f"・検索: {qy.q}" if getattr(qy, "q", None) else "") + "）")
 
     if format == "json":
         return Response(content=json.dumps(rows, ensure_ascii=False, indent=2, default=str),

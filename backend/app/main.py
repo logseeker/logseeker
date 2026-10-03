@@ -132,29 +132,15 @@ def health():
     return {"status": "ok"}
 
 
-# 監査: 変更系(POST/PUT/PATCH/DELETE)のAPI操作を記録する。
-# ログイン後にユーザーが行った操作を残す目的。/ingest（機器→大量）と /auth/login（個別記録済）は除外。
-_AUDIT_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
-_AUDIT_SKIP_PATHS = ("/api/auth/login", "/api/auth/logout")
-
-
+# 監査: 変更系(POST/PUT/PATCH/DELETE)のAPI操作と、エクスポート等の記録対象の閲覧を1リクエスト1行で残す。
+# 「何をしたか」は各エンドポイントが audit_log.note() で置いた内容を使う（詳細は audit_log.py）。
+# /ingest（機器→大量）はパスが /api 外なので対象外。
 @app.middleware("http")
 async def audit_mutations(request: Request, call_next):
     response = await call_next(request)
     try:
-        path = request.url.path
-        if (request.method in _AUDIT_METHODS and path.startswith("/api")
-                and path not in _AUDIT_SKIP_PATHS):
-            from .auth import audit, client_ip, get_current_user
-            from .db import SessionLocal
-            db = SessionLocal()
-            try:
-                user = get_current_user(request.headers.get("authorization"), db)
-                audit(db, action="api.change", user=user, method=request.method, path=path,
-                      status=str(response.status_code),
-                      ip=client_ip(request))
-            finally:
-                db.close()
+        from .audit_log import record_request
+        record_request(request, response.status_code)
     except Exception:  # noqa  監査失敗で本処理を壊さない
         pass
     return response

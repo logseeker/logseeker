@@ -271,6 +271,7 @@ export interface AuditRow {
   id: number; at: string | null; username: string | null; role: string | null;
   action: string; method: string | null; path: string | null; status: string | null;
   target: string | null; detail: string | null; ip: string | null;
+  action_label?: string;
 }
 export interface AuditResponse { total: number; items: AuditRow[]; }
 

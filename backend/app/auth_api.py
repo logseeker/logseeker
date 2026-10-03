@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from . import auth as A
+from . import audit_log as L
 from .db import get_db
 from .models import AuditLog, User
 from .schema import AuthToggle, IpRestrictSave, LoginRequest, SSOConfig, UserCreate, UserUpdate
@@ -185,8 +186,10 @@ def create_user(body: UserCreate, request: Request,
              password_hash=A.hash_password(password), enabled=True)
     db.add(u)
     db.commit()
-    A.audit(db, action="user.create", user=actor, target=body.username,
-            detail=f"role={body.role}", ip=A.client_ip(request))
+    L.note(request, "user.create", target=body.username,
+           detail=L.join([f"表示名: {L.fmt(body.display_name)}",
+                          f"ロール: {A.ROLE_LABELS.get(body.role, body.role)}",
+                          "初期パスワード: " + (f"本人のメール（{body.email}）へ送付" if email_sent else "管理者が設定")]))
 
     result = _user_dict(u)
     result["email_sent"] = email_sent
@@ -210,9 +213,11 @@ def update_user(user_id: int, body: UserUpdate, request: Request,
         if not _can_manage_target_role(actor, body.role, db):
             return Response(status_code=403, content='{"error":"そのロールへ変更する権限がありません"}',
                             media_type="application/json")
-        changes.append(f"role:{u.role}->{body.role}")
+        changes.append(f"ロール: {A.ROLE_LABELS.get(u.role, u.role)} → {A.ROLE_LABELS.get(body.role, body.role)}")
         u.role = body.role
     if body.display_name is not None:
+        if (body.display_name or None) != (u.display_name or None):
+            changes.append(f"表示名: {L.fmt(u.display_name)} → {L.fmt(body.display_name)}")
         u.display_name = body.display_name
     if body.enabled is not None:
         # 自分自身は無効化させない（ロックアウト防止）
@@ -220,15 +225,16 @@ def update_user(user_id: int, body: UserUpdate, request: Request,
             return Response(status_code=400, content='{"error":"自分自身は無効化できません"}',
                             media_type="application/json")
         if u.enabled != body.enabled:
-            changes.append(f"enabled:{u.enabled}->{body.enabled}")
+            changes.append("アカウントを有効化" if body.enabled else "アカウントを無効化")
         u.enabled = body.enabled
     if body.password:
         u.password_hash = A.hash_password(body.password)
-        changes.append("password reset")
+        changes.append("パスワードを変更（本人が変更）" if actor and actor.id == u.id
+                       else "パスワードを変更（再設定）")
     db.commit()
-    A.audit(db, action="user.update", user=actor, target=u.username,
-            detail=", ".join(changes) or "no change",
-            ip=A.client_ip(request))
+    only_pw = len(changes) == 1 and bool(body.password)
+    L.note(request, "user.password" if only_pw else "user.update", target=u.username,
+           detail=L.join(changes))
     return _user_dict(u)
 
 
@@ -249,11 +255,10 @@ def delete_user(user_id: int, request: Request,
         if len([a for a in admins if a.id != u.id]) == 0:
             return Response(status_code=400, content='{"error":"最後の管理者(root)は削除できません"}',
                             media_type="application/json")
-    uname = u.username
+    L.note(request, "user.delete", target=u.username,
+           detail=f"表示名: {L.fmt(u.display_name)} / ロール: {A.ROLE_LABELS.get(u.role, u.role)}")
     db.delete(u)
     db.commit()
-    A.audit(db, action="user.delete", user=actor, target=uname,
-            ip=A.client_ip(request))
     return {"ok": True}
 
 
@@ -268,9 +273,11 @@ def toggle_auth(body: AuthToggle, request: Request,
             return Response(status_code=400,
                             content='{"error":"管理者(root)が存在しないため有効化できません"}',
                             media_type="application/json")
+    before = A.is_auth_required(db)
     A.set_auth_required(db, body.enabled)
-    A.audit(db, action="auth.toggle", user=actor, detail=f"auth_required={body.enabled}",
-            ip=A.client_ip(request))
+    L.note(request, "auth.toggle",
+           detail=("ログイン認証を有効化" if body.enabled else "ログイン認証を無効化")
+           + ("（変更なし）" if before == body.enabled else ""))
     return {"ok": True, "auth_required": body.enabled}
 
 
@@ -284,10 +291,17 @@ def get_sso(_: User | None = Depends(A.require_admin), db: Session = Depends(get
 @router.put("/sso")
 def save_sso(body: SSOConfig, request: Request,
              actor: User | None = Depends(A.require_admin), db: Session = Depends(get_db)):
-    from .sso import save_sso_config
+    from .sso import save_sso_config, sso_status
+    before = sso_status(db)
     save_sso_config(db, body.model_dump())
-    A.audit(db, action="sso.config", user=actor, detail=f"enabled={body.enabled}, issuer={body.issuer}",
-            ip=A.client_ip(request))
+    changes = L.diff({"enabled": "SSO", "issuer": "Issuer", "client_id": "クライアントID",
+                      "redirect_uri": "リダイレクトURI", "allowed_domains": "許可ドメイン",
+                      "auto_provision_role": "自動作成時のロール"},
+                     before, body.model_dump(),
+                     {"auto_provision_role": lambda r: A.ROLE_LABELS.get(r, L.fmt(r))})
+    if body.client_secret:
+        changes.append("クライアントシークレットを変更")
+    L.note(request, "sso.config", detail=L.join(changes))
     return {"ok": True, "note": "設定を保存しました（実接続は現バージョン未実装。設計・保管のみ）"}
 
 
@@ -305,13 +319,24 @@ def save_ip_restrict(body: IpRestrictSave, request: Request,
                      actor: User | None = Depends(A.require_admin), db: Session = Depends(get_db)):
     from . import ip_restrict as R
     requester_ip = A.access_control_ip(request)
+    before = R.status(db)
     try:
         R.save(db, body.enabled, [e.model_dump() for e in body.allowlist], requester_ip)
     except R.IpRestrictSaveError as e:
         return Response(status_code=400, content=json.dumps({"error": e.message}), media_type="application/json")
-    A.audit(db, action="ip_restrict.config", user=actor,
-            detail=f"enabled={body.enabled}, allowlist={len(body.allowlist)}件", ip=requester_ip)
     result = R.status(db)
+    changes = []
+    if before["enabled"] != result["enabled"]:
+        changes.append("IP制限を有効化" if result["enabled"] else "IP制限を無効化")
+    b = {e["cidr"]: e.get("label") or "" for e in before["allowlist"]}
+    a = {e["cidr"]: e.get("label") or "" for e in result["allowlist"]}
+
+    def _entry(cidr: str, labels: dict) -> str:
+        return cidr + (f"（{labels[cidr]}）" if labels[cidr] else "")
+    changes += [f"許可に追加: {_entry(c, a)}" for c in a if c not in b]
+    changes += [f"許可から削除: {_entry(c, b)}" for c in b if c not in a]
+    changes += [f"名前を変更: {c}（{b[c] or 'なし'} → {a[c] or 'なし'}）" for c in a if c in b and a[c] != b[c]]
+    L.note(request, "ip_restrict.config", detail=f"{L.join(changes)}（許可リスト計{len(a)}件）")
     result["your_ip"] = requester_ip
     return result
 
@@ -323,6 +348,7 @@ def _audit_dict(a: AuditLog) -> dict:
         "username": a.username, "role": a.role, "action": a.action,
         "method": a.method, "path": a.path, "status": a.status,
         "target": a.target, "detail": a.detail, "ip": a.ip,
+        "action_label": L.label_of(a.action, a.method, a.path),
     }
 
 
@@ -341,12 +367,12 @@ def audit_csv(request: Request, actor: User | None = Depends(A.require_sysadmin)
     rows = db.execute(select(AuditLog).order_by(AuditLog.at.desc())).scalars().all()
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["日時", "ユーザー", "ロール", "操作", "メソッド", "パス", "結果", "対象", "詳細", "IP"])
+    w.writerow(["日時", "ユーザー", "ロール", "操作", "対象", "内容", "結果", "IP", "操作ID", "メソッド", "パス"])
     for a in rows:
-        w.writerow([a.at.isoformat() if a.at else "", a.username or "", a.role or "", a.action,
-                    a.method or "", a.path or "", a.status or "", a.target or "", a.detail or "", a.ip or ""])
-    A.audit(db, action="audit.download", user=actor, detail="format=csv",
-            ip=A.client_ip(request))
+        w.writerow([a.at.isoformat() if a.at else "", a.username or "", A.ROLE_LABELS.get(a.role, a.role or ""),
+                    L.label_of(a.action, a.method, a.path), a.target or "", a.detail or "", a.status or "",
+                    a.ip or "", a.action, a.method or "", a.path or ""])
+    L.note(request, "audit.download", detail=f"CSV形式・{len(rows):,}件")
     data = "﻿" + buf.getvalue()
     return Response(content=data, media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": "attachment; filename=logseeker_audit.csv"})
@@ -355,8 +381,7 @@ def audit_csv(request: Request, actor: User | None = Depends(A.require_sysadmin)
 @router.get("/audit.json")
 def audit_json(request: Request, actor: User | None = Depends(A.require_sysadmin), db: Session = Depends(get_db)):
     rows = db.execute(select(AuditLog).order_by(AuditLog.at.desc())).scalars().all()
-    A.audit(db, action="audit.download", user=actor, detail="format=json",
-            ip=A.client_ip(request))
+    L.note(request, "audit.download", detail=f"JSON形式・{len(rows):,}件")
     data = json.dumps([_audit_dict(a) for a in rows], ensure_ascii=False, indent=2)
     return Response(content=data, media_type="application/json; charset=utf-8",
                     headers={"Content-Disposition": "attachment; filename=logseeker_audit.json"})
