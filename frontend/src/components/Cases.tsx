@@ -88,7 +88,7 @@ export function Cases({ auth, initial, onOpenIncident }: {
       </div>
 
       {openEventId != null && (
-        <EventDetail id={openEventId} onClose={() => setOpenEventId(null)} onPivot={() => {}}
+        <EventDetail id={openEventId} onClose={() => setOpenEventId(null)}
           onOpenCase={(caseId) => setSel(caseId)} onOpenIncident={onOpenIncident} />
       )}
     </div>

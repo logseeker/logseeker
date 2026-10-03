@@ -125,7 +125,7 @@ export function IncidentPanel({ incidentId, effRole }: {
       </div>
     </div>
     {openEventId != null && (
-      <EventDetail id={openEventId} onClose={() => setOpenEventId(null)} onPivot={() => {}} />
+      <EventDetail id={openEventId} onClose={() => setOpenEventId(null)} />
     )}
     </>
   );

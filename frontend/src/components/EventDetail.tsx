@@ -7,7 +7,7 @@ import type { EventDetailData, EventRow } from "../types";
 type Props = {
   id: number;
   onClose: () => void;
-  onPivot: (key: string, value: string) => void;      // この値でEventsを絞り込む
+  onPivot?: (key: string, value: string) => void;     // この値でEventsを絞り込む（未指定なら🔍を出さない）
   onEntity?: (entityType: string, value: string) => void;
   onOpenCase?: (caseId: number) => void;
   onOpenIncident?: (incidentId: number) => void;
@@ -45,7 +45,7 @@ export function EventDetail({ id, onClose, onPivot, onEntity, onOpenCase, onOpen
 
   const pivot = (key: string, value: unknown) => {
     if (value === null || value === undefined || value === "") return;
-    onPivot(key, String(value));
+    onPivot?.(key, String(value));
     if (variant === "modal") onClose();
   };
 
@@ -162,7 +162,7 @@ export function EventDetail({ id, onClose, onPivot, onEntity, onOpenCase, onOpen
             </div>
           )}
 
-          {/* 受信フィールド：Taxonomy KEY完全一致分のみ。値クリックでその値に絞り込む */}
+          {/* 受信フィールド：Taxonomy KEY完全一致分のみ。値の右の🔍でその値に絞り込む */}
           <div className="d-flex align-items-center mb-1">
             <strong className="small">受信フィールド</strong>
             <span className="text-secondary small ms-2">{d.fields.length}件</span>
@@ -178,10 +178,15 @@ export function EventDetail({ id, onClose, onPivot, onEntity, onOpenCase, onOpen
                   <div className="text-secondary small" style={{ minWidth: 170 }}>
                     {f.label ? <>{f.label}<span className="ms-1">({f.key})</span></> : f.key}
                   </div>
-                  <button className="btn btn-sm btn-link p-0 text-start text-wrap flex-fill"
-                    title="この値でEventsを絞り込む" onClick={() => pivot(f.key, f.value)}>
+                  {/* 値は選択・コピーできるようプレーンテキストにする（リンク化しない）。
+                      絞り込みは右の🔍から。Events画面以外（onPivot未指定）では出さない。 */}
+                  <div className="small text-start text-break flex-fill" style={{ userSelect: "text" }}>
                     {typeof f.value === "object" ? JSON.stringify(f.value) : String(f.value)}
-                  </button>
+                  </div>
+                  {onPivot && f.value !== null && f.value !== undefined && f.value !== "" && (
+                    <button className="btn btn-sm btn-ghost-secondary py-0 px-1 lh-1"
+                      title="この値でEventsを絞り込む" onClick={() => pivot(f.key, f.value)}>🔍</button>
+                  )}
                 </div>
               ))}
             </div>
