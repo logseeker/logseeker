@@ -231,7 +231,7 @@ rules:
   # GitLab（Omnibus）のJSONログを NXLog から source=gitlab, class=gitlab で送る前提。
   # GitLabのイベントは source_type が付かない（判定ルールが無い）ため scope は source で絞る。
   # class で絞ると payload を全行展開することになり、受信量の多いGitLabでは重すぎる。
-  # 接続元IP（remote_ip）は Taxonomy外KEYのため、現時点ではIP単位の集約はできない。
+  # 下の3ルールは taxonomy.md v1.13 までのKEYだけで書いたもの（送信元IP単位の集約はしない）。
 
   - id: gitlab_failed_login
     name: "[GitLab] ログイン失敗の多発"
@@ -288,3 +288,115 @@ rules:
     evidence:
       - {label: メッセージ, key: [message, msg], limit: 5, truncate: 120}
       - {label: 種類, key: [message, msg], show: count}
+
+  # ---- 以下は taxonomy.md v1.14（GitLabのKEY追加）で使えるようになったKEYを使う。
+  # remote_ip / ip_address / meta.remote_ip は正規化で source_ip に入るため、送信元IP単位で集約できる。
+  # 対象ログ（audit_json / auth_json / production_json / api_json / Sidekiq）は NXLog で送る設定が必要。
+
+  - id: gitlab_failed_login_ip
+    name: "[GitLab] 同一IPからのログイン失敗の連続"
+    title: GitLabへのログイン失敗の連続
+    severity: high
+    category: security
+    description: >-
+      同じ送信元IPからGitLabへのログイン失敗（audit_json.log の failed_login）が10件以上。パスワードの総当たりの可能性が高い。audit_json.log を送信していないと発火しない。
+    recommendation: >-
+      送信元IPを遮断し、狙われたアカウントのパスワード変更と2要素認証の有効化を確認する。GitLabの「サインイン失敗時のロック」とRack Attack（管理エリア > 設定 > ネットワーク > ユーザーとIPのレート制限）が有効か確認する。
+    scope: {source: gitlab}
+    match: {key: failed_login, exists: true}
+    group_by: [source_ip]
+    threshold: {count: 10}
+    evidence:
+      - {label: 対象アカウント, key: [author_name, target_details], limit: 5}
+      - {label: 認証方式, key: failed_login}
+
+  - id: gitlab_password_spray
+    name: "[GitLab] パスワードスプレーの疑い"
+    title: GitLabへのパスワードスプレーの疑い
+    severity: high
+    category: security
+    description: >-
+      同じ送信元IPから、5個以上の異なるアカウントへのログイン失敗（audit_json.log の failed_login）。よくあるパスワードを多数のアカウントに試す攻撃の可能性がある。
+    recommendation: >-
+      送信元IPを遮断し、対象アカウントに弱いパスワードが無いか確認する。全ユーザーへの2要素認証の必須化を検討する。
+    scope: {source: gitlab}
+    match: {key: failed_login, exists: true}
+    group_by: [source_ip]
+    threshold: {distinct: {key: [author_name, target_details]}, min_distinct: 5}
+    evidence:
+      - {label: 対象アカウント, key: [author_name, target_details], limit: 5}
+      - {label: アカウント数, key: [author_name, target_details], show: count}
+
+  - id: gitlab_rack_attack
+    name: "[GitLab] レート制限・遮断の発動"
+    title: GitLabのレート制限・遮断の発動
+    severity: warning
+    category: security
+    description: >-
+      GitLabのRack Attack（auth_json.log）が、同じ送信元IPに対してレート制限（throttle）または遮断（blocklist）を10回以上発動した。総当たり・スクレイピング・過剰なAPI呼び出しの可能性がある。CI等の正規の大量アクセスでも出ることがある。
+    recommendation: >-
+      送信元IPと一致した制限名（matched）を確認する。社内のCIや連携ツールなら制限値の調整を、心当たりが無ければ送信元IPの遮断を検討する。
+    scope: {source: gitlab}
+    match: {key: env, in: [throttle, blocklist]}
+    group_by: [source_ip]
+    threshold: {count: 10}
+    evidence:
+      - {label: 一致した制限, key: matched}
+      - {label: パス, key: path, limit: 5, truncate: 120}
+
+  - id: gitlab_api_auth_failure
+    name: "[GitLab] APIの認証失敗の多発"
+    title: GitLab APIの認証失敗の多発
+    severity: warning
+    category: security
+    description: >-
+      同じ送信元IPから、GitLab API（/api/）への 401（未認証）/ 403（権限なし）が20件以上。アクセストークンの総当たりや、失効したトークンを使い続けている連携ツールの可能性がある。
+    recommendation: >-
+      送信元IPとUser-Agentから送信元を特定する。社内のツールならトークンを更新し、心当たりが無ければ送信元IPを遮断する。
+    scope: {source: gitlab}
+    match:
+      all:
+        - {key: path, startswith: /api/}
+        - {key: status, in: ["401", "403"]}
+    group_by: [source_ip]
+    threshold: {count: 20}
+    evidence:
+      - {label: ステータス, key: status}
+      - {label: パス, key: [route, path], limit: 5, truncate: 120}
+      - {label: User-Agent, key: [ua, user_agent], limit: 3, truncate: 120}
+
+  - id: gitlab_admin_external
+    name: "[GitLab] 外部IPからの管理エリアへのアクセス"
+    title: 外部IPからのGitLab管理エリアへのアクセス
+    severity: warning
+    category: security
+    description: >-
+      グローバルIPから GitLab の管理エリア（/admin）へのアクセスがあった。管理者アカウントが乗っ取られている場合や、管理画面が外部に公開されている場合に出る。管理者が社外から正規に操作した場合も出る。
+    recommendation: >-
+      アクセスしたユーザーと送信元IPが想定どおりか確認する。管理エリアは社内ネットワークやVPN経由に限定することを検討する。
+    scope: {source: gitlab}
+    match:
+      all:
+        - {key: path, startswith: /admin}
+        - {col: source_ip, ip_global: true}
+    group_by: [source_ip]
+    evidence:
+      - {label: ユーザー, key: [username, meta.user], limit: 3}
+      - {label: パス, key: path, limit: 5, truncate: 120}
+      - {label: ステータス, key: status}
+
+  - id: gitlab_job_failed
+    name: "[GitLab] バックグラウンドジョブの失敗の多発"
+    title: GitLabのバックグラウンドジョブ(Sidekiq)の失敗の多発
+    severity: warning
+    category: operations
+    description: GitLabのバックグラウンドジョブ（Sidekiq）の失敗（job_status=fail）が10件以上。メール送信・CI・ミラー・ハウスキーピング等が止まっている可能性がある。
+    recommendation: >-
+      証跡の例外クラスから原因を確認する。管理エリア > モニタリング > バックグラウンドジョブ で失敗・再試行待ちのジョブを確認し、Redis・DB・ディスクの状態も確認する。
+    scope: {source: gitlab}
+    match: {key: job_status, eq: fail}
+    group_by: [source]
+    threshold: {count: 10}
+    evidence:
+      - {label: 例外, key: exception.class, limit: 5}
+      - {label: メッセージ, key: [message, exception.message], limit: 3, truncate: 120}

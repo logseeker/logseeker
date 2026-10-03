@@ -18,11 +18,14 @@ from .taxonomy_master import canonical_key
 
 # --- 意味ごとのTaxonomy KEY（優先順）------------------------------------------
 # 送信元IPを表し得るKEY
-SRC_IP_KEYS = ["srcipv4", "srcipv6", "client", "sourceipaddress", "srchost", "xfwdforip"]
+# remote_ip / ip_address / meta.remote_ip は GitLab（taxonomy.md v1.14）。既存候補の後ろに置き、他Classの結果は変えない
+SRC_IP_KEYS = ["srcipv4", "srcipv6", "client", "sourceipaddress", "srchost", "xfwdforip",
+               "remote_ip", "ip_address", "meta.remote_ip"]
 # 結果を表し得るKEY（audit_res は auditd の success/failed）
 RESULT_KEYS = ["result", "audit_res", "eventtype", "action"]
 # ユーザーを表し得るKEY
-USER_KEYS = ["username", "accountname", "audit_acct", "targetusername"]
+# meta.user / author_name は GitLab（taxonomy.md v1.14）
+USER_KEYS = ["username", "accountname", "audit_acct", "targetusername", "meta.user", "author_name"]
 # HTTPステータス
 STATUS_KEYS = ["statuscode", "status"]
 # URI（request は "POST /path HTTP/1.1" 形式のリクエスト行なので、切り出しは呼び出し側で行う）
