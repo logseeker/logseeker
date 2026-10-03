@@ -6,7 +6,7 @@
 # - 正規表現は PostgreSQL の ~*（大文字小文字を区別しない）で評価する。\b は使えない。
 format: 1
 pack: builtin
-version: "2026.10.02-1"
+version: "2026.10.03-1"
 
 rules:
   # ================================================================ Windows（windows_event）
@@ -226,3 +226,65 @@ rules:
     group_by: [host_name]
     evidence:
       - {label: 操作者, key: subjectusername}
+
+  # ================================================================ GitLab（source=gitlab）
+  # GitLab（Omnibus）のJSONログを NXLog から source=gitlab, class=gitlab で送る前提。
+  # GitLabのイベントは source_type が付かない（判定ルールが無い）ため scope は source で絞る。
+  # class で絞ると payload を全行展開することになり、受信量の多いGitLabでは重すぎる。
+  # 接続元IP（remote_ip）は Taxonomy外KEYのため、現時点ではIP単位の集約はできない。
+
+  - id: gitlab_failed_login
+    name: "[GitLab] ログイン失敗の多発"
+    title: GitLabのログイン失敗の多発
+    severity: warning
+    category: security
+    description: >-
+      GitLabへのログイン失敗（application_json.log の「Failed Login: username=… ip=…」）が多発している。パスワードの総当たりやパスワードスプレーの可能性がある。
+    recommendation: >-
+      証跡のユーザー名・IPを確認し、心当たりの無いIPからであれば遮断する。狙われているアカウントには2要素認証を必須にし、GitLabの「サインイン失敗時のロック」とRack Attackの制限が有効か確認する。
+    scope: {source: gitlab}
+    match: {key: message, startswith: "Failed Login:"}
+    group_by: [source]
+    threshold: {count: 5}
+    evidence:
+      - {label: 失敗内容, key: message, limit: 5, truncate: 120}
+      - {label: 種類, key: message, show: count}
+
+  - id: gitlab_server_error_burst
+    name: "[GitLab] サーバエラー(5xx)の多発"
+    title: GitLabのサーバエラー(5xx)の多発
+    severity: warning
+    category: operations
+    description: GitLab（Rails・Workhorse・API）が5xxを多数返している。障害・リソース不足・依存サービス（DB/Redis/Gitaly）の停止の可能性がある。
+    recommendation: >-
+      gitlab-ctl status で各サービスの稼働を確認し、エラーの出ているURIと同時刻の ERROR ログから原因を特定する。ディスク・メモリの残量も確認する。
+    scope: {source: gitlab}
+    match:
+      any:
+        # Rails（production_json / api_json）・Workhorse は status にステータスコードが入る
+        - {key: [status, statuscode], regex: '^5[0-9][0-9]$'}
+        # nginx（gitlab_access.log）はJSONでなく1行がそのまま message に入る（"GET / HTTP/1.1" 502 ...）
+        - {key: message, regex: 'HTTP/[0-9.]+" 5[0-9][0-9] '}
+    group_by: [source]
+    threshold: {count: 20}
+    evidence:
+      - {label: ステータス, key: [status, statuscode]}
+      - {label: URI, key: uri, limit: 5, truncate: 120}
+      - {label: nginx, key: message, limit: 3, truncate: 120}
+
+  - id: gitlab_error_burst
+    name: "[GitLab] ERRORログの多発"
+    title: GitLabのERRORログの多発
+    severity: warning
+    category: operations
+    description: GitLabの各コンポーネント（Rails・Sidekiq・Workhorse・Gitaly等）が ERROR / FATAL のログを多数出している。
+    recommendation: >-
+      証跡のメッセージから該当コンポーネントを特定し、gitlab-ctl tail で前後のログを確認する。バックグラウンドジョブ（Sidekiq）の失敗が続く場合は、ジョブのキュー滞留も確認する。
+    scope: {source: gitlab}
+    # Rails・Sidekiq は severity（ERROR）、Workhorse・Gitaly は level（error）にレベルが入る
+    match: {key: [severity, level], in: [error, fatal]}
+    group_by: [source]
+    threshold: {count: 20}
+    evidence:
+      - {label: メッセージ, key: [message, msg], limit: 5, truncate: 120}
+      - {label: 種類, key: [message, msg], show: count}

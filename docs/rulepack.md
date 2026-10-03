@@ -2,7 +2,7 @@
 
 検知ルールを Python のコードではなくデータ（YAML）で書き、共通エンジン（`backend/app/rulepack.py`）で評価する仕組み。
 
-- 同梱パック: `backend/app/rulepacks/builtin.yaml`（現在は Windows の12ルール）
+- 同梱パック: `backend/app/rulepacks/builtin.yaml`（現在は Windows の12ルール・GitLab の3ルール）
 - コードで書いた組み込みルール（`rules.py` の `RULE_DEFS`）も引き続き使う。IOC照合・ログ未達のように、
   他テーブルとの突き合わせや時刻計算が必要で宣言型では書けないものはコードに残している
 - 監視ルール一覧（`/api/rules`）と注意喚起（`/api/rule-hits`）・通知には、両方がまとめて出る
