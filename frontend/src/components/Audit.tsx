@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { AuditRow } from "../types";
+import { fmtTime } from "../labels";
 
 const ROLE_LABEL: Record<string, string> = {
   viewer: "閲覧者", editor: "編集者", sysadmin: "システム管理者", admin: "管理者",
@@ -23,7 +24,7 @@ export function Audit() {
       .catch((e) => setErr((e as Error).message));
   }, []);
 
-  const ts = (s: string | null) => (s ? s.replace("T", " ").slice(0, 19) : "-");
+  const ts = (s: string | null) => (s ? fmtTime(s) : "-");
   const filtered = q
     ? rows.filter((r) => JSON.stringify(r).toLowerCase().includes(q.toLowerCase()))
     : rows;

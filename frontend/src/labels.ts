@@ -41,10 +41,22 @@ export const fieldLabel = (k: string): string => FIELD_LABEL[k] || k;
 // event_time等はAPIからUTCのISO文字列（例: "2026-08-07T11:55:00+00:00"）で届く。
 // 文字列を単純に切り出すとUTCの数字がそのまま表示され、ブラウザのローカル時刻(JST等)と
 // 9時間ズレるため、Dateとして解釈してローカルタイムゾーンで整形する。
+// 時刻の表示は、DBのタイムゾーン設定（開発=UTC・本番=JST）やブラウザの設定に関係なく常にJSTにそろえる。
+// APIの文字列をそのまま切り出して表示すると、環境によって9時間ずれる（2026-10-04に監査ログで発覚）。
+const JST = new Intl.DateTimeFormat("ja-JP", {
+  timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit",
+  hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23",
+});
+
 export const fmtTime = (iso: string | null | undefined): string => {
   if (!iso) return "";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  const p = Object.fromEntries(JST.formatToParts(d).map((x) => [x.type, x.value]));
+  return `${p.year}-${p.month}-${p.day} ${p.hour}:${p.minute}:${p.second}`;
 };
+
+/** datetime-local 入力欄用（JSTの "YYYY-MM-DDTHH:mm"）と、その逆変換。 */
+export const toJstInput = (iso?: string): string => (iso ? fmtTime(iso).slice(0, 16).replace(" ", "T") : "");
+export const fromJstInput = (local: string): string | undefined =>
+  local ? new Date(`${local}:00+09:00`).toISOString() : undefined;

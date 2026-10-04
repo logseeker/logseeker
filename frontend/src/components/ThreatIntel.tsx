@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { IocFeed, IocFeedsInfo } from "../types";
+import { fmtTime } from "../labels";
 
 const FEED_META: Record<string, { label: string; help: string; url: string }> = {
   abuseipdb: {
@@ -52,7 +53,7 @@ function FeedCard({ feed, onSaved }: { feed: IocFeed; onSaved: () => void }) {
           </label>
           <div className="mt-2 text-secondary small">
             取得済IOC: <strong>{feed.ioc_count.toLocaleString()}</strong> 件 ／
-            最終同期: {feed.last_synced_at ? feed.last_synced_at.replace("T", " ").slice(0, 19) : "未"} ／
+            最終同期: {feed.last_synced_at ? fmtTime(feed.last_synced_at) : "未"} ／
             {feed.last_status ?? "-"}
           </div>
         </div>

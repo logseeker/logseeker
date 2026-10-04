@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { PeriodSelect } from "./PeriodSelect";
 import type { AssetRow, AuthStatus } from "../types";
+import { fmtTime } from "../labels";
 
 const EMPTY_FORM = { ip: "", label: "", description: "", display_name: "" };
 
@@ -68,7 +69,7 @@ export function Assets({ onEntity, auth }: {
     } catch (e) { setErr((e as Error).message); }
   };
 
-  const ts = (s: string | null) => (s ? s.replace("T", " ").slice(0, 19) : "-");
+  const ts = (s: string | null) => (s ? fmtTime(s) : "-");
   const local = rows.filter((r) => r.scope === "local");
   const registered = rows.filter((r) => r.scope === "registered_global");
 

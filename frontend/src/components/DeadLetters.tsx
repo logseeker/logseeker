@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { DeadLetterRow } from "../types";
+import { fmtTime } from "../labels";
 
 // 取り込み失敗（Dead Letter）：不正JSONや正規化に失敗した受信を原文つきで保持。
 // 「なぜ入らなかったか」を監査し、パーサ修正や再送の判断に使う。
@@ -15,7 +16,7 @@ export function DeadLetters() {
       .catch((e) => setErr((e as Error).message));
   }, []);
 
-  const ts = (s: string | null) => (s ? s.replace("T", " ").slice(0, 19) : "-");
+  const ts = (s: string | null) => (s ? fmtTime(s) : "-");
 
   return (
     <div className="row row-cards">

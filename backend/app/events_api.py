@@ -587,6 +587,14 @@ def detail(event_id: int, db: Session = Depends(get_db)):
     }
 
 
+def _jst(iso: str | None) -> str:
+    """CSVの時刻はDBのタイムゾーン設定（開発=UTC・本番=JST）に関係なくJSTにそろえる。"""
+    if not iso:
+        return ""
+    from .audit_log import JST
+    return datetime.fromisoformat(iso).astimezone(JST).strftime("%Y-%m-%d %H:%M:%S")
+
+
 @router.get("/events/export")
 def export_events(request: Request, qy: EventQuery = Depends(event_query), db: Session = Depends(get_db),
                   columns: str = Query(""), format: str = Query("csv", pattern="^(csv|json)$"),
@@ -609,11 +617,11 @@ def export_events(request: Request, qy: EventQuery = Depends(event_query), db: S
     buf = io.StringIO()
     # 見出しはKEY名を必ず含める。日本語名だけだと description と message がどちらも
     # 「メッセージ」になり、表計算ソフトで同名の列が並んで区別が付かなくなる。
-    head = ["id", "クラス(画面の判定)", "受信時刻"] + [f"{label_of(c)} ({c})" if label_of(c) else c for c in cols]
+    head = ["id", "クラス(画面の判定)", "受信時刻(JST)"] + [f"{label_of(c)} ({c})" if label_of(c) else c for c in cols]
     w = csv.writer(buf)
     w.writerow(head)
     for r in rows:
-        w.writerow([r["id"], r["class_value"], r["received_at"]] + [r["values"].get(c, "") for c in cols])
+        w.writerow([r["id"], r["class_value"], _jst(r["received_at"])] + [r["values"].get(c, "") for c in cols])
     return Response(content="﻿" + buf.getvalue(), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": "attachment; filename=logseeker_events.csv"})
 

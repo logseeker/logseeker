@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { NotificationConfig } from "../types";
+import { fmtTime } from "../labels";
 
 const EMPTY: NotificationConfig = {
   email_enabled: false, email_host: "", email_port: 587,
@@ -188,7 +189,7 @@ export function Notifications() {
             </div>
             {cfg.last_notified && (
               <div className="mt-2 text-secondary small">
-                最終通知: {cfg.last_notified.replace("T", " ").slice(0, 19)} UTC
+                最終通知: {fmtTime(cfg.last_notified)}
               </div>
             )}
           </div>

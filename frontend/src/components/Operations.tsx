@@ -3,6 +3,7 @@ import ReactECharts from "echarts-for-react";
 import { api } from "../api";
 import { addDaysStr, todayJst } from "../dateUtils";
 import type { IngestStatus, IngestVolume } from "../types";
+import { fmtTime } from "../labels";
 
 // バイト数を人が読みやすい単位に変換（1024基準）。
 function formatBytes(n: number): string {
@@ -156,7 +157,7 @@ export function Operations() {
                     {st.by_channel.map((c) => (
                       <tr key={c.channel ?? "-"}>
                         <td>{c.channel}</td><td>{c.count.toLocaleString()}</td>
-                        <td>{c.last_received ? c.last_received.replace("T", " ").slice(0, 19) : "-"}</td>
+                        <td>{c.last_received ? fmtTime(c.last_received) : "-"}</td>
                       </tr>
                     ))}
                   </tbody>

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api } from "../api";
 import type { EventQuery } from "../api";
-import { fmtTime } from "../labels";
+import { fmtTime, fromJstInput, toJstInput } from "../labels";
 import { EventDetail } from "./EventDetail";
 import { adviseForEvent } from "../advice";
 import type {
@@ -35,8 +35,6 @@ function lsSet(key: string, v: unknown) {
   try { localStorage.setItem(`${LS_PREFIX}_${key}`, JSON.stringify(v)); } catch { /* noop */ }
 }
 
-const isoLocal = (iso?: string) => (iso ? iso.slice(0, 16) : "");
-const toIso = (local: string) => (local ? new Date(local).toISOString() : undefined);
 
 type Props = {
   onEntity: (type: string, value: string) => void;
@@ -194,12 +192,12 @@ export function Events({ onEntity, onNav, onOpenCase, onOpenIncident, auth, init
               <div>
                 <label className="form-label mb-0 small">開始</label>
                 <input type="datetime-local" className="form-control form-control-sm"
-                  value={isoLocal(draft.start)} onChange={(e) => setDraft({ ...draft, start: toIso(e.target.value) })} />
+                  value={toJstInput(draft.start)} onChange={(e) => setDraft({ ...draft, start: fromJstInput(e.target.value) })} />
               </div>
               <div>
                 <label className="form-label mb-0 small">終了</label>
                 <input type="datetime-local" className="form-control form-control-sm"
-                  value={isoLocal(draft.end)} onChange={(e) => setDraft({ ...draft, end: toIso(e.target.value) })} />
+                  value={toJstInput(draft.end)} onChange={(e) => setDraft({ ...draft, end: fromJstInput(e.target.value) })} />
               </div>
               <div>
                 <label className="form-label mb-0 small">脅威</label>

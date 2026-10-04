@@ -15,8 +15,11 @@
 （「変更した」事実だけを書く）。
 """
 import re
+from zoneinfo import ZoneInfo
 
 from fastapi import Request
+
+JST = ZoneInfo("Asia/Tokyo")  # CSV/JSON出力の時刻はDBの設定に関係なくJSTにそろえる
 
 # ---- 操作名（action → 画面表示用の日本語） ----
 ACTION_LABELS: dict[str, str] = {

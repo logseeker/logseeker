@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { AuthStatus, AuthUser, CreateUserResult, Role } from "../types";
+import { fmtTime } from "../labels";
 
 const ROLE_OPTS: { v: Role; label: string; desc: string }[] = [
   { v: "viewer", label: "閲覧者", desc: "閲覧・ダウンロード" },
@@ -90,7 +91,7 @@ export function Users({ auth, onChanged }: { auth: AuthStatus; onChanged: () => 
                           <span className="form-check-label">{u.enabled ? "有効" : "無効"}</span>
                         </label>
                       </td>
-                      <td className="text-secondary small">{u.last_login_at ? u.last_login_at.replace("T", " ").slice(0, 19) : "-"}</td>
+                      <td className="text-secondary small">{u.last_login_at ? fmtTime(u.last_login_at) : "-"}</td>
                       <td className="text-end">
                         <button className="btn btn-sm" disabled={!canManage}
                           onClick={() => { const p = prompt(`「${u.username}」の新しいパスワード`); if (p) guard(async () => { await api.updateUser(u.id, { password: p }); flash("パスワードを再設定しました"); }); }}>

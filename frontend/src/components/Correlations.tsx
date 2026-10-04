@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { PeriodSelect } from "./PeriodSelect";
-import { stLabel } from "../labels";
+import { fmtTime, stLabel } from "../labels";
 import type { CorrelationItem } from "../types";
 
 // 相関分析＝AIなし。同じ資産/主体（IP・ユーザー）が複数のログソース種別に
@@ -31,7 +31,7 @@ export function Correlations({ onPick, onEntity }: {
   const pivotCol: Record<string, string> = {
     ip: "source_ip", user: "actor_user", domain: "url_domain",
   };
-  const ts = (s: string | null) => (s ? s.replace("T", " ").slice(0, 16) : "-");
+  const ts = (s: string | null) => (s ? fmtTime(s).slice(0, 16) : "-");
   const crossCount = items.filter((i) => i.source_type_count >= 2).length;
 
   return (

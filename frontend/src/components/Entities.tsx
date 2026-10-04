@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
 import { PeriodSelect } from "./PeriodSelect";
-import { stLabel } from "../labels";
+import { fmtTime, stLabel } from "../labels";
 import type { EntityDetail, EntityRow, EventRow, Screen } from "../types";
 
 const TYPES = ["", "ip", "user", "host", "domain", "mac", "email"];
@@ -45,7 +45,7 @@ export function Entities({ onPick, initial, onNav }: {
     api.entityEvents(sel.type, sel.value).then(setEvents).catch(() => setEvents([]));
   }, [sel]);
 
-  const ts = (s: string | null) => (s ? s.replace("T", " ").slice(0, 19) : "-");
+  const ts = (s: string | null) => (s ? fmtTime(s) : "-");
 
   return (
     <div className="row row-cards">

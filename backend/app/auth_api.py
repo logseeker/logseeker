@@ -344,7 +344,7 @@ def save_ip_restrict(body: IpRestrictSave, request: Request,
 # ---------------- 監査ログ（sysadmin以上） ----------------
 def _audit_dict(a: AuditLog) -> dict:
     return {
-        "id": a.id, "at": a.at.isoformat() if a.at else None,
+        "id": a.id, "at": a.at.astimezone(L.JST).isoformat() if a.at else None,
         "username": a.username, "role": a.role, "action": a.action,
         "method": a.method, "path": a.path, "status": a.status,
         "target": a.target, "detail": a.detail, "ip": a.ip,
@@ -367,9 +367,9 @@ def audit_csv(request: Request, actor: User | None = Depends(A.require_sysadmin)
     rows = db.execute(select(AuditLog).order_by(AuditLog.at.desc())).scalars().all()
     buf = io.StringIO()
     w = csv.writer(buf)
-    w.writerow(["日時", "ユーザー", "ロール", "操作", "対象", "内容", "結果", "IP", "操作ID", "メソッド", "パス"])
+    w.writerow(["日時(JST)", "ユーザー", "ロール", "操作", "対象", "内容", "結果", "IP", "操作ID", "メソッド", "パス"])
     for a in rows:
-        w.writerow([a.at.isoformat() if a.at else "", a.username or "", A.ROLE_LABELS.get(a.role, a.role or ""),
+        w.writerow([a.at.astimezone(L.JST).strftime("%Y-%m-%d %H:%M:%S") if a.at else "", a.username or "", A.ROLE_LABELS.get(a.role, a.role or ""),
                     L.label_of(a.action, a.method, a.path), a.target or "", a.detail or "", a.status or "",
                     a.ip or "", a.action, a.method or "", a.path or ""])
     L.note(request, "audit.download", detail=f"CSV形式・{len(rows):,}件")

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { stLabel } from "../labels";
+import { fmtTime, stLabel } from "../labels";
 import type { AdminOverview, AuthStatus, Screen } from "../types";
 
 const COUNT_LABEL: Record<string, string> = {
@@ -22,7 +22,7 @@ export function Admin({ onNav, auth }: { onNav: (s: Screen) => void; auth?: Auth
   if (err) return <div className="alert alert-danger">取得失敗: {err}</div>;
   if (!ov) return <div className="text-secondary">読み込み中…</div>;
 
-  const ts = (s: string | null) => (s ? s.replace("T", " ").slice(0, 19) : "-");
+  const ts = (s: string | null) => (s ? fmtTime(s) : "-");
   // 認証OFF（デモ）の間は誰でも管理者相当（他画面のeffRoleの扱いと同じ）。ONなら実際にadminロールか。
   const isAdmin = !auth?.auth_required || auth?.user?.role === "admin";
 
@@ -118,7 +118,7 @@ export function Admin({ onNav, auth }: { onNav: (s: Screen) => void; auth?: Auth
                 </div></div>
               <div className="datagrid-item"><div className="datagrid-title">最古のイベント</div>
                 <div className="datagrid-content text-secondary small">
-                  {ov.retention.oldest_event_at ? ov.retention.oldest_event_at.replace("T", " ").slice(0, 19) : "-"}
+                  {ov.retention.oldest_event_at ? fmtTime(ov.retention.oldest_event_at) : "-"}
                 </div></div>
             </div>
             <div className="text-secondary small mt-2">
