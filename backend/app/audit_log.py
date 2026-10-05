@@ -25,6 +25,7 @@ JST = ZoneInfo("Asia/Tokyo")  # CSV/JSON出力の時刻はDBの設定に関係�
 ACTION_LABELS: dict[str, str] = {
     "login": "ログイン",
     "login.admin": "管理パネルへのログイン",
+    "login.sso": "SSOログイン",
     "logout": "ログアウト",
     "user.create": "ユーザー追加",
     "user.update": "ユーザー編集",
@@ -110,7 +111,8 @@ ROUTES: dict[tuple[str, str], str] = {
     ("PUT", "/api/users/{user_id}"): "user.update",
     ("DELETE", "/api/users/{user_id}"): "user.delete",
     ("POST", "/api/auth/require"): "auth.toggle",
-    ("PUT", "/api/sso"): "sso.config",
+    ("PUT", "/api/sso"): "sso.config",        # 旧パス（過去の監査ログ表示用）
+    ("PUT", "/api/admin/sso"): "sso.config",
     ("PUT", "/api/admin/ip-restrict"): "ip_restrict.config",
 }
 
@@ -123,8 +125,8 @@ SKIP: set[tuple[str, str]] = {
     ("PUT", "/api/events/classes"),
     ("PUT", "/api/changelog/dismissed"),
 }
-# login/logout は auth_api.py 側で直接記録している（ログイン前はトークンからユーザーを引けないため）。
-SKIP_PATHS = {"/api/auth/login", "/api/auth/admin-login", "/api/auth/logout"}
+# login/logout/SSOログイン は auth_api.py 側で直接記録している（ログイン前はトークンからユーザーを引けないため）。
+SKIP_PATHS = {"/api/auth/login", "/api/auth/admin-login", "/api/auth/logout", "/api/sso/exchange"}
 
 _MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 

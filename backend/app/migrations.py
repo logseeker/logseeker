@@ -151,7 +151,27 @@ def run(db: Session) -> None:
     _fix_incident_event_id_nullable(db)
     _add_user_settings_events_columns(db)
     _move_normalized_into_events(db)
+    _add_user_sso_columns(db)
     log.info("case/incident management migrations: done.")
+
+
+# 旧「SSO設定の受け口」（単一OIDC IdP前提・実接続なし）のキー。Google/Microsoft別の設定に置き換えた。
+_LEGACY_SSO_KEYS = ("sso_enabled", "sso_issuer", "sso_client_id", "sso_client_secret",
+                    "sso_redirect_uri", "sso_allowed_domains", "sso_auto_provision_role")
+
+
+def _add_user_sso_columns(db: Session) -> None:
+    """SSO（Google/Microsoft 365）用の users 列。既存ユーザーは全員 auth_method='password' になる。
+    (sso_provider, sso_subject) は1つのIdPアカウントが2ユーザーに紐付かないよう一意にする。"""
+    if not _table_exists(db, "users"):
+        return
+    db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_method VARCHAR(16) NOT NULL DEFAULT 'password'"))
+    db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR(255)"))
+    db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS sso_provider VARCHAR(16)"))
+    db.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_users_sso_identity ON users (sso_provider, sso_subject) "
+                    "WHERE sso_subject IS NOT NULL"))
+    db.execute(text("DELETE FROM settings WHERE key = ANY(:k)"), {"k": list(_LEGACY_SSO_KEYS)})
+    db.commit()
 
 
 def _add_user_settings_events_columns(db: Session) -> None:

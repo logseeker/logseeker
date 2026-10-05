@@ -6,3 +6,4 @@ pydantic==2.10.4
 PyYAML==6.0.2
 geoip2==4.8.1
 cryptography==44.0.0
+PyJWT==2.10.1

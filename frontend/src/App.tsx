@@ -117,18 +117,34 @@ const INIT_EVENT_ID = (() => {
   const v = new URLSearchParams(window.location.search).get("event");
   return v ? Number(v) : undefined;
 })();
+// SSOのコールバックから戻ってきた場合（?sso_code= / ?sso_error=）。一回限りのコードを
+// 履歴・ブックマークに残さないよう、読み取ったら即座にURLから消す。
+const SSO_RETURN = (() => {
+  const p = new URLSearchParams(window.location.search);
+  const r = { code: p.get("sso_code"), error: p.get("sso_error") };
+  if (r.code || r.error) window.history.replaceState(null, "", window.location.pathname);
+  return r;
+})();
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>(INIT.screen);
   const [filter, setFilter] = useState<FilterState>(INIT.filter);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [authLoaded, setAuthLoaded] = useState(false);
+  const [ssoError, setSsoError] = useState<string | null>(SSO_RETURN.error);
   const changelog = useChangelog(auth);
 
   const loadAuth = () => api.authStatus().then(setAuth).catch(() => setAuth(null)).finally(() => setAuthLoaded(true));
   useEffect(() => {
     setUnauthorizedHandler(() => { tokenStore.clear(); loadAuth(); });
-    loadAuth();
+    if (SSO_RETURN.code) {
+      api.ssoExchange(SSO_RETURN.code)
+        .then((r) => tokenStore.set(r.token))
+        .catch(() => setSsoError("expired"))
+        .finally(loadAuth);
+    } else {
+      loadAuth();
+    }
   }, []);
 
   // 認証ONで未ログインなら、どの画面でも使えない機能があるため最小権限で扱う。
@@ -282,7 +298,7 @@ export default function App() {
   if (!authLoaded) return <div className="page page-center"><div className="text-secondary">読み込み中…</div></div>;
   // ログイン必須なのに未ログイン → ログイン画面
   if (auth?.auth_required && !auth.user) {
-    return <Login sso={auth.sso} onLoggedIn={() => { loadAuth(); setScreen("dashboard"); }} />;
+    return <Login sso={auth.sso} ssoError={ssoError} onLoggedIn={() => { setSsoError(null); loadAuth(); setScreen("dashboard"); }} />;
   }
   const visibleMenu = MENU.filter((m) => canSee(m.key));
 

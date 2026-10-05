@@ -5,7 +5,7 @@ import type {
   EventsClassesResponse, EventsFields, EventsSearchResponse, FacetResponse, FieldInfo, FilterState, HistogramResponse,
   IncidentActivityItem, IncidentDetail, IncidentResponseActionTypeDef, IncidentRow, IncidentStatusDef,
   IngestStatus, IngestVolume, IocFeedsInfo, IpRestrictStatus, LicenseInfo, MappingsResponse, NotificationConfig,
-  ReleaseItem, Role, RuleDef, RuleHit, SsoStatus, Verdict,
+  ReleaseItem, Role, RuleDef, RuleHit, SsoAdminInput, SsoAdminStatus, Verdict,
 } from "./types";
 
 const BASE = (import.meta.env.VITE_API_BASE as string) || "";
@@ -272,21 +272,25 @@ export const api = {
     post<{ token: string; user: AuthUser }>(`/api/auth/login`, { username, password }),
   adminLogin: (username: string, password: string) =>
     post<{ token: string; user: AuthUser }>(`/api/auth/admin-login`, { username, password }),
+  // SSOのコールバック後、URLの一回限りコードをセッショントークンに交換する（Cookieも同時に照合される）
+  ssoExchange: (code: string) =>
+    post<{ token: string; user: AuthUser }>(`/api/sso/exchange`, { code }),
   adminStatus: () => get<{ user: AuthUser | null }>(`/api/auth/admin-status`),
   logout: () => post<{ ok: boolean }>(`/api/auth/logout`, {}),
   listUsers: () => get<AuthUser[]>(`/api/users`),
-  createUser: (b: { username: string; display_name?: string; role: Role; email?: string; password?: string }) =>
+  createUser: (b: { username: string; display_name?: string; role: Role; email?: string; password?: string;
+                    auth_method?: "password" | "sso" }) =>
     post<CreateUserResult>(`/api/users`, b),
-  updateUser: (id: number, b: { display_name?: string; role?: Role; enabled?: boolean; password?: string }) =>
+  updateUser: (id: number, b: { display_name?: string; role?: Role; enabled?: boolean; password?: string;
+                                email?: string; sso_unlink?: boolean }) =>
     put<AuthUser>(`/api/users/${id}`, b),
   deleteUser: (id: number) => del<{ ok: boolean }>(`/api/users/${id}`),
   toggleAuth: (enabled: boolean) => post<{ ok: boolean; auth_required: boolean }>(`/api/auth/require`, { enabled }),
   audit: (limit = 500) => get<AuditResponse>(`/api/audit?limit=${limit}`),
   downloadAuditCsv: () => downloadFile(`/api/audit.csv`, "logseeker_audit.csv"),
   downloadAuditJson: () => downloadFile(`/api/audit.json`, "logseeker_audit.json"),
-  getSso: () => get<SsoStatus>(`/api/sso`),
-  saveSso: (b: Partial<SsoStatus> & { client_secret?: string; enabled: boolean }) =>
-    put<{ ok: boolean; note: string }>(`/api/sso`, b),
+  getSso: () => get<SsoAdminStatus>(`/api/admin/sso`),
+  saveSso: (b: SsoAdminInput) => put<SsoAdminStatus>(`/api/admin/sso`, b),
   getIpRestrict: () => get<IpRestrictStatus>(`/api/admin/ip-restrict`),
   saveIpRestrict: (b: { enabled: boolean; allowlist: { cidr: string; label: string }[] }) =>
     put<IpRestrictStatus>(`/api/admin/ip-restrict`, b),

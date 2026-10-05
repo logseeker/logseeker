@@ -20,7 +20,8 @@ from .models import Setting
 # 管理パネル自身のAPI（ログイン試行そのものを含む）。
 # システム状態の読み取り専用統計（/api/admin/overview 等）はここに含めない＝対象外。
 PROTECTED_PREFIXES = ["/api/auth/admin-login", "/api/auth/admin-status", "/api/auth/require",
-                      "/api/sso", "/api/admin/ip-restrict"]
+                      "/api/admin/sso", "/api/admin/ip-restrict"]
+# SSOのログイン経路(/api/sso/...)は一般ユーザー用なので対象外（管理パネルのSSO設定は /api/admin/sso）。
 
 _K_ENABLED = "ip_restrict_enabled"
 _K_ALLOWLIST = "ip_restrict_allowlist"

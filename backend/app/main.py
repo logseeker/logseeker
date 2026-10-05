@@ -147,14 +147,15 @@ async def audit_mutations(request: Request, call_next):
 
 
 # 認証必須(ON)のとき、/api 全体でログインを強制する（読み取りAPIも含めて一括防御）。
-# ログイン前でも必要な status/login は素通り。/ingest は機器用（INGEST_TOKENで別管理）。
+# ログイン前でも必要な status/login と SSO のログイン経路(/api/sso/...)は素通り。/ingest は機器用（INGEST_TOKENで別管理）。
 _AUTH_OPEN_PATHS = {"/api/auth/login", "/api/auth/status", "/api/auth/admin-login"}
+_AUTH_OPEN_PREFIXES = ("/api/sso/",)  # SSO設定(管理)は /api/admin/sso なのでここには含まれない
 
 
 @app.middleware("http")
 async def enforce_auth(request: Request, call_next):
     path = request.url.path
-    if path.startswith("/api") and path not in _AUTH_OPEN_PATHS:
+    if path.startswith("/api") and path not in _AUTH_OPEN_PATHS and not path.startswith(_AUTH_OPEN_PREFIXES):
         from .auth import get_current_user, is_auth_required
         from .db import SessionLocal
         db = SessionLocal()

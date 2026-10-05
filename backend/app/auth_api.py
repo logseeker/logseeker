@@ -8,40 +8,58 @@
 import csv
 import io
 import json
+import re
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Cookie, Depends, Request, Response
+from fastapi.responses import RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from . import auth as A
 from . import audit_log as L
+from . import sso as S
 from .db import get_db
 from .models import AuditLog, User
-from .schema import AuthToggle, IpRestrictSave, LoginRequest, SSOConfig, UserCreate, UserUpdate
+from .schema import AuthToggle, IpRestrictSave, LoginRequest, SSOConfig, SsoExchange, UserCreate, UserUpdate
 
 router = APIRouter(prefix="/api")
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def _user_dict(u: User) -> dict:
     return {
         "id": u.id, "username": u.username, "display_name": u.display_name,
         "role": u.role, "role_label": A.ROLE_LABELS.get(u.role, u.role),
-        "enabled": u.enabled, "is_sso": bool(u.sso_subject),
+        "enabled": u.enabled, "auth_method": u.auth_method or "password",
+        "is_sso": u.auth_method == "sso", "email": u.email,
+        "sso_provider": u.sso_provider,  # None = SSOユーザーだがまだ一度もSSOログインしていない（未紐付け）
         "created_at": u.created_at.isoformat() if u.created_at else None,
         "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
     }
 
 
+def _json_error(status: int, msg: str) -> Response:
+    return Response(status_code=status, content=json.dumps({"error": msg}, ensure_ascii=False),
+                    media_type="application/json")
+
+
+def _sso_email_taken(db: Session, email: str, exclude_id: int | None = None) -> bool:
+    q = select(User.id).where(func.lower(User.email) == email.lower())
+    if exclude_id is not None:
+        q = q.where(User.id != exclude_id)
+    return db.execute(q).first() is not None
+
+
 # ---------------- 認証状態 / ログイン ----------------
 @router.get("/auth/status")
 def auth_status(user: User | None = Depends(A.get_current_user), db: Session = Depends(get_db)):
-    """フロント初期化用。認証要否と現在ユーザー、SSO設定有無を返す。"""
-    from .sso import sso_status
+    """フロント初期化用。認証要否と現在ユーザー、ログイン画面に出すSSOボタン（IdP一覧）を返す。"""
     return {
         "auth_required": A.is_auth_required(db),
         "user": _user_dict(user) if user else None,
         "roles": [{"value": k, "label": v} for k, v in A.ROLE_LABELS.items()],
-        "sso": sso_status(db),
+        "sso": {"providers": S.login_providers(db)},
     }
 
 
@@ -153,6 +171,28 @@ def create_user(body: UserCreate, request: Request,
     if db.execute(select(User).where(User.username == body.username)).scalar_one_or_none():
         return Response(status_code=409, content='{"error":"同名のユーザーが既に存在します"}',
                         media_type="application/json")
+    if body.auth_method not in ("password", "sso"):
+        return _json_error(400, "不正な認証方式")
+
+    if body.auth_method == "sso":
+        # SSO専用ユーザー: パスワードを持たない（LogSeeker側で本人確認しない）。
+        # 初回SSOログイン時、IdPの確認済みメールアドレスがこの email と一致したら紐付ける（sso.py）。
+        email = (body.email or "").strip().lower()
+        if not _EMAIL_RE.match(email):
+            return _json_error(400, "SSOユーザーには、IdP（Google / Microsoft 365）でログインするメールアドレスが必要です")
+        if _sso_email_taken(db, email):
+            return _json_error(409, "同じメールアドレスのユーザーが既に存在します")
+        u = User(username=body.username, display_name=body.display_name, role=body.role,
+                 auth_method="sso", email=email, password_hash=None, enabled=True)
+        db.add(u)
+        db.commit()
+        L.note(request, "user.create", target=body.username,
+               detail=L.join([f"表示名: {L.fmt(body.display_name)}",
+                              f"ロール: {A.ROLE_LABELS.get(body.role, body.role)}",
+                              f"認証方式: SSO（{email}）"]))
+        result = _user_dict(u)
+        result["email_sent"] = None
+        return result
 
     from .notify import K_EMAIL_ENABLED, _get, send_email
     email_enabled = _get(db, K_EMAIL_ENABLED) == "true"
@@ -228,9 +268,25 @@ def update_user(user_id: int, body: UserUpdate, request: Request,
             changes.append("アカウントを有効化" if body.enabled else "アカウントを無効化")
         u.enabled = body.enabled
     if body.password:
+        if u.auth_method == "sso":
+            return _json_error(400, "SSOユーザーにはパスワードを設定できません")
         u.password_hash = A.hash_password(body.password)
         changes.append("パスワードを変更（本人が変更）" if actor and actor.id == u.id
                        else "パスワードを変更（再設定）")
+    if body.email is not None and u.auth_method == "sso":
+        email = body.email.strip().lower()
+        if email != (u.email or ""):
+            if not _EMAIL_RE.match(email):
+                return _json_error(400, "メールアドレスの形式が不正です")
+            if _sso_email_taken(db, email, exclude_id=u.id):
+                return _json_error(409, "同じメールアドレスのユーザーが既に存在します")
+            changes.append(f"メールアドレス: {L.fmt(u.email)} → {email}")
+            u.email = email
+            body.sso_unlink = True  # 別人のIdPアカウントに紐付いたままにしない
+    if body.sso_unlink and u.sso_subject:
+        changes.append(f"SSOの紐付けを解除（{S.PROVIDERS.get(u.sso_provider or '', {}).get('label', u.sso_provider)}）")
+        u.sso_provider = None
+        u.sso_subject = None
     db.commit()
     only_pw = len(changes) == 1 and bool(body.password)
     L.note(request, "user.password" if only_pw else "user.update", target=u.username,
@@ -281,28 +337,85 @@ def toggle_auth(body: AuthToggle, request: Request,
     return {"ok": True, "auth_required": body.enabled}
 
 
-# ---------------- SSO 設定（admin専用・実接続は未実装） ----------------
-@router.get("/sso")
+# ---------------- SSO 設定（admin専用・管理パネル。IP制限の対象） ----------------
+@router.get("/admin/sso")
 def get_sso(_: User | None = Depends(A.require_admin), db: Session = Depends(get_db)):
-    from .sso import sso_status
-    return sso_status(db)
+    return S.admin_status(db)
 
 
-@router.put("/sso")
+@router.put("/admin/sso")
 def save_sso(body: SSOConfig, request: Request,
              actor: User | None = Depends(A.require_admin), db: Session = Depends(get_db)):
-    from .sso import save_sso_config, sso_status
-    before = sso_status(db)
-    save_sso_config(db, body.model_dump())
-    changes = L.diff({"enabled": "SSO", "issuer": "Issuer", "client_id": "クライアントID",
-                      "redirect_uri": "リダイレクトURI", "allowed_domains": "許可ドメイン",
-                      "auto_provision_role": "自動作成時のロール"},
-                     before, body.model_dump(),
-                     {"auto_provision_role": lambda r: A.ROLE_LABELS.get(r, L.fmt(r))})
-    if body.client_secret:
-        changes.append("クライアントシークレットを変更")
+    before = S.admin_status(db)
+    cfg = body.model_dump()
+    errors = S.validate_and_save(db, cfg)
+    if errors:
+        return _json_error(400, " / ".join(errors))
+    after = S.admin_status(db)
+    changes = L.diff({"public_url": "公開URL"}, before, after)
+    for p, meta in S.PROVIDERS.items():
+        changes += [f"{meta['label']} {c}" for c in L.diff(
+            {"enabled": "SSO", "client_id": "クライアントID", "domains": "許可ドメイン", "tenant": "テナント"},
+            before["providers"][p], after["providers"][p])]
+        if (cfg["providers"].get(p) or {}).get("client_secret"):
+            changes.append(f"{meta['label']} クライアントシークレットを変更")
     L.note(request, "sso.config", detail=L.join(changes))
-    return {"ok": True, "note": "設定を保存しました（実接続は現バージョン未実装。設計・保管のみ）"}
+    return after
+
+
+# ---------------- SSO ログイン（ブラウザの画面遷移で呼ばれる。ログイン前でも通す） ----------------
+def _sso_fail(db: Session, request: Request, provider: str, e: S.SsoError) -> RedirectResponse:
+    A.audit(db, action="login.sso", status="failure", username=e.username, method="GET",
+            path=request.url.path, ip=A.client_ip(request),
+            detail=f"{S.PROVIDERS.get(provider, {}).get('label', provider)}: {e.detail}"[:1000])
+    resp = RedirectResponse(f"/?sso_error={e.reason}", status_code=302)
+    resp.delete_cookie(S.COOKIE_NAME, path=S.COOKIE_PATH)
+    return resp
+
+
+@router.get("/sso/{provider}/login")
+def sso_login(provider: str, request: Request, db: Session = Depends(get_db)):
+    try:
+        url, binding = S.begin_login(db, provider)
+    except S.SsoError as e:
+        return _sso_fail(db, request, provider, e)
+    resp = RedirectResponse(url, status_code=302)
+    # SameSite=Lax: IdPからのトップレベルGETリダイレクトでは送られ、他サイトからのPOST等では送られない。
+    resp.set_cookie(S.COOKIE_NAME, binding, max_age=int(S.AUTH_TTL.total_seconds()), path=S.COOKIE_PATH,
+                    httponly=True, secure=S.public_url(db).startswith("https://"), samesite="lax")
+    return resp
+
+
+@router.get("/sso/{provider}/callback")
+def sso_callback(provider: str, request: Request, code: str = "", state: str = "", error: str = "",
+                 ls_sso_bind: str | None = Cookie(default=None), db: Session = Depends(get_db)):
+    if error:
+        # 利用者がIdPの画面でキャンセルした、IdP側で同意・ポリシーに弾かれた等
+        desc = request.query_params.get("error_description", "")
+        return _sso_fail(db, request, provider, S.SsoError("idp", f"IdPがエラーを返しました: {error} {desc}"))
+    try:
+        user = S.finish_login(db, provider, code, state, ls_sso_bind)
+        xcode = S.issue_exchange_code(db, user, ls_sso_bind or "")
+    except S.SsoError as e:
+        return _sso_fail(db, request, provider, e)
+    return RedirectResponse(f"/?sso_code={xcode}", status_code=302)
+
+
+@router.post("/sso/exchange")
+def sso_exchange(body: SsoExchange, request: Request, response: Response,
+                 ls_sso_bind: str | None = Cookie(default=None), db: Session = Depends(get_db)):
+    ip = A.client_ip(request)
+    try:
+        user = S.redeem_exchange_code(db, body.code, ls_sso_bind)
+    except S.SsoError as e:
+        A.audit(db, action="login.sso", status="failure", method="POST", path="/api/sso/exchange",
+                ip=ip, detail=e.detail)
+        return _json_error(401, "SSOログインの有効期限が切れました。もう一度ログインしてください")
+    token = A.create_session(db, user)
+    A.audit(db, action="login.sso", status="success", user=user, method="POST", path="/api/sso/exchange",
+            ip=ip, detail=S.PROVIDERS.get(user.sso_provider or "", {}).get("label", user.sso_provider))
+    response.delete_cookie(S.COOKIE_NAME, path=S.COOKIE_PATH)
+    return {"token": token, "user": _user_dict(user)}
 
 
 # ---------- IPアクセス制限（admin専用） ----------

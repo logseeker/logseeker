@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { api, tokenStore } from "../api";
-import type { AuthUser, IpAllowEntry, IpRestrictStatus, SsoStatus } from "../types";
+import type {
+  AuthUser, IpAllowEntry, IpRestrictStatus, SsoAdminInput, SsoAdminStatus, SsoProviderId, SsoProviderInput,
+} from "../types";
 
 // 通常のログイン後画面（左メニュー）とは完全に切り離した、管理者(admin)専用の管理パネル。
 // ?screen=administration でのみ到達し、左メニューには一切出さない。admin以外のロールは
@@ -107,30 +109,16 @@ export function Administration() {
 // ログイン必須ON/OFF と SSO 設定（admin専用）
 function AdminSecurity() {
   const [authRequired, setAuthRequired] = useState(false);
-  const [sso, setSso] = useState<SsoStatus | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [form, setForm] = useState({ issuer: "", client_id: "", client_secret: "", redirect_uri: "", allowed_domains: "", auto_provision_role: "viewer", enabled: false });
 
   const loadAuthStatus = () => api.authStatus().then((s) => setAuthRequired(s.auth_required)).catch(() => {});
-
-  useEffect(() => {
-    loadAuthStatus();
-    api.getSso().then((s) => {
-      setSso(s);
-      setForm({ issuer: s.issuer, client_id: s.client_id, client_secret: "", redirect_uri: s.redirect_uri, allowed_domains: s.allowed_domains, auto_provision_role: s.auto_provision_role, enabled: s.enabled });
-    }).catch(() => {});
-  }, []);
+  useEffect(() => { loadAuthStatus(); }, []);
 
   const flash = (m: string) => { setMsg(m); setTimeout(() => setMsg(null), 2500); };
   const toggleAuth = async (enabled: boolean) => {
     setErr(null);
     try { await api.toggleAuth(enabled); loadAuthStatus(); flash(enabled ? "ログイン必須にしました" : "ログイン不要にしました"); }
-    catch (e) { setErr((e as Error).message); }
-  };
-  const saveSso = async () => {
-    setErr(null);
-    try { const r = await api.saveSso(form); flash(r.note); api.getSso().then(setSso); }
     catch (e) { setErr((e as Error).message); }
   };
 
@@ -156,53 +144,125 @@ function AdminSecurity() {
         </div>
 
         <hr />
-        <h4 className="mb-1">SSO（OIDC）</h4>
-        <div className="text-secondary small mb-3">
-          {sso?.implemented
-            ? "有効化するとログイン画面にSSOボタンが出ます。"
-            : "現バージョンは設定の保管のみ（実接続は未実装）。Google/Azure AD(Entra)/Keycloak等のOIDCを想定。"}
-        </div>
-        <div className="row g-2">
-          <div className="col-md-6">
-            <label className="form-label">Issuer (discovery URL)</label>
-            <input className="form-control" placeholder="https://accounts.google.com" value={form.issuer}
-              onChange={(e) => setForm({ ...form, issuer: e.target.value })} />
-          </div>
-          <div className="col-md-6">
-            <label className="form-label">Client ID</label>
-            <input className="form-control" value={form.client_id} onChange={(e) => setForm({ ...form, client_id: e.target.value })} />
-          </div>
-          <div className="col-md-6">
-            <label className="form-label">Client Secret {sso?.has_secret && <span className="text-secondary small">(設定済み・変更時のみ入力)</span>}</label>
-            <input className="form-control" type="password" value={form.client_secret} onChange={(e) => setForm({ ...form, client_secret: e.target.value })} />
-          </div>
-          <div className="col-md-6">
-            <label className="form-label">Redirect URI</label>
-            <input className="form-control" placeholder="https://<自分のホスト>/api/sso/callback" value={form.redirect_uri}
-              onChange={(e) => setForm({ ...form, redirect_uri: e.target.value })} />
-          </div>
-          <div className="col-md-6">
-            <label className="form-label">許可ドメイン（任意・カンマ区切り）</label>
-            <input className="form-control" placeholder="example.co.jp" value={form.allowed_domains}
-              onChange={(e) => setForm({ ...form, allowed_domains: e.target.value })} />
-          </div>
-          <div className="col-md-3">
-            <label className="form-label">自動作成ロール</label>
-            <select className="form-select" value={form.auto_provision_role} onChange={(e) => setForm({ ...form, auto_provision_role: e.target.value })}>
-              <option value="viewer">閲覧者</option><option value="editor">編集者</option>
-            </select>
-          </div>
-          <div className="col-md-3 d-flex align-items-end">
-            <label className="form-check form-switch mb-2">
-              <input className="form-check-input" type="checkbox" checked={form.enabled}
-                onChange={(e) => setForm({ ...form, enabled: e.target.checked })} />
-              <span className="form-check-label">SSO有効</span>
-            </label>
-          </div>
-        </div>
-        <button className="btn btn-primary mt-3" onClick={saveSso}>SSO設定を保存</button>
+        <AdminSso />
       </div>
     </div>
+  );
+}
+
+const EMPTY_PROVIDER: SsoProviderInput = { enabled: false, client_id: "", client_secret: "", domains: "", tenant: "" };
+
+// SSO（Google Workspace / Microsoft 365）。本人確認・MFAはIdP側に任せる（docs/sso.md）。
+function AdminSso() {
+  const [st, setSt] = useState<SsoAdminStatus | null>(null);
+  const [form, setForm] = useState<SsoAdminInput>({
+    public_url: "", providers: { google: { ...EMPTY_PROVIDER }, microsoft: { ...EMPTY_PROVIDER } },
+  });
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const apply = (s: SsoAdminStatus) => {
+    setSt(s);
+    const p = (id: SsoProviderId): SsoProviderInput => ({
+      enabled: s.providers[id].enabled, client_id: s.providers[id].client_id, client_secret: "",
+      domains: s.providers[id].domains ?? "", tenant: s.providers[id].tenant ?? "",
+    });
+    // 未設定なら、今開いているURLを公開URLの初期値にする（ほとんどの場合それが正しい）
+    setForm({ public_url: s.public_url || window.location.origin, providers: { google: p("google"), microsoft: p("microsoft") } });
+  };
+  useEffect(() => { api.getSso().then(apply).catch((e) => setErr((e as Error).message)); }, []);
+
+  const setP = (id: SsoProviderId, patch: Partial<SsoProviderInput>) =>
+    setForm((f) => ({ ...f, providers: { ...f.providers, [id]: { ...f.providers[id], ...patch } } }));
+  const save = async () => {
+    setErr(null); setSaving(true);
+    try { apply(await api.saveSso(form)); setMsg("SSO設定を保存しました"); setTimeout(() => setMsg(null), 2500); }
+    catch (e) { setErr((e as Error).message); }
+    finally { setSaving(false); }
+  };
+  // 保存前でもIdPに登録するリダイレクトURIが分かるよう、入力中の公開URLから組み立てて見せる
+  const redirectOf = (id: SsoProviderId) => `${form.public_url.replace(/\/+$/, "")}/api/sso/${id}/callback`;
+
+  const providerCard = (id: SsoProviderId) => {
+    const p = form.providers[id];
+    const s = st?.providers[id];
+    return (
+      <div className="col-md-6" key={id}>
+        <div className="card card-sm h-100">
+          <div className="card-body">
+            <div className="d-flex align-items-center mb-2">
+              <strong>{id === "google" ? "Google Workspace" : "Microsoft 365（Entra ID）"}</strong>
+              {s?.ready
+                ? <span className="badge bg-green-lt ms-2">ログイン画面に表示中</span>
+                : <span className="badge bg-secondary-lt ms-2">未使用</span>}
+              <label className="form-check form-switch mb-0 ms-auto">
+                <input className="form-check-input" type="checkbox" checked={p.enabled}
+                  onChange={(e) => setP(id, { enabled: e.target.checked })} />
+                <span className="form-check-label">有効</span>
+              </label>
+            </div>
+            {id === "google" ? (
+              <div className="mb-2">
+                <label className="form-label">許可するドメイン（カンマ区切り・必須）</label>
+                <input className="form-control" placeholder="example.co.jp" value={p.domains}
+                  onChange={(e) => setP(id, { domains: e.target.value })} />
+                <div className="form-hint">Google Workspaceのドメイン。個人のGoogleアカウント（gmail.com）ではログインできません。</div>
+              </div>
+            ) : (
+              <div className="mb-2">
+                <label className="form-label">テナント（必須）</label>
+                <input className="form-control" placeholder="テナントID（GUID）または xxx.onmicrosoft.com" value={p.tenant}
+                  onChange={(e) => setP(id, { tenant: e.target.value })} />
+                <div className="form-hint">このテナント（組織）のアカウントだけがログインできます。個人のMicrosoftアカウントは不可。</div>
+              </div>
+            )}
+            <div className="mb-2">
+              <label className="form-label">クライアントID</label>
+              <input className="form-control" value={p.client_id} onChange={(e) => setP(id, { client_id: e.target.value })} />
+            </div>
+            <div className="mb-2">
+              <label className="form-label">
+                クライアントシークレット {s?.has_secret && <span className="text-secondary small">（設定済み・変更時のみ入力）</span>}
+              </label>
+              <input className="form-control" type="password" autoComplete="new-password" value={p.client_secret}
+                onChange={(e) => setP(id, { client_secret: e.target.value })} />
+            </div>
+            <div>
+              <label className="form-label">リダイレクトURI（{id === "google" ? "Google Cloud" : "Entra ID"}側に登録する値）</label>
+              <input className="form-control form-control-sm font-monospace" readOnly value={redirectOf(id)}
+                onFocus={(e) => e.target.select()} />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <>
+      <h4 className="mb-1">SSO（Google Workspace / Microsoft 365）</h4>
+      <div className="text-secondary small mb-3">
+        有効にするとログイン画面にボタンが出ます。本人確認とMFA（多要素認証）はGoogle / Microsoft側で行われるため、
+        <strong>IdP側でMFAを必須にしてください</strong>。SSOでログインできるのは、ユーザー管理画面で
+        「SSO」として登録したユーザーだけです（自動作成はしません）。この管理パネルの入口はSSOの対象外です。
+      </div>
+      {err && <div className="alert alert-danger py-2">{err}</div>}
+      {msg && <div className="alert alert-success py-2">{msg}</div>}
+      <div className="mb-3">
+        <label className="form-label">公開URL（利用者がブラウザで開くURL）</label>
+        <input className="form-control" placeholder="https://logseeker.example.com" value={form.public_url}
+          onChange={(e) => setForm({ ...form, public_url: e.target.value })} />
+        <div className="form-hint">リダイレクトURIの組み立てに使います。本番はhttpsにしてください。</div>
+      </div>
+      <div className="row g-3">
+        {providerCard("google")}
+        {providerCard("microsoft")}
+      </div>
+      <button className="btn btn-primary mt-3" disabled={saving} onClick={save}>
+        {saving ? "保存中…" : "SSO設定を保存"}
+      </button>
+    </>
   );
 }
 

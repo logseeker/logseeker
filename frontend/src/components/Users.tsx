@@ -19,8 +19,11 @@ export function Users({ auth, onChanged }: { auth: AuthStatus; onChanged: () => 
   // メール通知が有効なら「メールアドレス必須・パスワードは自動生成してメール送信」、
   // 無効なら従来通り「初期パスワードを管理者が手入力」に切り替える。
   const [emailEnabled, setEmailEnabled] = useState(false);
-  const [nu, setNu] = useState({ username: "", display_name: "", role: "viewer" as Role, email: "", password: "" });
+  const EMPTY_NU = { username: "", display_name: "", role: "viewer" as Role, email: "", password: "",
+                     auth_method: "password" as "password" | "sso" };
+  const [nu, setNu] = useState(EMPTY_NU);
   const [created, setCreated] = useState<CreateUserResult | null>(null);
+  const isSsoNew = nu.auth_method === "sso";
 
   // sysadmin は viewer/editor のみ扱える。admin は全部。
   const assignable = ROLE_OPTS.filter((r) => isAdmin || r.v === "viewer" || r.v === "editor");
@@ -36,11 +39,21 @@ export function Users({ auth, onChanged }: { auth: AuthStatus; onChanged: () => 
   };
 
   const create = () => guard(async () => {
-    const r = await api.createUser(nu);
-    setNu({ username: "", display_name: "", role: "viewer", email: "", password: "" });
-    if (emailEnabled) setCreated(r); else flash("ユーザーを作成しました");
+    const r = await api.createUser(isSsoNew ? { ...nu, password: undefined } : nu);
+    setNu(EMPTY_NU);
+    if (r.email_sent) setCreated(r); else flash("ユーザーを作成しました");
   });
-  const canCreate = nu.username && (emailEnabled ? nu.email : nu.password);
+  const canCreate = nu.username && (isSsoNew || emailEnabled ? nu.email : nu.password);
+
+  const ssoLabel = (u: AuthUser) => u.sso_provider === "google" ? "Google" : u.sso_provider === "microsoft" ? "Microsoft 365" : null;
+  const changeEmail = (u: AuthUser) => {
+    const v = prompt(`「${u.username}」のSSOメールアドレス（変更するとSSOの紐付けを解除し、次回ログイン時に新しいアドレスで照合します）`, u.email ?? "");
+    if (v && v.trim() !== u.email) guard(async () => { await api.updateUser(u.id, { email: v.trim() }); flash("メールアドレスを変更しました"); });
+  };
+  const unlink = (u: AuthUser) => {
+    if (confirm(`「${u.username}」のSSO紐付け（${ssoLabel(u)}）を解除しますか？\n次回SSOログイン時に、登録メールアドレスで再度紐付けます。`))
+      guard(async () => { await api.updateUser(u.id, { sso_unlink: true }); flash("紐付けを解除しました"); });
+  };
 
   return (
     <div className="row row-cards">
@@ -70,8 +83,14 @@ export function Users({ auth, onChanged }: { auth: AuthStatus; onChanged: () => 
                     <tr key={u.id}>
                       <td className="text-nowrap">
                         {u.username}
-                        {u.is_sso && <span className="badge bg-azure-lt ms-1">SSO</span>}
+                        {u.is_sso && (
+                          <span className="badge bg-azure-lt ms-1"
+                            title={ssoLabel(u) ? `${ssoLabel(u)} のアカウントに紐付け済み` : "まだ一度もSSOでログインしていません"}>
+                            SSO{ssoLabel(u) ? `（${ssoLabel(u)}）` : "（未ログイン）"}
+                          </span>
+                        )}
                         {me?.id === u.id && <span className="badge bg-blue-lt ms-1">自分</span>}
+                        {u.is_sso && <div className="text-secondary small">{u.email}</div>}
                       </td>
                       <td>{u.display_name ?? "-"}</td>
                       <td>
@@ -93,10 +112,23 @@ export function Users({ auth, onChanged }: { auth: AuthStatus; onChanged: () => 
                       </td>
                       <td className="text-secondary small">{u.last_login_at ? fmtTime(u.last_login_at) : "-"}</td>
                       <td className="text-end">
-                        <button className="btn btn-sm" disabled={!canManage}
-                          onClick={() => { const p = prompt(`「${u.username}」の新しいパスワード`); if (p) guard(async () => { await api.updateUser(u.id, { password: p }); flash("パスワードを再設定しました"); }); }}>
-                          パスワード再設定
-                        </button>
+                        {u.is_sso ? (
+                          <>
+                            <button className="btn btn-sm" disabled={!canManage} onClick={() => changeEmail(u)}>
+                              メール変更
+                            </button>
+                            {u.sso_provider && (
+                              <button className="btn btn-sm ms-1" disabled={!canManage} onClick={() => unlink(u)}>
+                                紐付け解除
+                              </button>
+                            )}
+                          </>
+                        ) : (
+                          <button className="btn btn-sm" disabled={!canManage}
+                            onClick={() => { const p = prompt(`「${u.username}」の新しいパスワード`); if (p) guard(async () => { await api.updateUser(u.id, { password: p }); flash("パスワードを再設定しました"); }); }}>
+                            パスワード再設定
+                          </button>
+                        )}
                         <button className="btn btn-sm btn-outline-danger ms-1"
                           disabled={!canManage || me?.id === u.id}
                           onClick={() => { if (confirm(`「${u.username}」を削除しますか？`)) guard(async () => { await api.deleteUser(u.id); flash("削除しました"); }); }}>
@@ -123,6 +155,16 @@ export function Users({ auth, onChanged }: { auth: AuthStatus; onChanged: () => 
               </div>
             )}
             <div className="row g-2">
+              <div className="col-12">
+                <label className="form-label">認証方式</label>
+                <div className="btn-group" role="group">
+                  {([["password", "パスワード"], ["sso", "SSO（Google / Microsoft 365）"]] as const).map(([v, label]) => (
+                    <button key={v} type="button"
+                      className={`btn btn-sm ${nu.auth_method === v ? "btn-primary" : "btn-outline-secondary"}`}
+                      onClick={() => setNu({ ...nu, auth_method: v })}>{label}</button>
+                  ))}
+                </div>
+              </div>
               <div className="col-md-4">
                 <label className="form-label">ユーザー名</label>
                 <input className="form-control" value={nu.username} onChange={(e) => setNu({ ...nu, username: e.target.value })} />
@@ -131,7 +173,13 @@ export function Users({ auth, onChanged }: { auth: AuthStatus; onChanged: () => 
                 <label className="form-label">表示名（任意）</label>
                 <input className="form-control" value={nu.display_name} onChange={(e) => setNu({ ...nu, display_name: e.target.value })} />
               </div>
-              {emailEnabled ? (
+              {isSsoNew ? (
+                <div className="col-md-4">
+                  <label className="form-label">SSOのメールアドレス</label>
+                  <input className="form-control" type="email" placeholder="例: taro@example.co.jp"
+                    value={nu.email} onChange={(e) => setNu({ ...nu, email: e.target.value })} />
+                </div>
+              ) : emailEnabled ? (
                 <div className="col-md-4">
                   <label className="form-label">メールアドレス</label>
                   <input className="form-control" type="email" placeholder="仮パスワードを送信します"
@@ -154,7 +202,9 @@ export function Users({ auth, onChanged }: { auth: AuthStatus; onChanged: () => 
               </div>
             </div>
             <div className="text-secondary small mt-2">
-              {emailEnabled
+              {isSsoNew
+                ? "SSOユーザーはパスワードを持ちません。本人がGoogle / Microsoft 365でログインした時、このメールアドレス（IdPのログインID）と一致すれば紐付けます。管理パネルの「SSO」設定が有効になっている必要があります。"
+                : emailEnabled
                 ? "メール通知が有効なため、初期パスワードは自動生成してメールアドレス宛にのみ送信します（画面には表示されません）。"
                 : "メール通知が無効なため、初期パスワードを直接入力してください。「通知」画面でメール通知を有効にすると、メールアドレス指定に切り替わります。"}
             </div>

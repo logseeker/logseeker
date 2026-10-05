@@ -52,13 +52,17 @@ class UserCreate(BaseModel):
     # 無効なサーバーでは password 必須（従来通り管理者が手入力）。どちらが必須かは実行時に判定。
     email: str | None = None
     password: str | None = None
+    # "sso" ならパスワードを持たないSSO専用ユーザー（email 必須・初回SSOログインで紐付け）。
+    auth_method: str = "password"
 
 
 class UserUpdate(BaseModel):
     display_name: str | None = None
     role: str | None = None
     enabled: bool | None = None
-    password: str | None = None   # 指定時のみ変更
+    password: str | None = None   # 指定時のみ変更（SSOユーザーには不可）
+    email: str | None = None      # SSOユーザーのみ。変更すると紐付けを解除し、次回SSOログインで再照合する
+    sso_unlink: bool = False      # SSOの紐付けだけを解除する（IdP側でアカウントを作り直した場合など）
 
 
 class AuthToggle(BaseModel):
@@ -112,14 +116,21 @@ class SilenceSettings(BaseModel):
     hours: int = 24
 
 
-class SSOConfig(BaseModel):
+class SSOProviderConfig(BaseModel):
     enabled: bool = False
-    issuer: str = ""
     client_id: str = ""
     client_secret: str = ""       # 空なら既存維持
-    redirect_uri: str = ""
-    allowed_domains: str = ""
-    auto_provision_role: str = "viewer"
+    domains: str = ""             # Googleのみ: 許可するWorkspaceドメイン（カンマ区切り）
+    tenant: str = ""              # Microsoftのみ: テナントID（GUID）または xxx.onmicrosoft.com
+
+
+class SSOConfig(BaseModel):
+    public_url: str = ""          # 例 https://logseeker.example.com（redirect_uri の組み立てに使う）
+    providers: dict[str, SSOProviderConfig] = {}
+
+
+class SsoExchange(BaseModel):
+    code: str
 
 
 class DismissedRelease(BaseModel):

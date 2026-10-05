@@ -330,13 +330,18 @@ class Setting(Base):
 
 class User(Base):
     """ログインユーザー。role: viewer/editor/sysadmin/admin（Linuxのuser/sudo/rootに対応）。
-    ローカル認証は password_hash(pbkdf2)。SSOユーザーは sso_subject を持ち password_hash は空。"""
+    auth_method='password' はローカル認証（password_hash は pbkdf2）。
+    auth_method='sso' はSSO専用で password_hash は空（パスワードではログインできない）。
+    SSOユーザーは管理者が email 付きで作成し、初回SSOログイン時に sso_provider/sso_subject を紐付ける（sso.py）。"""
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     username: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     display_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     role: Mapped[str] = mapped_column(String(16), default="viewer")  # viewer/editor/sysadmin/admin
+    auth_method: Mapped[str] = mapped_column(String(16), default="password", server_default="password")
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)  # SSOの初回照合に使う
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sso_provider: Mapped[str | None] = mapped_column(String(16), nullable=True)  # google / microsoft
     sso_subject: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)  # OIDC sub
     enabled: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
@@ -363,6 +368,23 @@ class AuthSession(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class SsoLoginState(Base):
+    """SSOログイン途中の一回限りの値（sso.py）。kind='auth' はIdPへ送ったstate、
+    kind='exchange' はコールバック後にフロントへ渡す交換コード。どちらも値そのものは保存せずハッシュのみ。
+    取り出した時点で削除し、期限切れは次回ログイン開始時に掃除する。"""
+    __tablename__ = "sso_login_states"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(16))
+    state_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    binding_hash: Mapped[str] = mapped_column(String(64))  # ブラウザ束縛Cookie値のハッシュ
+    provider: Mapped[str] = mapped_column(String(16))
+    nonce: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    code_verifier: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class AuditLog(Base):

@@ -85,7 +85,7 @@ SaaS/マネージドホスティングとしての第三者提供、著作権表
 | [INSTALL-pgadmin.md](INSTALL-pgadmin.md) | **インストール手順（pgAdminあり）**。上記と同内容＋Apache一本化・pgAdmin 4セットアップ |
 | [docs/usage.md](docs/usage.md) | **使い方マニュアル**。どんなログでも相関/検知が効くか、NXLogからTCP送信する方法など |
 | [docs/auth.md](docs/auth.md) | ログイン・ユーザー管理・ロール(RBAC)・監査ログの仕組みと有効化手順 |
-| [docs/sso.md](docs/sso.md) | SSO(OIDC)の実現可否・設計・実装手順（現状は設定保管のみ、実接続は今後） |
+| [docs/sso.md](docs/sso.md) | SSO（Google Workspace / Microsoft 365）の設定手順・仕組み |
 | [docs/licensing.md](docs/licensing.md) | ライセンス（データ保持期間の延長）の詳細 |
 | [docs/retention.md](docs/retention.md) | データ保持期間（既定90日）と延長方法（拡張ライセンス） |
 | [docs/geoip.md](docs/geoip.md) | GeoIP（国コード表示・海外アクセス検知）の有効化手順（無料） |

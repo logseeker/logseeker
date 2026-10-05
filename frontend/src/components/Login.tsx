@@ -2,14 +2,31 @@ import { useState } from "react";
 import { api, tokenStore } from "../api";
 import type { AuthUser, SsoStatus } from "../types";
 
-export function Login({ onLoggedIn, sso }: {
+// SSO失敗時の理由コード（backend: sso.py の SsoError.reason）→ 利用者向けの説明
+const SSO_ERRORS: Record<string, string> = {
+  not_registered: "このアカウントはLogSeekerに登録されていません。管理者にSSOユーザーとしての登録を依頼してください。",
+  ambiguous: "このメールアドレスに一致するユーザーが複数あります。管理者に連絡してください。",
+  domain: "このアカウントのドメインはログインを許可されていません。組織のアカウントでログインしてください。",
+  email: "アカウントのメールアドレスを確認できませんでした。",
+  disabled: "このアカウントは無効化されています。管理者に連絡してください。",
+  idp: "ログインがキャンセルされたか、ログイン先で拒否されました。",
+  state: "ログインの有効期限が切れたか、不正なリクエストです。もう一度お試しください。",
+  expired: "ログインの有効期限が切れました。もう一度お試しください。",
+  token: "ログイン先からの応答を確認できませんでした。もう一度お試しください。",
+  config: "SSOの設定に問題があります。管理者に連絡してください。",
+};
+
+export function Login({ onLoggedIn, sso, ssoError }: {
   onLoggedIn: (u: AuthUser) => void;
   sso?: SsoStatus;
+  ssoError?: string | null;
 }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [err, setErr] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(
+    ssoError ? (SSO_ERRORS[ssoError] ?? "SSOでのログインに失敗しました。") : null);
   const [busy, setBusy] = useState(false);
+  const providers = sso?.providers ?? [];
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -36,10 +53,21 @@ export function Login({ onLoggedIn, sso }: {
           <div className="card-body">
             <h2 className="h3 text-center mb-3">アカウントにログイン</h2>
             {err && <div className="alert alert-danger py-2">{err}</div>}
+            {providers.length > 0 && (
+              <>
+                {/* ブラウザの画面遷移でIdPへ移る（fetchではない）。戻りは /?sso_code=... → App が交換する */}
+                {providers.map((p) => (
+                  <a key={p.id} className="btn btn-outline-secondary w-100 mb-2" href={`/api/sso/${p.id}/login`}>
+                    {p.label} でログイン
+                  </a>
+                ))}
+                <div className="hr-text my-3">またはパスワードで</div>
+              </>
+            )}
             <div className="mb-3">
               <label className="form-label" htmlFor="login-username">ユーザー名</label>
               <input className="form-control" id="login-username" name="username"
-                autoComplete="username" value={username} autoFocus
+                autoComplete="username" value={username} autoFocus={providers.length === 0}
                 onChange={(e) => setUsername(e.target.value)} />
             </div>
             <div className="mb-3">
@@ -53,13 +81,6 @@ export function Login({ onLoggedIn, sso }: {
                 {busy ? "確認中…" : "ログイン"}
               </button>
             </div>
-            {sso?.enabled && sso?.configured && (
-              <div className="text-center mt-3">
-                {sso.implemented
-                  ? <a className="btn btn-outline-secondary w-100" href="/api/sso/login">SSOでログイン</a>
-                  : <span className="text-secondary small">SSOは設定済みですが現バージョンでは未接続です</span>}
-              </div>
-            )}
           </div>
         </form>
         <div className="text-center mt-3">

@@ -244,17 +244,28 @@ export interface IocFeedsInfo {
 export type Role = "viewer" | "editor" | "sysadmin" | "admin";
 export interface AuthUser {
   id: number; username: string; display_name: string | null;
-  role: Role; role_label: string; enabled: boolean; is_sso: boolean;
+  role: Role; role_label: string; enabled: boolean;
+  auth_method: "password" | "sso"; is_sso: boolean;
+  email: string | null;
+  sso_provider: SsoProviderId | null;   // SSOユーザーで null = まだ一度もSSOログインしていない（未紐付け）
   created_at: string | null; last_login_at: string | null;
 }
 export interface CreateUserResult extends AuthUser {
   email_sent: boolean | null;     // true=仮パスワードをメール送信 / null=メール通知が無効なため対象外
 }
-export interface SsoStatus {
-  enabled: boolean; configured: boolean; issuer: string; client_id: string;
-  has_secret: boolean; redirect_uri: string; allowed_domains: string;
-  auto_provision_role: string; implemented: boolean;
+export type SsoProviderId = "google" | "microsoft";
+// ログイン画面に出すSSOボタン（有効かつ設定が揃ったIdPのみ）
+export interface SsoStatus { providers: { id: SsoProviderId; label: string }[]; }
+// 管理パネルのSSO設定（client_secret は返らない。has_secret で設定済みかだけ分かる）
+export interface SsoProviderAdmin {
+  label: string; enabled: boolean; client_id: string; has_secret: boolean;
+  redirect_uri: string; ready: boolean;
+  domains?: string;   // Googleのみ
+  tenant?: string;    // Microsoftのみ
 }
+export interface SsoAdminStatus { public_url: string; providers: Record<SsoProviderId, SsoProviderAdmin>; }
+export interface SsoProviderInput { enabled: boolean; client_id: string; client_secret: string; domains?: string; tenant?: string; }
+export interface SsoAdminInput { public_url: string; providers: Record<SsoProviderId, SsoProviderInput>; }
 export interface AuthStatus {
   auth_required: boolean;
   user: AuthUser | null;
