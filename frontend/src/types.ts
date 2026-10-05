@@ -248,11 +248,15 @@ export interface AuthUser {
   auth_method: "password" | "sso"; is_sso: boolean;
   email: string | null;
   sso_provider: SsoProviderId | null;   // SSOユーザーで null = まだ一度もSSOログインしていない（未紐付け）
+  mfa_enabled: boolean;                 // 管理者（パスワード認証）のみ意味を持つ
   created_at: string | null; last_login_at: string | null;
 }
 export interface CreateUserResult extends AuthUser {
   email_sent: boolean | null;     // true=仮パスワードをメール送信 / null=メール通知が無効なため対象外
 }
+// パスワードログイン（管理者）の1段階目の結果。セッションはMFAを通るまで出ない。
+export interface MfaChallenge { mfa_token: string; mfa: "verify" | "setup"; }
+export interface MfaSetupInfo { secret: string; otpauth_uri: string; qr_svg: string; }
 export type SsoProviderId = "google" | "microsoft";
 // ログイン画面に出すSSOボタン（有効かつ設定が揃ったIdPのみ）
 export interface SsoStatus { providers: { id: SsoProviderId; label: string }[]; }

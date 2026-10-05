@@ -48,12 +48,20 @@ class UserCreate(BaseModel):
     username: str
     display_name: str | None = None
     role: str = "viewer"          # viewer/editor/sysadmin/admin
-    # メール通知が有効なサーバーでは email 必須・ランダム仮パスワードを送信（password は無視）。
-    # 無効なサーバーでは password 必須（従来通り管理者が手入力）。どちらが必須かは実行時に判定。
+    # 認証方式はロールで決まる。管理者以外 → SSOユーザー（email 必須・IdPのログインIDで招待）。
+    # 管理者 → パスワード。メール通知が有効なサーバーでは email 必須・ランダム仮パスワードを送信
+    # （password は無視）。無効なサーバーでは password 必須（管理者が手入力）。
     email: str | None = None
     password: str | None = None
-    # "sso" ならパスワードを持たないSSO専用ユーザー（email 必須・初回SSOログインで紐付け）。
-    auth_method: str = "password"
+
+
+class MfaToken(BaseModel):
+    mfa_token: str
+
+
+class MfaCode(BaseModel):
+    mfa_token: str
+    code: str                     # 認証アプリの6桁、またはリカバリーコード
 
 
 class UserUpdate(BaseModel):
@@ -63,6 +71,7 @@ class UserUpdate(BaseModel):
     password: str | None = None   # 指定時のみ変更（SSOユーザーには不可）
     email: str | None = None      # SSOユーザーのみ。変更すると紐付けを解除し、次回SSOログインで再照合する
     sso_unlink: bool = False      # SSOの紐付けだけを解除する（IdP側でアカウントを作り直した場合など）
+    mfa_reset: bool = False       # 管理者のMFAを未設定に戻す（端末紛失時。次回ログインで再登録）
 
 
 class AuthToggle(BaseModel):

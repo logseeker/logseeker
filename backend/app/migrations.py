@@ -152,6 +152,7 @@ def run(db: Session) -> None:
     _add_user_settings_events_columns(db)
     _move_normalized_into_events(db)
     _add_user_sso_columns(db)
+    _add_user_mfa_columns(db)
     log.info("case/incident management migrations: done.")
 
 
@@ -171,6 +172,18 @@ def _add_user_sso_columns(db: Session) -> None:
     db.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_users_sso_identity ON users (sso_provider, sso_subject) "
                     "WHERE sso_subject IS NOT NULL"))
     db.execute(text("DELETE FROM settings WHERE key = ANY(:k)"), {"k": list(_LEGACY_SSO_KEYS)})
+    db.commit()
+
+
+def _add_user_mfa_columns(db: Session) -> None:
+    """管理者MFA（TOTP）用の users 列（mfa.py）。既存の管理者は未設定＝次回ログイン時に登録を求められる。"""
+    if not _table_exists(db, "users"):
+        return
+    db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret TEXT"))
+    db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_last_step BIGINT"))
+    db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_recovery_codes TEXT"))
+    db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_fail_count INTEGER NOT NULL DEFAULT 0"))
+    db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_locked_until TIMESTAMPTZ"))
     db.commit()
 
 

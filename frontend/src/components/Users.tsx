@@ -7,7 +7,7 @@ const ROLE_OPTS: { v: Role; label: string; desc: string }[] = [
   { v: "viewer", label: "閲覧者", desc: "閲覧・ダウンロード" },
   { v: "editor", label: "編集者", desc: "+ インシデント/コメント作成" },
   { v: "sysadmin", label: "システム管理者", desc: "+ ライセンス/通知/IOC/API・監査閲覧・一般ユーザー作成" },
-  { v: "admin", label: "管理者", desc: "+ 全ユーザー管理・昇格・認証ON/OFF・SSO" },
+  { v: "admin", label: "管理者", desc: "+ 全ユーザー管理・昇格・認証ON/OFF・SSO（ID／パスワード＋2段階認証）" },
 ];
 
 export function Users({ auth, onChanged }: { auth: AuthStatus; onChanged: () => void }) {
@@ -19,11 +19,11 @@ export function Users({ auth, onChanged }: { auth: AuthStatus; onChanged: () => 
   // メール通知が有効なら「メールアドレス必須・パスワードは自動生成してメール送信」、
   // 無効なら従来通り「初期パスワードを管理者が手入力」に切り替える。
   const [emailEnabled, setEmailEnabled] = useState(false);
-  const EMPTY_NU = { username: "", display_name: "", role: "viewer" as Role, email: "", password: "",
-                     auth_method: "password" as "password" | "sso" };
+  const EMPTY_NU = { username: "", display_name: "", role: "viewer" as Role, email: "", password: "" };
   const [nu, setNu] = useState(EMPTY_NU);
   const [created, setCreated] = useState<CreateUserResult | null>(null);
-  const isSsoNew = nu.auth_method === "sso";
+  // 認証方式はロールで決まる: 管理者 → ID/パスワード＋2段階認証、それ以外 → SSO（招待制）
+  const isSsoNew = nu.role !== "admin";
 
   // sysadmin は viewer/editor のみ扱える。admin は全部。
   const assignable = ROLE_OPTS.filter((r) => isAdmin || r.v === "viewer" || r.v === "editor");
@@ -53,6 +53,10 @@ export function Users({ auth, onChanged }: { auth: AuthStatus; onChanged: () => 
   const unlink = (u: AuthUser) => {
     if (confirm(`「${u.username}」のSSO紐付け（${ssoLabel(u)}）を解除しますか？\n次回SSOログイン時に、登録メールアドレスで再度紐付けます。`))
       guard(async () => { await api.updateUser(u.id, { sso_unlink: true }); flash("紐付けを解除しました"); });
+  };
+  const resetMfa = (u: AuthUser) => {
+    if (confirm(`「${u.username}」の2段階認証をリセットしますか？\nスマートフォンの紛失・機種変更時に使います。次回ログイン時に認証アプリの再登録を求めます。`))
+      guard(async () => { await api.updateUser(u.id, { mfa_reset: true }); flash("2段階認証をリセットしました"); });
   };
 
   return (
@@ -89,18 +93,26 @@ export function Users({ auth, onChanged }: { auth: AuthStatus; onChanged: () => 
                             SSO{ssoLabel(u) ? `（${ssoLabel(u)}）` : "（未ログイン）"}
                           </span>
                         )}
+                        {!u.is_sso && (u.mfa_enabled
+                          ? <span className="badge bg-green-lt ms-1">2段階認証</span>
+                          : <span className="badge bg-yellow-lt ms-1" title="次回ログイン時に認証アプリの登録を求めます">2段階認証 未登録</span>)}
                         {me?.id === u.id && <span className="badge bg-blue-lt ms-1">自分</span>}
                         {u.is_sso && <div className="text-secondary small">{u.email}</div>}
                       </td>
                       <td>{u.display_name ?? "-"}</td>
                       <td>
-                        <select className="form-select form-select-sm w-auto" value={u.role}
-                          disabled={!canManage}
-                          onChange={(e) => guard(async () => { await api.updateUser(u.id, { role: e.target.value as Role }); flash("ロールを変更しました"); })}>
-                          {assignable.map((r) => (
-                            <option key={r.v} value={r.v}>{r.label}</option>
-                          ))}
-                        </select>
+                        {u.is_sso ? (
+                          <select className="form-select form-select-sm w-auto" value={u.role}
+                            disabled={!canManage}
+                            onChange={(e) => guard(async () => { await api.updateUser(u.id, { role: e.target.value as Role }); flash("ロールを変更しました"); })}>
+                            {/* SSOユーザーは管理者にできない（管理者はID/パスワード＋2段階認証の別アカウント） */}
+                            {assignable.filter((r) => r.v !== "admin").map((r) => (
+                              <option key={r.v} value={r.v}>{r.label}</option>
+                            ))}
+                          </select>
+                        ) : (
+                          <span title="ID／パスワードのアカウントは管理者専用です">{u.role_label}</span>
+                        )}
                       </td>
                       <td>
                         <label className="form-check form-switch mb-0">
@@ -124,10 +136,17 @@ export function Users({ auth, onChanged }: { auth: AuthStatus; onChanged: () => 
                             )}
                           </>
                         ) : (
-                          <button className="btn btn-sm" disabled={!canManage}
-                            onClick={() => { const p = prompt(`「${u.username}」の新しいパスワード`); if (p) guard(async () => { await api.updateUser(u.id, { password: p }); flash("パスワードを再設定しました"); }); }}>
-                            パスワード再設定
-                          </button>
+                          <>
+                            <button className="btn btn-sm" disabled={!canManage}
+                              onClick={() => { const p = prompt(`「${u.username}」の新しいパスワード`); if (p) guard(async () => { await api.updateUser(u.id, { password: p }); flash("パスワードを再設定しました"); }); }}>
+                              パスワード再設定
+                            </button>
+                            {u.mfa_enabled && (
+                              <button className="btn btn-sm ms-1" disabled={!isAdmin} onClick={() => resetMfa(u)}>
+                                2段階認証リセット
+                              </button>
+                            )}
+                          </>
                         )}
                         <button className="btn btn-sm btn-outline-danger ms-1"
                           disabled={!canManage || me?.id === u.id}
@@ -156,13 +175,14 @@ export function Users({ auth, onChanged }: { auth: AuthStatus; onChanged: () => 
             )}
             <div className="row g-2">
               <div className="col-12">
-                <label className="form-label">認証方式</label>
-                <div className="btn-group" role="group">
-                  {([["password", "パスワード"], ["sso", "SSO（Google / Microsoft 365）"]] as const).map(([v, label]) => (
-                    <button key={v} type="button"
-                      className={`btn btn-sm ${nu.auth_method === v ? "btn-primary" : "btn-outline-secondary"}`}
-                      onClick={() => setNu({ ...nu, auth_method: v })}>{label}</button>
-                  ))}
+                <label className="form-label">ロール</label>
+                <select className="form-select" value={nu.role} onChange={(e) => setNu({ ...nu, role: e.target.value as Role })}>
+                  {assignable.map((r) => <option key={r.v} value={r.v}>{r.label} — {r.desc}</option>)}
+                </select>
+                <div className="form-hint">
+                  {isSsoNew
+                    ? "ログイン方法: SSO（Google Workspace / Microsoft 365）。パスワードは持ちません。"
+                    : "ログイン方法: ID／パスワード＋2段階認証（初回ログイン時に認証アプリを登録）。"}
                 </div>
               </div>
               <div className="col-md-4">
@@ -191,19 +211,13 @@ export function Users({ auth, onChanged }: { auth: AuthStatus; onChanged: () => 
                   <input className="form-control" type="text" value={nu.password} onChange={(e) => setNu({ ...nu, password: e.target.value })} />
                 </div>
               )}
-              <div className="col-md-8">
-                <label className="form-label">ロール</label>
-                <select className="form-select" value={nu.role} onChange={(e) => setNu({ ...nu, role: e.target.value as Role })}>
-                  {assignable.map((r) => <option key={r.v} value={r.v}>{r.label} — {r.desc}</option>)}
-                </select>
-              </div>
-              <div className="col-md-4 d-flex align-items-end">
+              <div className="col-md-4 ms-auto d-flex align-items-end">
                 <button className="btn btn-primary w-100" disabled={!canCreate} onClick={create}>作成</button>
               </div>
             </div>
             <div className="text-secondary small mt-2">
               {isSsoNew
-                ? "SSOユーザーはパスワードを持ちません。本人がGoogle / Microsoft 365でログインした時、このメールアドレス（IdPのログインID）と一致すれば紐付けます。管理パネルの「SSO」設定が有効になっている必要があります。"
+                ? "招待制です。本人がGoogle / Microsoft 365でログインした時、このメールアドレス（IdPのログインID）と一致すれば紐付けます。管理パネルの「SSO」設定が有効になっている必要があります。"
                 : emailEnabled
                 ? "メール通知が有効なため、初期パスワードは自動生成してメールアドレス宛にのみ送信します（画面には表示されません）。"
                 : "メール通知が無効なため、初期パスワードを直接入力してください。「通知」画面でメール通知を有効にすると、メールアドレス指定に切り替わります。"}

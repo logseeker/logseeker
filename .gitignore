@@ -52,3 +52,7 @@ docs/taxonomy.md
 docs/normalize-mapping.md
 tsconfig.tsbuildinfo
 frontend/tsconfig.tsbuildinfo
+
+# 管理者MFA（TOTP）シークレットの暗号鍵（backend/app/mfa.py）。DBとは別に保管すること
+backend/.mfa_key
+.mfa_key

@@ -330,8 +330,8 @@ class Setting(Base):
 
 class User(Base):
     """ログインユーザー。role: viewer/editor/sysadmin/admin（Linuxのuser/sudo/rootに対応）。
-    auth_method='password' はローカル認証（password_hash は pbkdf2）。
-    auth_method='sso' はSSO専用で password_hash は空（パスワードではログインできない）。
+    auth_method='password' はローカル認証（password_hash は pbkdf2）。管理者(admin)ロール専用で、TOTPによるMFA必須（mfa.py）。
+    auth_method='sso' はSSO専用で password_hash は空（パスワードではログインできない）。管理者以外は全員こちら。
     SSOユーザーは管理者が email 付きで作成し、初回SSOログイン時に sso_provider/sso_subject を紐付ける（sso.py）。"""
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -343,6 +343,12 @@ class User(Base):
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     sso_provider: Mapped[str | None] = mapped_column(String(16), nullable=True)  # google / microsoft
     sso_subject: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)  # OIDC sub
+    # MFA（TOTP）。totp_secret は暗号化済み（mfa.py）。NULL＝未設定（管理者は次回ログイン時に登録させる）。
+    totp_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
+    totp_last_step: Mapped[int | None] = mapped_column(BigInteger, nullable=True)  # 同じコードの再利用防止
+    mfa_recovery_codes: Mapped[str | None] = mapped_column(Text, nullable=True)  # sha256のJSON配列（一回限り）
+    mfa_fail_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    mfa_locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     enabled: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -383,6 +389,20 @@ class SsoLoginState(Base):
     nonce: Mapped[str | None] = mapped_column(String(128), nullable=True)
     code_verifier: Mapped[str | None] = mapped_column(String(128), nullable=True)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class MfaChallenge(Base):
+    """パスワード通過後、MFAのコード入力（または初回登録）を待っている状態（mfa.py）。
+    トークンはハッシュのみ保存。5分で失効し、成功・試行回数超過で削除する。"""
+    __tablename__ = "mfa_challenges"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    purpose: Mapped[str] = mapped_column(String(16))  # login / admin（どちらの入口から来たか）
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    pending_secret: Mapped[str | None] = mapped_column(Text, nullable=True)  # 登録中のシークレット（暗号化済み）
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 

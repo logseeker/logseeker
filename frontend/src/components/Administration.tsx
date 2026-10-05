@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { api, tokenStore } from "../api";
 import type {
-  AuthUser, IpAllowEntry, IpRestrictStatus, SsoAdminInput, SsoAdminStatus, SsoProviderId, SsoProviderInput,
+  AuthUser, IpAllowEntry, IpRestrictStatus, MfaChallenge, SsoAdminInput, SsoAdminStatus, SsoProviderId, SsoProviderInput,
 } from "../types";
+import { MfaStep } from "./MfaStep";
 
 // 通常のログイン後画面（左メニュー）とは完全に切り離した、管理者(admin)専用の管理パネル。
 // ?screen=administration でのみ到達し、左メニューには一切出さない。admin以外のロールは
@@ -16,6 +17,7 @@ export function Administration() {
   const [password, setPassword] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [mfa, setMfa] = useState<MfaChallenge | null>(null);
 
   useEffect(() => {
     if (!tokenStore.get()) { setChecking(false); return; }
@@ -32,9 +34,8 @@ export function Administration() {
     setErr(null);
     setBusy(true);
     try {
-      const r = await api.adminLogin(username.trim(), password);
-      tokenStore.set(r.token);
-      setUser(r.user);
+      setMfa(await api.adminLogin(username.trim(), password));  // パスワード通過 → 2段階目へ
+      setPassword("");
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -54,6 +55,13 @@ export function Administration() {
             <h1 className="navbar-brand-autodark mb-1">LogSeeker</h1>
             <div className="text-secondary">管理パネル</div>
           </div>
+          {mfa ? (
+            <div className="card card-md">
+              <MfaStep mfaToken={mfa.mfa_token} mode={mfa.mfa}
+                onDone={(token, u) => { tokenStore.set(token); setUser(u); setMfa(null); }}
+                onCancel={() => { setMfa(null); setErr(null); }} />
+            </div>
+          ) : (
           <form className="card card-md" onSubmit={submit}>
             <div className="card-body">
               <h2 className="h3 text-center mb-3">管理者ログイン</h2>
@@ -84,6 +92,7 @@ export function Administration() {
               </div>
             </div>
           </form>
+          )}
         </div>
       </div>
     );
@@ -245,7 +254,7 @@ function AdminSso() {
       <div className="text-secondary small mb-3">
         有効にするとログイン画面にボタンが出ます。本人確認とMFA（多要素認証）はGoogle / Microsoft側で行われるため、
         <strong>IdP側でMFAを必須にしてください</strong>。SSOでログインできるのは、ユーザー管理画面で
-        「SSO」として登録したユーザーだけです（自動作成はしません）。この管理パネルの入口はSSOの対象外です。
+        招待（登録）した管理者以外のユーザーだけです（自動作成はしません）。管理者はSSOの対象外で、ID／パスワード＋2段階認証でログインします。
       </div>
       {err && <div className="alert alert-danger py-2">{err}</div>}
       {msg && <div className="alert alert-success py-2">{msg}</div>}

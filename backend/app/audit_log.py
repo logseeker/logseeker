@@ -125,8 +125,9 @@ SKIP: set[tuple[str, str]] = {
     ("PUT", "/api/events/classes"),
     ("PUT", "/api/changelog/dismissed"),
 }
-# login/logout/SSOログイン は auth_api.py 側で直接記録している（ログイン前はトークンからユーザーを引けないため）。
-SKIP_PATHS = {"/api/auth/login", "/api/auth/admin-login", "/api/auth/logout", "/api/sso/exchange"}
+# login/logout/MFA/SSOログイン は auth_api.py 側で直接記録している（ログイン前はトークンからユーザーを引けないため）。
+SKIP_PATHS = {"/api/auth/login", "/api/auth/admin-login", "/api/auth/logout", "/api/sso/exchange",
+              "/api/auth/mfa/verify", "/api/auth/mfa/setup/start", "/api/auth/mfa/setup/confirm"}
 
 _MUTATING = {"POST", "PUT", "PATCH", "DELETE"}
 

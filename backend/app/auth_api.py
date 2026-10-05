@@ -4,6 +4,9 @@
   editor         : + インシデント/コメントの作成・編集
   sysadmin(sudo) : + ライセンス/通知/IOC/API設定・監査閲覧・(viewer/editorの)ユーザー作成
   admin(root)    : + 全ユーザー管理・sudo/root への昇格・認証ON/OFF・SSO設定
+認証方式:
+  管理者(admin)       : ID/パスワード + TOTP（MFA必須・mfa.py）。IdP障害時の非常口を兼ねる
+  それ以外のロール      : SSO（Google Workspace / Microsoft 365）のみ・招待制（sso.py）
 """
 import csv
 import io
@@ -17,10 +20,12 @@ from sqlalchemy.orm import Session
 
 from . import auth as A
 from . import audit_log as L
+from . import mfa as M
 from . import sso as S
 from .db import get_db
 from .models import AuditLog, User
-from .schema import AuthToggle, IpRestrictSave, LoginRequest, SSOConfig, SsoExchange, UserCreate, UserUpdate
+from .schema import (AuthToggle, IpRestrictSave, LoginRequest, MfaCode, MfaToken, SSOConfig, SsoExchange,
+                     UserCreate, UserUpdate)
 
 router = APIRouter(prefix="/api")
 
@@ -34,6 +39,7 @@ def _user_dict(u: User) -> dict:
         "enabled": u.enabled, "auth_method": u.auth_method or "password",
         "is_sso": u.auth_method == "sso", "email": u.email,
         "sso_provider": u.sso_provider,  # None = SSOユーザーだがまだ一度もSSOログインしていない（未紐付け）
+        "mfa_enabled": M.is_enabled(u),  # パスワード認証（管理者）のみ意味を持つ
         "created_at": u.created_at.isoformat() if u.created_at else None,
         "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
     }
@@ -63,49 +69,99 @@ def auth_status(user: User | None = Depends(A.get_current_user), db: Session = D
     }
 
 
-@router.post("/auth/login")
-def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
+# 入口ごとの監査ログの操作名とパス（MFAの段階でも同じ操作名で記録する）
+_PURPOSE = {"login": ("login", "/api/auth/login"), "admin": ("login.admin", "/api/auth/admin-login")}
+
+
+def _password_login(body: LoginRequest, request: Request, db: Session, purpose: str):
+    """パスワード確認まで（1段階目）。成功してもセッションは出さず、MFAチャレンジを返す。"""
+    action, path = _PURPOSE[purpose]
     ip = A.client_ip(request)
     u = db.execute(select(User).where(User.username == body.username)).scalar_one_or_none()
     # ユーザー名の存在有無で応答時間に差が出ない（タイミングでの存在推測を防ぐ）よう、
     # 存在しない場合もverify_password自体は必ず呼ぶ（or の短絡評価をしない）。
     pw_ok = A.verify_password(body.password, u.password_hash if u else None)
     if not u or not u.enabled or not pw_ok:
-        A.audit(db, action="login", status="failure", username=body.username,
-                method="POST", path="/api/auth/login", ip=ip,
+        A.audit(db, action=action, status="failure", username=body.username,
+                method="POST", path=path, ip=ip,
                 detail="認証失敗（ユーザー名またはパスワード不一致）")
-        return Response(status_code=401, content='{"error":"ユーザー名またはパスワードが違います"}',
-                        media_type="application/json")
-    token = A.create_session(db, u)
-    A.audit(db, action="login", status="success", user=u, method="POST",
-            path="/api/auth/login", ip=ip)
-    return {"token": token, "user": _user_dict(u)}
+        return _json_error(401, "ユーザー名またはパスワードが違います")
+    if u.role != "admin":
+        # パスワード認証は管理者専用。管理者以外（旧バージョンで作ったパスワードユーザー等）はSSOへ誘導する。
+        A.audit(db, action=action, status="failure", user=u, method="POST", path=path, ip=ip,
+                detail="role不足（パスワード認証は管理者(admin)のみ）")
+        if purpose == "admin":
+            return _json_error(403, "この画面は管理者(admin)アカウントのみ利用できます")
+        return _json_error(403, "パスワードでログインできるのは管理者のみです。Google / Microsoft 365 でログインしてください")
+    return M.start_challenge(db, u, purpose)
+
+
+@router.post("/auth/login")
+def login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
+    return _password_login(body, request, db, "login")
 
 
 @router.post("/auth/admin-login")
 def admin_login(body: LoginRequest, request: Request, db: Session = Depends(get_db)):
     """通常ログインとは別の入口。管理者(admin)ロール以外は、パスワードが正しくてもここでは
     ログインさせない（『ログイン後の通常画面』とは分離した管理パネル専用の入口のため）。"""
-    ip = A.client_ip(request)
-    u = db.execute(select(User).where(User.username == body.username)).scalar_one_or_none()
-    # ユーザー名の存在有無で応答時間に差が出ない（タイミングでの存在推測を防ぐ）よう、
-    # 存在しない場合もverify_password自体は必ず呼ぶ（or の短絡評価をしない）。
-    pw_ok = A.verify_password(body.password, u.password_hash if u else None)
-    if not u or not u.enabled or not pw_ok:
-        A.audit(db, action="login.admin", status="failure", username=body.username,
-                method="POST", path="/api/auth/admin-login", ip=ip,
-                detail="認証失敗（ユーザー名またはパスワード不一致）")
-        return Response(status_code=401, content='{"error":"ユーザー名またはパスワードが違います"}',
-                        media_type="application/json")
-    if u.role != "admin":
-        A.audit(db, action="login.admin", status="failure", user=u, method="POST",
-                path="/api/auth/admin-login", ip=ip, detail="role不足（管理者(admin)以外は拒否）")
-        return Response(status_code=403, content='{"error":"この画面は管理者(admin)アカウントのみ利用できます"}',
-                        media_type="application/json")
+    return _password_login(body, request, db, "admin")
+
+
+# ---------------- MFA（2段階目。パスワード通過後の mfa_token で呼ぶ。ログイン前でも通す） ----------------
+def _mfa_ctx(db: Session, token: str) -> tuple[str | None, str | None, str]:
+    """監査ログ用に (ユーザー名, ロール, 入口) を先に控えておく（失敗時はチャレンジが消えることがあるため）。"""
+    ch = M.peek(db, token)
+    u = db.get(User, ch.user_id) if ch else None
+    return (u.username if u else None, u.role if u else None, ch.purpose if ch else "login")
+
+
+def _mfa_error(db: Session, request: Request, e: M.MfaError, ctx: tuple) -> Response:
+    username, role, purpose = ctx
+    A.audit(db, action=_PURPOSE[purpose][0], status="failure", username=username, role=role, method="POST",
+            path=request.url.path, ip=A.client_ip(request), detail=f"MFA: {e.detail}")
+    return _json_error(e.status, e.message)
+
+
+def _mfa_success(db: Session, request: Request, u: User, purpose: str, how: str, extra: dict | None = None):
+    action, path = _PURPOSE[purpose]
     token = A.create_session(db, u)
-    A.audit(db, action="login.admin", status="success", user=u, method="POST",
-            path="/api/auth/admin-login", ip=ip)
-    return {"token": token, "user": _user_dict(u)}
+    A.audit(db, action=action, status="success", user=u, method="POST", path=path,
+            ip=A.client_ip(request), detail=f"MFA: {how}")
+    return {"token": token, "user": _user_dict(u), **(extra or {})}
+
+
+@router.post("/auth/mfa/verify")
+def mfa_verify(body: MfaCode, request: Request, db: Session = Depends(get_db)):
+    ctx = _mfa_ctx(db, body.mfa_token)
+    try:
+        u, purpose, used_recovery = M.verify(db, body.mfa_token, body.code)
+    except M.MfaError as e:
+        return _mfa_error(db, request, e, ctx)
+    left = M.remaining_recovery_codes(u)
+    how = f"リカバリーコード（残り{left}個）" if used_recovery else "確認コード"
+    return _mfa_success(db, request, u, purpose, how,
+                        {"recovery_codes_left": left} if used_recovery else None)
+
+
+@router.post("/auth/mfa/setup/start")
+def mfa_setup_start(body: MfaToken, request: Request, db: Session = Depends(get_db)):
+    ctx = _mfa_ctx(db, body.mfa_token)
+    try:
+        return M.setup_start(db, body.mfa_token)
+    except M.MfaError as e:
+        return _mfa_error(db, request, e, ctx)
+
+
+@router.post("/auth/mfa/setup/confirm")
+def mfa_setup_confirm(body: MfaCode, request: Request, db: Session = Depends(get_db)):
+    ctx = _mfa_ctx(db, body.mfa_token)
+    try:
+        u, purpose, recovery = M.setup_confirm(db, body.mfa_token, body.code)
+    except M.MfaError as e:
+        return _mfa_error(db, request, e, ctx)
+    # リカバリーコードの平文を返すのはこの1回だけ（DBにはハッシュのみ）
+    return _mfa_success(db, request, u, purpose, "初回登録（認証アプリを設定）", {"recovery_codes": recovery})
 
 
 @router.get("/auth/admin-status")
@@ -171,10 +227,9 @@ def create_user(body: UserCreate, request: Request,
     if db.execute(select(User).where(User.username == body.username)).scalar_one_or_none():
         return Response(status_code=409, content='{"error":"同名のユーザーが既に存在します"}',
                         media_type="application/json")
-    if body.auth_method not in ("password", "sso"):
-        return _json_error(400, "不正な認証方式")
-
-    if body.auth_method == "sso":
+    # 認証方式はロールで決まる（指定された auth_method は使わない）:
+    # 管理者 → パスワード + MFA（非常口を兼ねる） / それ以外 → SSOのみ（招待制）
+    if body.role != "admin":
         # SSO専用ユーザー: パスワードを持たない（LogSeeker側で本人確認しない）。
         # 初回SSOログイン時、IdPの確認済みメールアドレスがこの email と一致したら紐付ける（sso.py）。
         email = (body.email or "").strip().lower()
@@ -209,6 +264,7 @@ def create_user(body: UserCreate, request: Request,
         text = (f"LogSeekerのアカウントが作成されました。\n\n"
                 f"ユーザー名: {body.username}\n"
                 f"仮パスワード: {password}\n\n"
+                f"初回ログイン時に、認証アプリ（Google Authenticator 等）の登録を求められます。\n"
                 f"ログイン後、パスワードの変更をおすすめします。\n")
         err = send_email([body.email], subject, text, db)
         if err:
@@ -253,6 +309,11 @@ def update_user(user_id: int, body: UserUpdate, request: Request,
         if not _can_manage_target_role(actor, body.role, db):
             return Response(status_code=403, content='{"error":"そのロールへ変更する権限がありません"}',
                             media_type="application/json")
+        # 認証方式はロールで決まるため、方式をまたぐロール変更はできない（作り直してもらう）
+        if u.auth_method == "sso" and body.role == "admin":
+            return _json_error(400, "SSOユーザーは管理者にできません。管理者はパスワード＋MFAのアカウントとして別に作成してください")
+        if u.auth_method != "sso" and body.role != "admin":
+            return _json_error(400, "パスワード認証のアカウントは管理者専用です。管理者以外にする場合はSSOユーザーとして作成し直してください")
         changes.append(f"ロール: {A.ROLE_LABELS.get(u.role, u.role)} → {A.ROLE_LABELS.get(body.role, body.role)}")
         u.role = body.role
     if body.display_name is not None:
@@ -287,6 +348,15 @@ def update_user(user_id: int, body: UserUpdate, request: Request,
         changes.append(f"SSOの紐付けを解除（{S.PROVIDERS.get(u.sso_provider or '', {}).get('label', u.sso_provider)}）")
         u.sso_provider = None
         u.sso_subject = None
+    if body.mfa_reset:
+        # 端末の紛失・機種変更時。次回ログイン時に認証アプリの再登録を求める。管理者だけが行える。
+        if A.is_auth_required(db) and (not actor or actor.role != "admin"):
+            return _json_error(403, "MFAのリセットは管理者のみ行えます")
+        if u.auth_method == "sso":
+            return _json_error(400, "SSOユーザーのMFAはGoogle / Microsoft 365 側で管理します")
+        if M.is_enabled(u):
+            changes.append("MFAをリセット（次回ログイン時に再登録）")
+        M.reset(u)
     db.commit()
     only_pw = len(changes) == 1 and bool(body.password)
     L.note(request, "user.password" if only_pw else "user.update", target=u.username,

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, tokenStore } from "../api";
-import type { AuthUser, SsoStatus } from "../types";
+import type { AuthUser, MfaChallenge, SsoStatus } from "../types";
+import { MfaStep } from "./MfaStep";
 
 // SSO失敗時の理由コード（backend: sso.py の SsoError.reason）→ 利用者向けの説明
 const SSO_ERRORS: Record<string, string> = {
@@ -26,15 +27,15 @@ export function Login({ onLoggedIn, sso, ssoError }: {
   const [err, setErr] = useState<string | null>(
     ssoError ? (SSO_ERRORS[ssoError] ?? "SSOでのログインに失敗しました。") : null);
   const [busy, setBusy] = useState(false);
+  const [mfa, setMfa] = useState<MfaChallenge | null>(null);
   const providers = sso?.providers ?? [];
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErr(null); setBusy(true);
     try {
-      const r = await api.login(username.trim(), password);
-      tokenStore.set(r.token);
-      onLoggedIn(r.user);
+      setMfa(await api.login(username.trim(), password));  // パスワード通過 → 2段階目へ
+      setPassword("");
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -42,13 +43,32 @@ export function Login({ onLoggedIn, sso, ssoError }: {
     }
   };
 
+  const header = (
+    <div className="text-center mb-4">
+      <h1 className="navbar-brand-autodark mb-1">LogSeeker</h1>
+      <div className="text-secondary">ログシーカー — ログイン</div>
+    </div>
+  );
+
+  if (mfa) {
+    return (
+      <div className="page page-center">
+        <div className="container container-tight py-4" style={{ maxWidth: 420 }}>
+          {header}
+          <div className="card card-md">
+            <MfaStep mfaToken={mfa.mfa_token} mode={mfa.mfa}
+              onDone={(token, user) => { tokenStore.set(token); onLoggedIn(user); }}
+              onCancel={() => { setMfa(null); setErr(null); }} />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="page page-center">
       <div className="container container-tight py-4" style={{ maxWidth: 420 }}>
-        <div className="text-center mb-4">
-          <h1 className="navbar-brand-autodark mb-1">LogSeeker</h1>
-          <div className="text-secondary">ログシーカー — ログイン</div>
-        </div>
+        {header}
         <form className="card card-md" onSubmit={submit}>
           <div className="card-body">
             <h2 className="h3 text-center mb-3">アカウントにログイン</h2>
@@ -61,7 +81,7 @@ export function Login({ onLoggedIn, sso, ssoError }: {
                     {p.label} でログイン
                   </a>
                 ))}
-                <div className="hr-text my-3">またはパスワードで</div>
+                <div className="hr-text my-3">管理者はID／パスワードで</div>
               </>
             )}
             <div className="mb-3">

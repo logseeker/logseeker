@@ -9,14 +9,14 @@
   - Google：許可ドメイン（Workspaceの `hd` クレーム）が必須。`gmail.com` は指定できない。
   - Microsoft：特定のテナントが必須。`common` / `organizations` / `consumers` は指定できない。
 - **自動プロビジョニングはしない。** 管理者が事前に「SSOユーザー」を作成した人だけがログインできる。
-- 管理パネルの入口（`?screen=administration` / `/api/auth/admin-login`）は **SSOの対象外**。IdPの障害時に備えた非常口として、ローカル認証の管理者アカウントを必ず残すこと。
+- **管理者はSSOの対象外**（ID／パスワード＋2段階認証。[docs/auth.md](auth.md)）。SSOで入れるのは管理者以外のロール（システム管理者・編集者・閲覧者）。管理者アカウントはIdPの障害時の非常口も兼ねる。
 - 必要なのは「LogSeekerのサーバーからIdP（accounts.google.com / login.microsoftonline.com）へ HTTPS で出られること」だけ。Dockerでもネイティブ配置でも同じように動く。
 
 ## ユーザーの種類
 | 認証方式 | ログイン方法 | パスワード |
 |---|---|---|
-| パスワード（従来） | ユーザー名＋パスワード | LogSeekerが保持（pbkdf2） |
-| SSO | ログイン画面の「Google でログイン」「Microsoft 365 でログイン」 | **持たない**（パスワードではログインできない。管理者も設定できない） |
+| パスワード（管理者のみ） | ユーザー名＋パスワード＋2段階認証（TOTP） | LogSeekerが保持（pbkdf2） |
+| SSO（管理者以外） | ログイン画面の「Google でログイン」「Microsoft 365 でログイン」 | **持たない**（パスワードではログインできない。管理者も設定できない） |
 
 - SSOユーザーは作成時に **IdPでログインするメールアドレス** を登録する。
 - 初回SSOログイン時、IdPが返す確認済みメールアドレス（Google：`email`＋`email_verified`／Microsoft：`preferred_username`(UPN) または `email`）と一致したユーザーに、IdPのアカウントID（`sub`）を紐付ける。
@@ -53,7 +53,7 @@ LogSeekerを利用者がブラウザで開くURL（例 `https://logseeker.exampl
 2. 公開URL、各IdPのクライアントID・シークレット、Googleは許可ドメイン、Microsoftはテナント（テナントID か `xxx.onmicrosoft.com`）を入力し、「有効」をONにして保存。
    - 画面に表示されるリダイレクトURIが、IdP側に登録した値と完全一致していることを確認する。
    - 設定が揃うと「ログイン画面に表示中」になる。
-3. 「ユーザー管理」→「ユーザーを作成」→ 認証方式 **SSO** を選び、ユーザー名・ロール・**SSOのメールアドレス**を入力して作成。
+3. 「ユーザー管理」→「ユーザーを作成」→ 管理者以外のロールを選び、ユーザー名・**SSOのメールアドレス**を入力して作成（招待）。
 4. 本人がログイン画面の「Google でログイン」/「Microsoft 365 でログイン」から入る。
 
 ## 実装（`backend/app/sso.py`）

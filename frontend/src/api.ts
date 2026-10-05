@@ -4,7 +4,8 @@ import type {
   ColumnSets, DashboardOverview, DashboardTimeline, DeadLettersResponse, EntityDetail, EntityRow, EventDetailData, EventRow,
   EventsClassesResponse, EventsFields, EventsSearchResponse, FacetResponse, FieldInfo, FilterState, HistogramResponse,
   IncidentActivityItem, IncidentDetail, IncidentResponseActionTypeDef, IncidentRow, IncidentStatusDef,
-  IngestStatus, IngestVolume, IocFeedsInfo, IpRestrictStatus, LicenseInfo, MappingsResponse, NotificationConfig,
+  IngestStatus, IngestVolume, IocFeedsInfo, IpRestrictStatus, LicenseInfo, MappingsResponse, MfaChallenge,
+  MfaSetupInfo, NotificationConfig,
   ReleaseItem, Role, RuleDef, RuleHit, SsoAdminInput, SsoAdminStatus, Verdict,
 } from "./types";
 
@@ -268,21 +269,26 @@ export const api = {
 
   // 認証・ユーザー・監査
   authStatus: () => get<AuthStatus>(`/api/auth/status`),
+  // パスワードログイン（管理者のみ）。セッションは出ず、MFAの2段階目へ進むためのトークンが返る
   login: (username: string, password: string) =>
-    post<{ token: string; user: AuthUser }>(`/api/auth/login`, { username, password }),
+    post<MfaChallenge>(`/api/auth/login`, { username, password }),
   adminLogin: (username: string, password: string) =>
-    post<{ token: string; user: AuthUser }>(`/api/auth/admin-login`, { username, password }),
+    post<MfaChallenge>(`/api/auth/admin-login`, { username, password }),
+  mfaVerify: (mfa_token: string, code: string) =>
+    post<{ token: string; user: AuthUser; recovery_codes_left?: number }>(`/api/auth/mfa/verify`, { mfa_token, code }),
+  mfaSetupStart: (mfa_token: string) => post<MfaSetupInfo>(`/api/auth/mfa/setup/start`, { mfa_token }),
+  mfaSetupConfirm: (mfa_token: string, code: string) =>
+    post<{ token: string; user: AuthUser; recovery_codes: string[] }>(`/api/auth/mfa/setup/confirm`, { mfa_token, code }),
   // SSOのコールバック後、URLの一回限りコードをセッショントークンに交換する（Cookieも同時に照合される）
   ssoExchange: (code: string) =>
     post<{ token: string; user: AuthUser }>(`/api/sso/exchange`, { code }),
   adminStatus: () => get<{ user: AuthUser | null }>(`/api/auth/admin-status`),
   logout: () => post<{ ok: boolean }>(`/api/auth/logout`, {}),
   listUsers: () => get<AuthUser[]>(`/api/users`),
-  createUser: (b: { username: string; display_name?: string; role: Role; email?: string; password?: string;
-                    auth_method?: "password" | "sso" }) =>
+  createUser: (b: { username: string; display_name?: string; role: Role; email?: string; password?: string }) =>
     post<CreateUserResult>(`/api/users`, b),
   updateUser: (id: number, b: { display_name?: string; role?: Role; enabled?: boolean; password?: string;
-                                email?: string; sso_unlink?: boolean }) =>
+                                email?: string; sso_unlink?: boolean; mfa_reset?: boolean }) =>
     put<AuthUser>(`/api/users/${id}`, b),
   deleteUser: (id: number) => del<{ ok: boolean }>(`/api/users/${id}`),
   toggleAuth: (enabled: boolean) => post<{ ok: boolean; auth_required: boolean }>(`/api/auth/require`, { enabled }),
