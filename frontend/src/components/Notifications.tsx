@@ -176,7 +176,7 @@ export function Notifications() {
               </div>
               <div className="col-auto d-flex align-items-end">
                 <div className="text-secondary small">
-                  IOC同期スケジュールに合わせて自動送信（脅威インテリ画面で間隔設定）
+                  1時間ごとにチェックし、新しく検知したアラート（ルール×対象）を1件1通で送信。同じアラートは再送しません
                 </div>
               </div>
             </div>
@@ -201,7 +201,7 @@ export function Notifications() {
             {saveError && <span className="text-danger">❌ 保存失敗: {saveError}</span>}
             <div className="ms-auto d-flex gap-2 align-items-center">
               <button className="btn btn-outline-warning btn-sm" onClick={sendNow}>
-                今すぐ通知テスト（現在の全ルールヒットを送信）
+                今すぐ通知テスト（現在の全ルールヒットを1通にまとめて送信）
               </button>
               {nowResult && <span className="text-secondary small">{nowResult}</span>}
             </div>

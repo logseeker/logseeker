@@ -451,3 +451,12 @@ Index("ix_events_cat_time", Event.event_category, Event.event_time)
 Index("ix_events_result_time", Event.event_result, Event.event_time)
 Index("ix_entity_type_value", EventEntity.entity_type, EventEntity.entity_value)
 Index("ix_ioc_type_value", IOC.indicator_type, IOC.value)
+
+
+class NotifySent(Base):
+    """通知済みのアラート（ルール×対象）。同じアラートを定期チェックのたびに再送しないための記録（notify.py）。
+    key は "rule_id|対象値"（例: payload_injection|195.178.110.72）。"""
+    __tablename__ = "notify_sent"
+    key: Mapped[str] = mapped_column(String(255), primary_key=True)
+    rule_id: Mapped[str] = mapped_column(String(64), index=True)
+    notified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)

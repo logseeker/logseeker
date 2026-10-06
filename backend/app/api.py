@@ -1286,7 +1286,7 @@ def notify_now(request: Request, db: Session = Depends(get_db), _a=Depends(requi
     from .notify import notify_hits
     from .rules import evaluate
     hits = evaluate(db)
-    result = notify_hits(db, hits)
+    result = notify_hits(db, hits, only_new=False)
     L.note(request, "notify.send_now", detail=f"検知ルールのヒット{len(hits)}件を通知")
     return {"hits": len(hits), "result": result}
 

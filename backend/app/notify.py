@@ -4,14 +4,14 @@
 import json
 import smtplib
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .models import Setting
+from .models import NotifySent, Setting
 
 # ---- Setting キー定義 ----
 K_EMAIL_ENABLED  = "notify_email_enabled"
@@ -25,9 +25,12 @@ K_SLACK_ENABLED  = "notify_slack_enabled"
 K_SLACK_WEBHOOK  = "notify_slack_webhook"
 K_MIN_SEVERITY   = "notify_min_severity"    # critical/high/warning
 K_LAST_NOTIFIED  = "notify_last_notified"   # ISO8601 最終通知日時
+K_BASELINE_AT    = "notify_baseline_at"     # 個別通知の起点。これ以前から出ていたヒットは通知済み扱い
 
 SEV_ORDER = {"critical": 0, "high": 1, "warning": 2, "info": 3}
 SEV_EMOJI = {"critical": "🚨", "high": "⚠️", "warning": "⚡", "info": "ℹ️"}
+JST = timezone(timedelta(hours=9))
+MAX_MAILS_PER_RUN = 20   # 1回の定期チェックで個別に送る上限。超えた分は1通のまとめに回す（大量着信の防止）
 
 
 def _get(db: Session, key: str, default: str = "") -> str:
@@ -141,9 +144,55 @@ def _build_text(hits: list[dict]) -> tuple[str, str]:
     return subject, "\n".join(lines)
 
 
-def notify_hits(db: Session, hits: list[dict]) -> dict:
-    """ルールヒット → メール/Slack 送信。重大度フィルタ・重複送信防止つき。
-    Returns {"email": "ok"|"error:...", "slack": "ok"|"error:...", "skipped": bool}"""
+def _alert_key(h: dict) -> str:
+    """アラートの同一性 = ルール×対象（pivotの値。無いルールはタイトル）。"""
+    target = (h.get("pivot") or {}).get("value") or h["title"]
+    return f"{h['rule_id']}|{target}"[:255]
+
+
+def _build_single(h: dict) -> tuple[str, str]:
+    """1アラート1通の (subject, body)。"""
+    e = SEV_EMOJI.get(h["severity"], "")
+    subject = f"{e} [LogSeeker] [{h['severity'].upper()}] {h['title']}"
+    lines = [
+        f"{e} [{h['severity'].upper()}] {h['title']}",
+        "=" * 60,
+        "",
+        f"ルール: {h.get('rule_name') or h['rule_id']}",
+        f"内容:   {h['evidence']}",
+        f"対策:   {h['recommendation']}",
+        f"検知:   {datetime.now(JST).strftime('%Y-%m-%d %H:%M')} (JST)",
+        "",
+        "─" * 60,
+        "LogSeeker ログシーカー | 自動通知（同じアラートは再送しません）",
+    ]
+    return subject, "\n".join(lines)
+
+
+def _send(db: Session, subject: str, body: str) -> dict:
+    """有効なチャネルすべてへ送る。Returns {"email": ..., "slack": ...}（無効なチャネルはキー無し）。"""
+    result: dict = {}
+    if _get(db, K_EMAIL_ENABLED) == "true":
+        to_list = [a.strip() for a in _get(db, K_EMAIL_TO).split(",") if a.strip()]
+        if to_list:
+            err = send_email(to_list, subject, body, db)
+            result["email"] = "ok" if not err else f"error: {err}"
+    if _get(db, K_SLACK_ENABLED) == "true":
+        err = send_slack(body, _get(db, K_SLACK_WEBHOOK))
+        result["slack"] = "ok" if not err else f"error: {err}"
+    return result
+
+
+def _channels_enabled(db: Session) -> bool:
+    return _get(db, K_EMAIL_ENABLED) == "true" or _get(db, K_SLACK_ENABLED) == "true"
+
+
+def notify_hits(db: Session, hits: list[dict], only_new: bool = True) -> dict:
+    """ルールヒット → メール/Slack 送信。重大度フィルタつき。
+    only_new=True（定期チェック）: まだ通知していないアラート（ルール×対象）だけを1件1通で送り、
+      通知済みとして記録する。同じアラートは二度と送らない。1回あたり MAX_MAILS_PER_RUN 通を超えた分は1通にまとめる。
+      初回（起点未設定）は、その時点で出ているヒットを通知済みとして記録するだけで送らない（過去分の一斉送信を防ぐ）。
+    only_new=False（画面の「今すぐ通知テスト」）: 現在の全ヒットを1通にまとめて送る。通知済みの記録は変えない。"""
     if not hits:
         return {"skipped": True, "reason": "no hits"}
 
@@ -152,24 +201,52 @@ def notify_hits(db: Session, hits: list[dict]) -> dict:
     if not filtered:
         return {"skipped": True, "reason": f"no hits above {min_sev}"}
 
-    subject, body = _build_text(filtered)
-    result: dict = {"skipped": False}
+    if not only_new:
+        subject, body = _build_text(filtered)
+        result = {"skipped": False, **_send(db, subject, body)}
+        if "ok" in (result.get("email"), result.get("slack")):
+            _set(db, K_LAST_NOTIFIED, datetime.now(timezone.utc).isoformat())
+        return result
 
-    email_enabled = _get(db, K_EMAIL_ENABLED) == "true"
-    if email_enabled:
-        to_raw = _get(db, K_EMAIL_TO)
-        to_list = [a.strip() for a in to_raw.split(",") if a.strip()]
-        if to_list:
-            err = send_email(to_list, subject, body, db)
-            result["email"] = "ok" if not err else f"error: {err}"
+    if not _channels_enabled(db):
+        return {"skipped": True, "reason": "no channel enabled"}
 
-    slack_enabled = _get(db, K_SLACK_ENABLED) == "true"
-    if slack_enabled:
-        webhook = _get(db, K_SLACK_WEBHOOK)
-        err = send_slack(body, webhook)
-        result["slack"] = "ok" if not err else f"error: {err}"
+    by_key: dict[str, dict] = {}
+    for h in filtered:
+        by_key.setdefault(_alert_key(h), h)
+    sent = set(db.execute(select(NotifySent.key).where(NotifySent.key.in_(list(by_key)))).scalars())
+    new = [(k, h) for k, h in by_key.items() if k not in sent]
 
-    if result.get("email") == "ok" or result.get("slack") == "ok":
+    def mark(pairs):
+        for k, h in pairs:
+            db.merge(NotifySent(key=k, rule_id=h["rule_id"]))
+        db.commit()
+
+    if not _get(db, K_BASELINE_AT):
+        mark(new)
+        _set(db, K_BASELINE_AT, datetime.now(timezone.utc).isoformat())
+        return {"skipped": True, "reason": f"baseline: {len(new)} existing alerts marked as notified"}
+
+    if not new:
+        return {"skipped": True, "reason": "no new alerts"}
+
+    new.sort(key=lambda kh: SEV_ORDER.get(kh[1]["severity"], 99))
+    result: dict = {"skipped": False, "new": len(new), "sent": 0, "errors": []}
+    for k, h in new[:MAX_MAILS_PER_RUN]:
+        r = _send(db, *_build_single(h))
+        if "ok" in (r.get("email"), r.get("slack")):
+            mark([(k, h)])   # 失敗したものは記録しない → 次回のチェックで再送される
+            result["sent"] += 1
+        result["errors"] += [v for v in r.values() if v != "ok"]
+    rest = new[MAX_MAILS_PER_RUN:]
+    if rest:
+        subject, body = _build_text([h for _, h in rest])
+        r = _send(db, subject.replace("注意喚起", "新規アラート(まとめ)"), body)
+        if "ok" in (r.get("email"), r.get("slack")):
+            mark(rest)
+            result["summarized"] = len(rest)
+        result["errors"] += [v for v in r.values() if v != "ok"]
+    result["errors"] = sorted(set(result["errors"]))[:5]
+    if result["sent"] or result.get("summarized"):
         _set(db, K_LAST_NOTIFIED, datetime.now(timezone.utc).isoformat())
-
     return result
