@@ -3,6 +3,7 @@ import { api } from "../api";
 import { PeriodSelect } from "./PeriodSelect";
 import { fmtTime, stLabel } from "../labels";
 import type { CorrelationItem } from "../types";
+import { CorrelationGraph } from "./CorrelationGraph";
 
 // 相関分析＝AIなし。同じ資産/主体（IP・ユーザー）が複数のログソース種別に
 // またがって出現する度合いをSQL集計で出す。横断数が多いほど“複数システムを触った”＝要調査。
@@ -37,10 +38,23 @@ export function Correlations({ onPick, onEntity }: {
   return (
     <div className="row row-cards">
       <div className="col-12">
-        <div className="alert alert-info">
-          <strong>相関分析</strong>：同じ{ENTITY_TABS.find((t) => t.v === etype)?.label}が
-          <strong>複数の種類のログソースにまたがって出現</strong>しているかを集計します（AI不使用・SQL集計）。
-          横断システム数が多いものは「Webも叩きSSHも試した」等、<strong>複数システムを触った可能性</strong>があり優先調査対象です。
+        <div className="d-flex align-items-center gap-3 flex-wrap">
+          <div className="text-secondary">
+            どこから・どのサーバーが攻撃され・遮断できたかを図で示します。
+            攻撃＝ログイン失敗や4xxなど<strong>失敗のあったアクセス</strong>（成功だけのアクセスは描きません）。
+            遮断＝fail2ban の記録です。
+          </div>
+          <div className="ms-auto"><PeriodSelect value={days} onChange={setDays} /></div>
+        </div>
+      </div>
+
+      <CorrelationGraph days={days} onPick={onPick} onEntity={onEntity} />
+
+      <div className="col-12 mt-4">
+        <h3 className="mb-1">詳細一覧：ログ種別の横断集計</h3>
+        <div className="text-secondary small">
+          同じ{ENTITY_TABS.find((t) => t.v === etype)?.label}が<strong>複数の種類のログソースにまたがって出現</strong>しているかを集計します。
+          横断システム数が多いものは「Webも叩きSSHも試した」等、複数システムを触った可能性があります。
         </div>
       </div>
 
@@ -74,7 +88,6 @@ export function Correlations({ onPick, onEntity }: {
         <div className="card">
           <div className="card-header">
             <h3 className="card-title">相関結果（{items.length}）</h3>
-            <div className="card-actions"><PeriodSelect value={days} onChange={setDays} /></div>
             <span className="card-subtitle ms-2 text-secondary">
               うち複数システム横断: <strong className="text-danger">{crossCount}</strong> 件
             </span>
@@ -95,7 +108,7 @@ export function Correlations({ onPick, onEntity }: {
                       {it.is_ioc && <span className="badge bg-red ms-2">IOC</span>}
                     </td>
                     <td className="text-center">
-                      <span className={`badge ${it.source_type_count >= 3 ? "bg-red" : it.source_type_count >= 2 ? "bg-orange" : "bg-secondary-lt"}`}>
+                      <span className={`badge ${it.source_type_count >= 3 ? "bg-red text-white" : it.source_type_count >= 2 ? "bg-orange text-white" : "bg-secondary-lt"}`}>
                         {it.source_type_count}
                       </span>
                     </td>

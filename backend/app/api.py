@@ -2,7 +2,7 @@
 検索や集計に使う値は events 自身の列にある（旧 normalized_events は廃止）。
 イベント一覧とダッシュボードは events_api.py 側で payload の Taxonomy KEY を直接読む。"""
 import ipaddress
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import String, case, cast, func, nulls_last, or_, select, text
@@ -529,6 +529,222 @@ def correlations(db: Session = Depends(get_db), entity_type: str = "ip",
         "failure_count": int(f or 0), "is_ioc": value in ioc_vals,
     } for value, ev, stcnt, stypes, snames, first, last, f in rows]
     return {"entity_type": entity_type, "min_sources": min_sources, "items": items}
+
+
+# ---------------------------- 相関分析の関係図（攻撃元IP → 自分のサーバー、遮断状況つき） ----------------------------
+# 「攻撃」＝失敗イベント（ログイン失敗・4xx等）。成功だけのアクセスは正規利用と区別できないので描かない。
+# 「遮断」＝fail2ban の Ban/Restore 記録（source_type=fail2ban, payload.action）。遮断は監視対象サーバー側で
+# 行われるので、どのサーバーで遮断されたか（Event.source）単位で判定する。
+# 検知ルールの結果はDBに保存されておらず評価が重い（本番で数十秒）ため、ここでは使わない。
+GRAPH_BAN_LOOKBACK_DAYS = 400   # fail2ban の遮断は長期間（1年など）の設定もある。期間より前に遮断済みのIPも判定するため
+GRAPH_ACTIVE_MINUTES = 60       # 最後の失敗がこの時間内なら「攻撃継続中」
+GRAPH_BAN_GRACE_SECONDS = 60    # 遮断直後に書かれた失敗ログ（書き込み遅延）は遮断後の攻撃とみなさない
+GRAPH_MAX_PAIRS = 5000          # 集計する（IP, サーバー）組の上限。概況の件数もこの範囲で数える
+GRAPH_STATEMENT_TIMEOUT_MS = 15000
+
+
+def _graph_server():
+    """図の右側に並べる「サーバー」。送信側が付けた source（例: nxlog の $source）を優先する。"""
+    return func.coalesce(Event.source, Event.host_name, Event.source_name)
+
+
+def _graph_time():
+    return func.coalesce(Event.event_time, Event.received_at)
+
+
+_INTERNAL_NETS = [ipaddress.ip_network(n) for n in (
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16",
+    "100.64.0.0/10", "fc00::/7", "fe80::/10", "::1/128")]
+
+
+def _is_private_ip(ip: str) -> bool:
+    """社内（LAN/VPN）のアドレスか。ipaddress の is_private はドキュメント用アドレス帯等も
+    含むため、社内で使われる範囲だけを明示的に見る。"""
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(a.version == n.version and a in n for n in _INTERNAL_NETS)
+
+
+def _ban_states(db: Session, ips: set[str] | None = None) -> dict[tuple[str, str], dict]:
+    """(IP, サーバー) ごとの現在の遮断状態を fail2ban の記録から求める。
+    fail2ban は再起動時に全IPを Unban → Restore するので、Restore では元の遮断時刻を引き継ぐ。"""
+    stmt = (select(Event.source_ip, _graph_server(), Event.payload["action"].astext,
+                   Event.payload["service"].astext, _graph_time())
+            .where(Event.source_type == "fail2ban", Event.source_ip.isnot(None),
+                   Event.received_at >= func.now() - text(f"interval '{GRAPH_BAN_LOOKBACK_DAYS} days'"))
+            .order_by(_graph_time(), Event.id))
+    if ips is not None:
+        if not ips:
+            return {}
+        stmt = stmt.where(Event.source_ip.in_(ips))
+    st: dict[tuple[str, str], dict] = {}
+    for ip, server, action, jail, ts in db.execute(stmt).all():
+        s = st.setdefault((ip, server or "-"), {"banned": False, "since": None, "last_ban": None,
+                                                "jails": set(), "bans": []})
+        if action == "Ban":
+            if not s["banned"]:
+                s["since"] = ts
+            s["banned"], s["last_ban"] = True, ts
+            s["bans"].append(ts)
+        elif action == "Restore":
+            if not s["banned"]:
+                s["since"] = s["last_ban"] or ts
+            s["banned"] = True
+        elif action == "Unban":
+            s["banned"] = False
+        else:
+            continue
+        if jail:
+            s["jails"].add(jail)
+    return st
+
+
+def _edge_status(fails: int, last_fail, ban: dict | None, now) -> str:
+    """blocked=遮断済み / leak=遮断後も失敗が続く / active=遮断されず継続中 / stopped=遮断なし・現在は止まっている"""
+    if ban and ban["banned"]:
+        if fails and last_fail and ban["since"] and last_fail > ban["since"] + timedelta(seconds=GRAPH_BAN_GRACE_SECONDS):
+            return "leak"
+        return "blocked"
+    if last_fail and last_fail >= now - timedelta(minutes=GRAPH_ACTIVE_MINUTES):
+        return "active"
+    return "stopped"
+
+
+_STATUS_RANK = {"active": 0, "leak": 1, "stopped": 2, "blocked": 3}
+
+
+@router.get("/correlations/graph")
+def correlation_graph(db: Session = Depends(get_db),
+                      days: int = Query(1, ge=1, le=30),
+                      limit: int = Query(20, ge=1, le=100)):
+    """関係図用。攻撃元IP（左）→ サーバー（右）の線を、遮断済み／継続中などの状態つきで返す。
+    図に載せるのは上位 limit 件のIP（継続中を優先）。概況（summary）は集計上限内の全IPで数える。
+    期間は最大30日・1クエリ15秒まで（本番は events が大きく、長期間の集計でスラッシングした実績がある）。"""
+    db.execute(text(f"SET LOCAL statement_timeout = {GRAPH_STATEMENT_TIMEOUT_MS}"))
+    now = db.execute(select(func.now())).scalar()
+    blocked_types = _blocked(db)
+    server, t = _graph_server(), _graph_time()
+    stmt = (select(Event.source_ip, server, func.count(), func.min(t), func.max(t),
+                   func.max(Event.source_country), func.array_agg(func.distinct(Event.source_type)))
+            .where(Event.event_result == "failure", Event.source_ip.isnot(None),
+                   or_(Event.source_type.is_(None), Event.source_type != "fail2ban")))
+    pc = _period_clause(days)
+    if pc is not None:
+        stmt = stmt.where(pc)
+    if blocked_types:
+        stmt = stmt.where(or_(Event.source_type.is_(None), Event.source_type.notin_(blocked_types)))
+    stmt = stmt.group_by(Event.source_ip, server).order_by(func.count().desc()).limit(GRAPH_MAX_PAIRS)
+    pairs: dict[tuple[str, str], dict] = {}
+    for ip, srv, cnt, first, last, country, stypes in db.execute(stmt).all():
+        pairs[(ip, srv or "-")] = {"failure_count": cnt, "first_seen": first, "last_seen": last,
+                                   "country": country, "source_types": [s for s in (stypes or []) if s]}
+
+    # 遮断記録。期間内に遮断されたIPは、失敗ログが無くても（例: 失敗が期間外）攻撃元として載せる
+    bans = _ban_states(db)
+    since = None if not days else now - timedelta(days=days)
+    for key, b in bans.items():
+        if key in pairs:
+            continue
+        if any(since is None or ts >= since for ts in b["bans"]):
+            pairs[key] = {"failure_count": 0, "first_seen": None, "last_seen": None,
+                          "country": None, "source_types": []}
+
+    edges = []
+    for (ip, srv), p in pairs.items():
+        b = bans.get((ip, srv))
+        edges.append({
+            "ip": ip, "server": srv, "failure_count": p["failure_count"],
+            "first_seen": p["first_seen"], "last_seen": p["last_seen"],
+            "status": _edge_status(p["failure_count"], p["last_seen"], b, now),
+            "banned_since": b["since"] if b and b["banned"] else None,
+            "jails": sorted(b["jails"]) if b else [],
+            "_country": p["country"], "_stypes": p["source_types"],
+        })
+
+    ioc_ips = set(db.execute(select(IOC.value).where(IOC.indicator_type == "ip")).scalars().all())
+    attackers: dict[str, dict] = {}
+    for e in edges:
+        a = attackers.setdefault(e["ip"], {
+            "ip": e["ip"], "country": None, "is_ioc": e["ip"] in ioc_ips,
+            "is_private": _is_private_ip(e["ip"]), "failure_count": 0,
+            "first_seen": None, "last_seen": None, "status": "blocked",
+            "servers": [], "source_types": set()})
+        a["country"] = a["country"] or e["_country"]
+        a["failure_count"] += e["failure_count"]
+        a["servers"].append(e["server"])
+        a["source_types"].update(e["_stypes"])
+        if e["first_seen"] and (a["first_seen"] is None or e["first_seen"] < a["first_seen"]):
+            a["first_seen"] = e["first_seen"]
+        if e["last_seen"] and (a["last_seen"] is None or e["last_seen"] > a["last_seen"]):
+            a["last_seen"] = e["last_seen"]
+        if _STATUS_RANK[e["status"]] < _STATUS_RANK[a["status"]]:
+            a["status"] = e["status"]
+
+    all_attackers = list(attackers.values())
+    summary = {
+        "attackers": len(all_attackers),
+        "blocked": sum(1 for a in all_attackers if a["status"] == "blocked"),
+        "active": sum(1 for a in all_attackers if a["status"] in ("active", "leak")),
+        "stopped": sum(1 for a in all_attackers if a["status"] == "stopped"),
+        "multi_server": sum(1 for a in all_attackers if len(a["servers"]) >= 2),
+        "truncated": len(pairs) >= GRAPH_MAX_PAIRS,
+    }
+    shown = sorted(all_attackers, key=lambda a: (_STATUS_RANK[a["status"]], -a["failure_count"]))[:limit]
+    shown_ips = {a["ip"] for a in shown}
+    shown_edges = [e for e in edges if e["ip"] in shown_ips]
+
+    servers: dict[str, dict] = {}
+    for e in edges:  # サーバー側の件数は図に載らないIPも含めた全体で数える
+        s = servers.setdefault(e["server"], {"name": e["server"], "attacker_count": 0,
+                                             "blocked_count": 0, "failure_count": 0})
+        s["attacker_count"] += 1
+        s["failure_count"] += e["failure_count"]
+        s["blocked_count"] += e["status"] == "blocked"
+    shown_servers = sorted({e["server"] for e in shown_edges},
+                           key=lambda n: -servers[n]["failure_count"])
+
+    iso = lambda d: d.isoformat() if d else None  # noqa: E731
+    return {
+        "summary": summary,
+        "servers": [servers[n] for n in shown_servers],
+        "attackers": [{**a, "first_seen": iso(a["first_seen"]), "last_seen": iso(a["last_seen"]),
+                       "source_types": sorted(a["source_types"])} for a in shown],
+        "edges": [{k: (iso(v) if k in ("first_seen", "last_seen", "banned_since") else v)
+                   for k, v in e.items() if not k.startswith("_")} for e in shown_edges],
+    }
+
+
+@router.get("/correlations/timeline")
+def correlation_timeline(ip: str, db: Session = Depends(get_db),
+                         days: int = Query(1, ge=1, le=30)):
+    """関係図で選んだIPの時系列。サーバー別の失敗件数と、遮断（fail2ban）の時刻を返す。"""
+    db.execute(text(f"SET LOCAL statement_timeout = {GRAPH_STATEMENT_TIMEOUT_MS}"))
+    unit = "hour" if days <= 2 else "day"
+    blocked_types = _blocked(db)
+    bucket = func.date_trunc(unit, _graph_time())
+    stmt = (select(bucket, _graph_server(), func.count())
+            .where(Event.source_ip == ip, Event.event_result == "failure",
+                   or_(Event.source_type.is_(None), Event.source_type != "fail2ban"),
+                   _period_clause(days)))
+    if blocked_types:
+        stmt = stmt.where(or_(Event.source_type.is_(None), Event.source_type.notin_(blocked_types)))
+    rows = db.execute(stmt.group_by(bucket, _graph_server()).order_by(bucket)).all()
+    bans = _ban_states(db, {ip})
+    ban_events = db.execute(
+        select(_graph_time(), _graph_server(), Event.payload["action"].astext, Event.payload["service"].astext)
+        .where(Event.source_type == "fail2ban", Event.source_ip == ip, _period_clause(days))
+        .order_by(_graph_time())).all()
+    return {
+        "ip": ip, "unit": unit,
+        "series": [{"bucket": b.isoformat(), "server": s or "-", "count": c} for b, s, c in rows],
+        "ban_events": [{"time": ts.isoformat(), "server": s or "-", "action": a, "jail": j}
+                       for ts, s, a, j in ban_events if a in ("Ban", "Unban", "Restore")],
+        "ban_state": [{"server": srv, "banned": b["banned"],
+                       "banned_since": b["since"].isoformat() if b["banned"] and b["since"] else None,
+                       "jails": sorted(b["jails"])} for (_ip, srv), b in bans.items()],
+    }
 
 
 # ============================ ケース／インシデント管理機能（設計書v2） ============================

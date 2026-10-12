@@ -6,8 +6,7 @@ import type {
   IncidentActivityItem, IncidentDetail, IncidentResponseActionTypeDef, IncidentRow, IncidentStatusDef,
   IngestStatus, IngestVolume, IocFeedsInfo, IpRestrictStatus, LicenseInfo, MappingsResponse, MfaChallenge,
   MfaSetupInfo, NotificationConfig,
-  ReleaseItem, Role, RuleDef, RuleHit, SsoAdminInput, SsoAdminStatus, Verdict,
-} from "./types";
+  ReleaseItem, Role, RuleDef, RuleHit, SsoAdminInput, SsoAdminStatus, Verdict, CorrelationGraph, CorrelationTimeline } from "./types";
 
 const BASE = (import.meta.env.VITE_API_BASE as string) || "";
 
@@ -250,6 +249,10 @@ export const api = {
   iocSyncNow: () => post<{ results: { name: string; count: number; status: string }[] }>(`/api/ioc/sync`, {}),
 
   // 相関分析（AI不要・複数ソース横断）
+  correlationGraph: (days = 1, limit = 20) =>
+    get<CorrelationGraph>(`/api/correlations/graph?days=${days}&limit=${limit}`),
+  correlationTimeline: (ip: string, days = 1) =>
+    get<CorrelationTimeline>(`/api/correlations/timeline?ip=${encodeURIComponent(ip)}&days=${days}`),
   correlations: (entity_type = "ip", min_sources = 1, limit = 100, days = 1) =>
     get<CorrelationResponse>(`/api/correlations?entity_type=${entity_type}&min_sources=${min_sources}&limit=${limit}&days=${days}`),
 
