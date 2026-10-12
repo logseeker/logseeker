@@ -93,6 +93,8 @@ export interface EventQuery {
   attention?: boolean;   // 「注目」のみ（payloadキーワード一致 or result/severity が失敗・高重大度）
   threat?: string;       // 脅威フィルタ: ioc / sensitive_path / web_scan / auth_fail / root_ssh / any
   source?: string;       // ログソース(LogSeeker管理メタデータ)での絞り込み
+  /** 正規化列（source_name / source_ip / actor_user 等）での絞り込み。ログソース等の画面から遷移する */
+  cols?: { field: string; value: string }[];
 }
 
 function eq(qy: EventQuery, extra: Record<string, string | number> = {}): string {
@@ -105,6 +107,7 @@ function eq(qy: EventQuery, extra: Record<string, string | number> = {}): string
   if (qy.attention) p.set("attention", "true");
   put_("threat", qy.threat);
   put_("source", qy.source);
+  (qy.cols ?? []).forEach((c) => { p.append("col", c.field); p.append("colv", c.value); });
   Object.entries(extra).forEach(([k, v]) => put_(k, v));
   const s = p.toString();
   return s ? `?${s}` : "";

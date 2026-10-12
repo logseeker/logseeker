@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api } from "../api";
 import type { EventQuery } from "../api";
-import { fmtTime, fromJstInput, toJstInput } from "../labels";
+import { fieldLabel, fmtTime, fromJstInput, toJstInput } from "../labels";
 import { EventDetail } from "./EventDetail";
 import { adviseForEvent } from "../advice";
 import type {
@@ -151,6 +151,9 @@ export function Events({ onEntity, onNav, onOpenCase, onOpenIncident, auth, init
   (applied.filters ?? []).forEach((f) => chips.push({
     label: `${labelOf(f.field)}: ${f.value}`, clear: () => unpivot(f.field) }));
   if (applied.rep_value) chips.push({ label: `ドメイン/ホスト: ${applied.rep_value}`, clear: clearRep });
+  (applied.cols ?? []).forEach((c) => chips.push({ label: `${fieldLabel(c.field)}: ${c.value}`,
+    clear: () => { const q = { ...applied, cols: (applied.cols ?? []).filter((x) => x.field !== c.field) };
+                   setApplied(q); setDraft(q); } }));
   if (applied.source) chips.push({ label: `ログソース: ${applied.source}`,
     clear: () => { const q = { ...applied, source: undefined }; setApplied(q); setDraft(q); } });
   if (applied.threat) chips.push({ label: `脅威: ${THREATS.find((t) => t.value === applied.threat)?.label ?? applied.threat}`,

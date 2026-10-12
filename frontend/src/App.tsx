@@ -208,7 +208,6 @@ export default function App() {
   const onThreat = (v: string) => setFilter((p) => ({ ...p, threat: v || undefined }));
   // ダッシュボード/ルール/エンティティ等から Events へ。現在の絞り込み文脈（ログソース等）は維持して追加。
   // ルール等は同じ絞り込みに追従して算出されるので、追加しても0件にならない。
-  const drill = (k: string, v: string) => { onTax(k, v); setScreen("events"); };
   // Dashboardの代表値グループ（ドメイン/ホスト等）をクリックした場合の専用ドリルダウン。
   // onTax(=tax絞り込み)とは別チャンネル：集計時と同じ優先順位のOR条件でEventsを絞り込む
   // ため、通常のtaxキー1本の絞り込みとは意味が異なる（normalize-mapping.md §7.1）。
@@ -218,6 +217,16 @@ export default function App() {
   const drillField = (field: string, value: string) => toEvents({ filters: [{ field, value }] });
   const drillClass = (class_value: string) => toEvents({ class_value });
   const drillSource = (source: string) => toEvents({ source });
+  // ログソース/ホスト・ドメイン/ルール/エンティティ/相関から Events へ（正規化列での絞り込み）。
+  // 以前は共有の絞り込み(filter)を書き換えて画面を切り替えるだけで、Events画面は filter を
+  // 読まないため、直前にDashboardから渡した条件（例: ドメインlogw）がそのまま残っていた。
+  // 必ず toEvents で新しい条件を渡す。元画面の絞り込み文脈（filter.tax）は維持して追加する
+  // （ルール等は同じ絞り込みに追従して算出されるので、追加しても0件にならない）。
+  const drill = (k: string, v: string) => {
+    const tax = { ...filter.tax, [k]: v };
+    setFilter((p) => ({ ...p, tax }));
+    toEvents({ cols: Object.entries(tax).map(([field, value]) => ({ field, value })), q: filter.q });
+  };
   // イベント等から「エンティティ調査」画面へ（IP/ユーザーの攻撃像を時系列で見る）
   const [entityInit, setEntityInit] = useState<{ type: string; value: string; nonce: number } | undefined>();
   const navEntity = (type: string, value: string) => {

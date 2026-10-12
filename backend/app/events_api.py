@@ -97,7 +97,15 @@ def _ev(qy):
         Event.resolved.label("resolved"),
         Event.payload.label("payload"),
         lp,
-    ).where(Event.received_at >= qy.start, Event.received_at <= qy.end).cte("ev"))
+    ).where(Event.received_at >= qy.start, Event.received_at <= qy.end,
+            *[_col_expr(c) == v for c, v in qy.cols]).cte("ev"))
+
+
+def _col_expr(name: str):
+    """正規化列（TAX_COLSの許可リスト）を文字列として比較できる式にする。"""
+    from .api import TAX_COLS
+    col = TAX_COLS[name]
+    return col if isinstance(col.type, String) else cast(col, String)
 
 
 def _pv(ev, key: str):
@@ -131,6 +139,10 @@ def _scoped_sql(qy):
     if qy.source:
         conds.append("e.source = :source")
         p["source"] = qy.source
+    for i, (c, v) in enumerate(qy.cols):
+        # 列名は許可リスト(TAX_COLS)を通したものだけなので埋め込んでよい。値はバインドする
+        conds.append("e.%s::text = :cv%d" % (c, i))
+        p["cv%d" % i] = v
     for i, (f, v) in enumerate(qy.filters):
         conds.append("EXISTS (SELECT 1 FROM jsonb_each_text(e.payload) f%d"
                      " WHERE lower(f%d.key) = :fk%d AND f%d.value = :fv%d)" % (i, i, i, i, i))
@@ -320,7 +332,8 @@ class EventQuery:
     def __init__(self, db: Session, class_value: str | None, q: str | None,
                  start: datetime | None, end: datetime | None,
                  rep_value: str | None, field: str | None, value: str | None,
-                 attention: bool = False, threat: str | None = None, source: str | None = None):
+                 attention: bool = False, threat: str | None = None, source: str | None = None,
+                 col: list[str] | None = None, colv: list[str] | None = None):
         self.db = db
         self.class_value = class_value
         self.q = q
@@ -335,6 +348,11 @@ class EventQuery:
         self.threat = threat if threat in THREATS else None
         # ログソース(LogSeeker管理メタデータ)での絞り込み。Dashboardの「ログソース別」から遷移する
         self.source = source
+        # 正規化列（source_name / source_ip / actor_user 等）での絞り込み。ログソース・ホスト/ドメイン・
+        # ルール・エンティティ・相関の各画面から遷移する。payloadのTaxonomy KEYではないので
+        # filters とは別に持つ。許可リスト外の列名は捨てる（SQLへ列名を埋め込むため）。
+        from .api import TAX_COLS
+        self.cols = [(c, v) for c, v in zip(col or [], colv or []) if c in TAX_COLS]
 
     def apply(self, stmt, ev):
         """CTE(ev)の列だけで条件を組む。期間はCTE側で適用済み。"""
@@ -368,8 +386,10 @@ def event_query(db: Session = Depends(get_db), class_value: str | None = None, q
                 rep_value: str | None = None,
                 field: list[str] = Query(default=[]), value: list[str] = Query(default=[]),
                 attention: bool = False, threat: str | None = None,
-                source: str | None = None) -> EventQuery:
-    return EventQuery(db, class_value, q, start, end, rep_value, field, value, attention, threat, source)
+                source: str | None = None,
+                col: list[str] = Query(default=[]), colv: list[str] = Query(default=[])) -> EventQuery:
+    return EventQuery(db, class_value, q, start, end, rep_value, field, value, attention, threat, source,
+                      col, colv)
 
 
 # ---------------------------------------------------------------- 行の組み立て
