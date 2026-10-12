@@ -38,6 +38,17 @@ def _process_line(line: str, ip: str | None, raw_bytes: int) -> None:
     record_bytes(raw_bytes, source=src)
 
 
+def _enable_keepalive(conn: socket.socket) -> None:
+    """無通信では切らず、TCP keepalive で相手が落ちた接続だけを検出する。
+    ログ転送の接続は送るものが無ければ黙っているのが正常（例: 滅多に書かれないログファイル）。
+    以前は settimeout(120) で無通信2分の接続を切っており、NXLog が2分ごとに再接続していた。"""
+    conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    # 5分無通信で探査開始、60秒間隔で5回応答が無ければ切断（Linux のみ。他OSは既定値）
+    for opt, val in (("TCP_KEEPIDLE", 300), ("TCP_KEEPINTVL", 60), ("TCP_KEEPCNT", 5)):
+        if hasattr(socket, opt):
+            conn.setsockopt(socket.IPPROTO_TCP, getattr(socket, opt), val)
+
+
 def _handle(conn: socket.socket, addr) -> None:
     """改行区切りで1行=1イベント。1行の最大長を制限してメモリ枯渇/DoSを防ぐ。"""
     ip = addr[0] if addr else None
@@ -45,7 +56,7 @@ def _handle(conn: socket.socket, addr) -> None:
     buf = b""
     try:
         with conn:
-            conn.settimeout(120)
+            _enable_keepalive(conn)
             while True:
                 chunk = conn.recv(65536)
                 if not chunk:
@@ -69,6 +80,8 @@ def _handle(conn: socket.socket, addr) -> None:
             tail = buf.decode("utf-8", "replace").strip()
             if tail and len(buf) <= maxlen:
                 _process_line(tail, ip, len(buf))
+    except (ConnectionResetError, TimeoutError) as e:  # 相手の切断・keepalive 無応答は通常の終了
+        log.info("tcp connection closed from %s: %s", ip, e)
     except Exception as e:  # 接続単位の異常は握りつぶす
         log.warning("tcp connection error from %s: %s", ip, e)
 
