@@ -61,9 +61,16 @@ export function MfaStep({ mfaToken, mode, onDone, onCancel }: {
           スマートフォンを紛失した時など、認証アプリが使えない時に1回ずつ使えるコードです。
           <strong>この画面を閉じると二度と表示できません。</strong>パスワード管理ツールや紙に控えて、安全な場所に保管してください。
         </div>
-        <pre className="bg-light p-3 rounded font-monospace text-center mb-3" style={{ columns: 2 }}>
-          {done.recovery.join("\n")}
-        </pre>
+        {/* <pre> はTablerの既定で明るい文字色になり、明るい背景だと読めなかったため、色を明示する */}
+        <div className="border rounded p-3 mb-3"
+          style={{ background: "#fff", color: "#000", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem 1rem" }}>
+          {done.recovery.map((c) => (
+            <code key={c} className="text-center user-select-all"
+              style={{ color: "#000", background: "transparent", fontSize: "1.05rem", fontWeight: 600, letterSpacing: "0.05em" }}>
+              {c}
+            </code>
+          ))}
+        </div>
         <button type="button" className="btn btn-primary w-100" onClick={() => onDone(done.token, done.user)}>
           控えました。続ける
         </button>
