@@ -36,7 +36,7 @@ DB管理UI（pgAdmin）が必要な場合は [INSTALL-pgadmin.md](INSTALL-pgadmi
 
 ## 主な機能
 
-- **取り込み**: REST `/ingest`（JSON/配列）、TCP 516（NDJSON、NXLog等から直接送信可）、ファイル取り込み補助ツール
+- **取り込み**: REST `/ingest`（JSON/配列/NDJSON。HTTPS 443で画面と同じホストに送れる）、TCP 516（NDJSON、NXLog等から直接送信可）、ファイル取り込み補助ツール
 - **正規化・エンティティ抽出**: IP/ユーザー/ホスト/ドメイン/MAC を相関調査用に抽出（URLパス等の非資産は含まない）
 - **検知ルール**: IOC一致・攻撃ペイロード検知・Webスキャン・危険パス・Webshell探索・認証総当たり・root SSH試行・海外アクセス・ログ未達・ビルド失敗 に加え、
   **画面から追加できるカスタムルール**（既存フィールドへの部分一致/完全一致＋件数しきい値、安全設計）
@@ -97,7 +97,7 @@ SaaS/マネージドホスティングとしての第三者提供、著作権表
 
 | メソッド | パス | 用途 |
 |---|---|---|
-| POST | `/ingest`, `/ingest/{source}` | JSONをそのまま保存（Bearer認証は任意） |
+| POST | `/ingest`, `/ingest/{source}`, `/ingest/bulk` | JSON（1件/配列）またはNDJSON（`Content-Type: application/x-ndjson`）をそのまま保存（Bearer認証は任意）。`source`/`source_type`はURL指定が優先、無ければJSON内の値（TCPと同じ） |
 | TCP | `:516` | NDJSON（1行1JSON）受信。`source_type`をJSON内に含める |
 | GET | `/api/events` | イベント一覧（絞り込み・ページング） |
 | GET | `/api/events/export?format=csv|json` | 現在の絞り込みで一括エクスポート |
