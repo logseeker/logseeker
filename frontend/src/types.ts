@@ -292,7 +292,7 @@ export interface AuditRow {
 export interface AuditResponse { total: number; items: AuditRow[]; }
 
 // 相関分析の関係図（/api/correlations/graph）
-export type GraphStatus = "active" | "leak" | "stopped" | "blocked";
+export type GraphStatus = "breach" | "active" | "leak" | "stopped" | "blocked";
 export interface GraphAttacker {
   ip: string; country: string | null; is_ioc: boolean; is_private: boolean;
   failure_count: number; first_seen: string | null; last_seen: string | null;
@@ -301,16 +301,19 @@ export interface GraphAttacker {
 export interface GraphEdge {
   ip: string; server: string; failure_count: number; first_seen: string | null; last_seen: string | null;
   status: GraphStatus; banned_since: string | null; jails: string[];
+  breach: { fail_count: number; last_success: string; success_count: number;
+            success_users: string[]; failed_users: string[] } | null;
 }
 export interface GraphServer { name: string; attacker_count: number; blocked_count: number; failure_count: number; }
 export interface CorrelationGraph {
-  summary: { attackers: number; blocked: number; active: number; stopped: number; multi_server: number; truncated: boolean };
+  summary: { breach: number; attackers: number; blocked: number; active: number; stopped: number; multi_server: number; truncated: boolean };
   servers: GraphServer[]; attackers: GraphAttacker[]; edges: GraphEdge[];
 }
 export interface CorrelationTimeline {
   ip: string; unit: string;
   series: { bucket: string; server: string; count: number }[];
   ban_events: { time: string; server: string; action: string; jail: string | null }[];
+  success_events: { time: string; server: string; user: string | null }[];
   ban_state: { server: string; banned: boolean; banned_since: string | null; jails: string[] }[];
 }
 

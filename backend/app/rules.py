@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from . import rulepack
 from .models import CustomRule, Event, EventEntity, IOC, Setting
@@ -40,6 +40,8 @@ MAX_HITS_PER_RULE = 50   # 1ルールあたりの表示上限（画面が埋も�
 HOME_COUNTRY = "JP"      # 「海外」判定の基準国（ISOコード）。将来設定化も可能。
 SILENCE_MIN_EVENTS = 5   # ログ未達判定の対象にする最小実績件数（一度きりのテスト等のノイズを除外）
 DEFAULT_SILENCE_HOURS = 24
+SUCCESS_AFTER_FAIL_MIN = 3      # 成功より前の認証失敗がこの件数以上なら「侵入の可能性」（1〜2回は本人の打ち間違いと区別できない）
+SUCCESS_AFTER_FAIL_DAYS = 7     # 評価対象（成功イベントの受信日時）。全期間を見ると本番では重い
 WEBSHELL_PROBE_MIN = 5   # 同一IPが異なるファイル名で数字名.phpを試行した件数（同一パスの再試行は含めない）
 # 同一ログソースからのサーバエラー(5xx)応答の件数。
 # 当初は50を置いたが、あるWebサイトは日次中央値126件（しきい値の2.5倍）で
@@ -144,6 +146,11 @@ RULE_DEFS = [
     {"id": "webshell_probe", "name": "Webshell探索の疑い", "severity": "high", "category": "security",
      "description": "同一送信元が、数字のみのファイル名(例: /1.php)等ランダムな名前の.phpへ異なるパスで404を繰り返す。過去に設置されたWebshellを当てずっぽうで探る典型パターン。",
      "recommendation": "該当IPを遮断。心当たりのない.phpファイルが公開領域に無いか確認し、WAF/レート制限を導入。"},
+    {"id": "auth_success_after_failure", "name": "失敗のあとにログイン成功（侵入の可能性）", "severity": "critical",
+     "category": "security",
+     "description": "同じ送信元IPが、同じサーバーで認証に失敗を重ねたあとにログインに成功している。総当たりでパスワード等を当てられた（侵入された）可能性がある。",
+     "recommendation": "接続元が自分・社内のIPで打ち間違いの心当たりがあれば問題なし。そうでなければ直ちに、成功したユーザーのセッション・実行コマンド・新規/変更ファイル・cron・authorized_keys を確認し、"
+                       "パスワード変更（鍵の入れ替え）とセッション切断、該当IPの遮断を行う。"},
     {"id": "auth_bruteforce_user", "name": "認証総当たり（ユーザー単位）", "severity": "high", "category": "security",
      "description": "同一ユーザーへの認証失敗が多発。",
      "recommendation": "アカウントロック/パスワード強化/MFA。攻撃継続なら一時無効化。"},
@@ -187,6 +194,43 @@ def all_rule_defs() -> list[dict]:
 def _rec(rule_id: str) -> tuple[str, str, str, str]:
     d = next(r for r in RULE_DEFS if r["id"] == rule_id)
     return d["name"], d["severity"], d["recommendation"], d["category"]
+
+
+def auth_success_after_failure(db: Session, conds: list | None = None, days: int = SUCCESS_AFTER_FAIL_DAYS,
+                               min_fail: int = SUCCESS_AFTER_FAIL_MIN) -> list[dict[str, Any]]:
+    """同じ送信元IPが、同じサーバーで認証に min_fail 回以上失敗したあとに成功している組を返す。
+    ルール（auth_success_after_failure）と相関分析の関係図の両方で使う。
+    サーバー＝送信側が付けた source（無ければ host_name / source_name）。
+    失敗は sshd(linux) と auditd(audit) の二重計上を避けるため audit を除いて数える（auth_bruteforce_ip と同じ理由）。
+    conds（画面の絞り込み）は成功側にだけ掛ける。"""
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    server = func.coalesce(Event.source, Event.host_name, Event.source_name)
+    t = func.coalesce(Event.event_time, Event.received_at)
+    ok = (select(Event.source_ip.label("ip"), server.label("srv"), func.min(t).label("first_ok"),
+                 func.max(t).label("last_ok"), func.count().label("ok_cnt"),
+                 func.array_agg(func.distinct(Event.actor_user)).label("ok_users"))
+          .where(Event.event_category == "authentication", Event.event_result == "success",
+                 Event.source_ip.isnot(None), Event.received_at >= since, *(conds or []))
+          .group_by(Event.source_ip, server).subquery())
+    F = aliased(Event)
+    fserver = func.coalesce(F.source, F.host_name, F.source_name)
+    ft = func.coalesce(F.event_time, F.received_at)
+    rows = db.execute(
+        select(ok.c.ip, ok.c.srv, ok.c.first_ok, ok.c.last_ok, ok.c.ok_cnt, ok.c.ok_users,
+               func.count(F.id), func.min(ft), func.array_agg(func.distinct(F.actor_user)))
+        .join(F, (F.source_ip == ok.c.ip) & (fserver == ok.c.srv) & (ft <= ok.c.last_ok))
+        .where(F.event_category == "authentication", F.event_result == "failure",
+               or_(F.source_type.is_(None), F.source_type != "audit"),
+               F.received_at >= since - timedelta(days=1))
+        .group_by(ok.c.ip, ok.c.srv, ok.c.first_ok, ok.c.last_ok, ok.c.ok_cnt, ok.c.ok_users)
+        .having(func.count(F.id) >= min_fail)
+        .order_by(ok.c.last_ok.desc()).limit(MAX_HITS_PER_RULE)
+    ).all()
+    return [{"ip": ip, "server": srv or "-", "first_success": first_ok, "last_success": last_ok,
+             "success_count": ok_cnt, "success_users": sorted(u for u in (ok_users or []) if u),
+             "fail_count": fcnt, "first_fail": ffirst,
+             "failed_users": sorted(u for u in (fusers or []) if u)[:10]}
+            for ip, srv, first_ok, last_ok, ok_cnt, ok_users, fcnt, ffirst, fusers in rows]
 
 
 def evaluate(db: Session, conds: list | None = None) -> list[dict[str, Any]]:
@@ -283,6 +327,14 @@ def evaluate(db: Session, conds: list | None = None) -> list[dict[str, Any]]:
     for user, cnt in rows:
         add("auth_bruteforce_user", f"認証総当たりの疑い（ユーザー）: {user}",
             f"認証失敗 {cnt} 件", cnt, pivot={"field": "actor_user", "value": user})
+
+    # --- 失敗のあとにログイン成功（侵入の可能性）---
+    for r in auth_success_after_failure(db, w):
+        when = r["last_success"].astimezone(timezone(timedelta(hours=9))).strftime("%m-%d %H:%M")
+        users = "、".join(r["success_users"]) or "不明"
+        add("auth_success_after_failure", f"失敗のあとにログイン成功: {r['ip']}（{r['server']}）",
+            f"認証失敗 {r['fail_count']} 件のあと {when} にログイン成功（ユーザー: {users}）",
+            r["fail_count"], pivot={"field": "source_ip", "value": r["ip"]})
 
     # --- 認証総当たり（送信元IP単位）---
     # 同一のSSH失敗試行が sshd(linux) と auditd(audit) の両方から届くため、絞り込まないと

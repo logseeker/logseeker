@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import {
-  IconBuildingCommunity, IconDeviceDesktop, IconServer, IconShieldCheck, IconShieldExclamation,
+  IconAlertOctagon, IconBuildingCommunity, IconDeviceDesktop, IconServer, IconShieldCheck, IconShieldExclamation,
 } from "@tabler/icons-react";
 import { api } from "../api";
 import { fmtTime, stLabel } from "../labels";
@@ -12,6 +12,7 @@ import type { CorrelationGraph as Graph, GraphAttacker, GraphEdge, GraphStatus, 
 // 攻撃＝失敗イベントのあるアクセスのみ（成功だけのアクセスは正規利用と区別できないので描かない）。
 
 export const STATUS: Record<GraphStatus, { label: string; short: string; color: string }> = {
+  breach: { label: "失敗のあとにログイン成功（侵入の可能性）", short: "侵入の可能性", color: "#ae3ec9" },
   active: { label: "遮断されず攻撃が続いている", short: "攻撃継続中", color: "#d63939" },
   leak: { label: "遮断したが、その後も失敗が記録されている", short: "遮断後も継続", color: "#f76707" },
   stopped: { label: "遮断していないが、現在は止まっている", short: "停止（未遮断）", color: "#f59f00" },
@@ -79,6 +80,28 @@ export function CorrelationGraph({ days, onPick, onEntity }: {
 
   return (
     <>
+      {s.breach > 0 && (
+        <div className="col-12">
+          <div className="alert alert-danger d-flex align-items-start gap-3 mb-0" style={{ borderLeftColor: STATUS.breach.color }}>
+            <IconAlertOctagon size={28} style={{ color: STATUS.breach.color }} className="flex-shrink-0" />
+            <div>
+              <div className="fw-bold">失敗のあとにログインに成功した送信元が {s.breach} 件あります（侵入の可能性）</div>
+              <div className="small">
+                {data.edges.filter((e) => e.status === "breach").map((e) => (
+                  <a key={`${e.ip}|${e.server}`} role="button" className="me-3" onClick={() => setSel(e.ip)}>
+                    {e.ip} → {e.server}（失敗 {e.breach!.fail_count}件のあと {hm(e.breach!.last_success)} に
+                    {e.breach!.success_users.join("、") || "不明なユーザー"} で成功）
+                  </a>
+                ))}
+              </div>
+              <div className="small text-secondary">
+                自分・社内からの打ち間違いでなければ、成功したユーザーの操作履歴を直ちに確認してください。
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="col-12">
         <div className="row row-cards">
           <SummaryCard title="攻撃元（失敗のあったIP）" value={s.attackers} color="secondary"
@@ -145,6 +168,7 @@ export function CorrelationGraph({ days, onPick, onEntity }: {
             )}
           </div>
           <div className="card-footer d-flex flex-wrap gap-3 small text-secondary">
+            <Legend color={STATUS.breach.color} flow label="失敗後にログイン成功（侵入の可能性）" />
             <Legend color={STATUS.active.color} flow label="攻撃継続中（未遮断）" />
             <Legend color={STATUS.leak.color} flow label="遮断後も継続" />
             <Legend color={STATUS.stopped.color} label="停止（未遮断）" />
@@ -209,7 +233,8 @@ function EdgeLine({ e, y1, y2, dim }: { e: GraphEdge; y1: number; y2: number; di
   const SHIELD_T = 0.3;
   const sp = bez(EDGE_X1, y1, EDGE_X2, y2, SHIELD_T);
   const tip = `${e.ip} → ${e.server}\n${STATUS[e.status].label}\n失敗 ${e.failure_count}件` +
-    (e.banned_since ? `\n遮断: ${hm(e.banned_since)}（${e.jails.join(", ")}）` : "");
+    (e.banned_since ? `\n遮断: ${hm(e.banned_since)}（${e.jails.join(", ")}）` : "") +
+    (e.breach ? `\nログイン成功: ${hm(e.breach.last_success)}（${e.breach.success_users.join(", ") || "ユーザー不明"}）` : "");
   return (
     <g opacity={opacity}>
       <title>{tip}</title>
@@ -222,6 +247,12 @@ function EdgeLine({ e, y1, y2, dim }: { e: GraphEdge; y1: number; y2: number; di
       ) : (
         <path d={d} fill="none" stroke={STATUS[e.status].color} strokeWidth={w}
           className={e.status === "stopped" ? undefined : "ls-flow"} />
+      )}
+      {e.status === "breach" && (
+        <g>
+          <circle cx={EDGE_X2 - 16} cy={y2} r={13} fill="#fff" stroke={STATUS.breach.color} strokeWidth={2} />
+          <IconAlertOctagon x={EDGE_X2 - 26} y={y2 - 10} width={20} height={20} color={STATUS.breach.color} />
+        </g>
       )}
       {blocked && (
         <g>
@@ -239,7 +270,7 @@ function AttackerNode({ a, y, selected, onClick, onHover }: {
   a: GraphAttacker; y: number; selected: boolean; onClick: () => void; onHover: (on: boolean) => void;
 }) {
   const c = STATUS[a.status].color;
-  const Icon = a.is_private ? IconBuildingCommunity : IconDeviceDesktop;
+  const Icon = a.status === "breach" ? IconAlertOctagon : a.is_private ? IconBuildingCommunity : IconDeviceDesktop;
   return (
     <g className="ls-node" onClick={onClick} onMouseEnter={() => onHover(true)} onMouseLeave={() => onHover(false)}>
       <rect x={AX - 8} y={y - 25} width={EDGE_X1 - AX + 4} height={50} rx={8}
@@ -281,6 +312,15 @@ function AttackerDetail({ a, edges, days, onPick, onEntity }: {
       data: tl.series.filter((r) => r.server === sv).map((r) => [r.bucket, r.count]),
     }));
     const bans = tl.ban_events.filter((b) => b.action === "Ban");
+    if (tl.success_events.length) {
+      series.push({
+        name: "ログイン成功", type: "line", data: [], markLine: {
+          symbol: "none", lineStyle: { color: STATUS.breach.color, width: 2, type: "solid" },
+          label: { formatter: "成功", color: STATUS.breach.color, fontWeight: "bold", position: "end" },
+          data: tl.success_events.map((x) => ({ xAxis: x.time })),
+        },
+      });
+    }
     series.push({
       name: "遮断", type: "line", data: [], markLine: {
         symbol: "none", lineStyle: { color: STATUS.blocked.color, width: 2 },
@@ -327,6 +367,14 @@ function AttackerDetail({ a, edges, days, onPick, onEntity }: {
                   ? <>失敗 {e.failure_count.toLocaleString()}件（{hm(e.first_seen)}〜{hm(e.last_seen)}）</>
                   : <>この期間の失敗記録なし</>}
                 <br />
+                {e.breach && (
+                  <div className="fw-bold" style={{ color: STATUS.breach.color }}>
+                    → 認証失敗 {e.breach.fail_count}件のあと、{hm(e.breach.last_success)} に
+                    {e.breach.success_users.length ? ` ${e.breach.success_users.join("、")} ` : " 不明なユーザー"}でログイン成功
+                    （成功 {e.breach.success_count}件）。
+                    {e.breach.failed_users.length > 0 && <span className="fw-normal">失敗したユーザー: {e.breach.failed_users.join("、")}</span>}
+                  </div>
+                )}
                 {e.banned_since
                   ? <span style={{ color: STATUS[e.status].color }}>
                       → {hm(e.banned_since)} に fail2ban（{e.jails.join(", ")}）で遮断。
@@ -339,7 +387,7 @@ function AttackerDetail({ a, edges, days, onPick, onEntity }: {
             </li>
           ))}
         </ul>
-        <div className="text-secondary small mb-1">失敗件数の推移（縦線＝遮断した時刻）</div>
+        <div className="text-secondary small mb-1">失敗件数の推移（緑の縦線＝遮断、紫の縦線＝ログイン成功）</div>
         {option
           ? <ReactECharts option={option} style={{ height: 200 }} notMerge />
           : <div className="text-secondary small py-4 text-center">読み込み中…</div>}

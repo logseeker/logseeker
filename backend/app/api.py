@@ -602,7 +602,8 @@ def _ban_states(db: Session, ips: set[str] | None = None) -> dict[tuple[str, str
 
 
 def _edge_status(fails: int, last_fail, ban: dict | None, now) -> str:
-    """blocked=遮断済み / leak=遮断後も失敗が続く / active=遮断されず継続中 / stopped=遮断なし・現在は止まっている"""
+    """blocked=遮断済み / leak=遮断後も失敗が続く / active=遮断されず継続中 / stopped=遮断なし・現在は止まっている
+    （失敗のあとの成功＝breach は呼び出し側で最優先に上書きする）"""
     if ban and ban["banned"]:
         if fails and last_fail and ban["since"] and last_fail > ban["since"] + timedelta(seconds=GRAPH_BAN_GRACE_SECONDS):
             return "leak"
@@ -612,7 +613,7 @@ def _edge_status(fails: int, last_fail, ban: dict | None, now) -> str:
     return "stopped"
 
 
-_STATUS_RANK = {"active": 0, "leak": 1, "stopped": 2, "blocked": 3}
+_STATUS_RANK = {"breach": -1, "active": 0, "leak": 1, "stopped": 2, "blocked": 3}
 
 
 @router.get("/correlations/graph")
@@ -651,15 +652,28 @@ def correlation_graph(db: Session = Depends(get_db),
             pairs[key] = {"failure_count": 0, "first_seen": None, "last_seen": None,
                           "country": None, "source_types": []}
 
+    # 失敗のあとにログイン成功（侵入の可能性）。検知ルール auth_success_after_failure と同じ判定
+    from .rules import auth_success_after_failure
+    breaches = {(r["ip"], r["server"]): r
+                for r in auth_success_after_failure(db, [pc] if pc is not None else [], days=days)}
+    for key in breaches:
+        pairs.setdefault(key, {"failure_count": 0, "first_seen": None, "last_seen": None,
+                               "country": None, "source_types": []})
+
     edges = []
     for (ip, srv), p in pairs.items():
         b = bans.get((ip, srv))
+        br = breaches.get((ip, srv))
+        status = "breach" if br else _edge_status(p["failure_count"], p["last_seen"], b, now)
         edges.append({
             "ip": ip, "server": srv, "failure_count": p["failure_count"],
             "first_seen": p["first_seen"], "last_seen": p["last_seen"],
-            "status": _edge_status(p["failure_count"], p["last_seen"], b, now),
+            "status": status,
             "banned_since": b["since"] if b and b["banned"] else None,
             "jails": sorted(b["jails"]) if b else [],
+            "breach": {"fail_count": br["fail_count"], "last_success": br["last_success"].isoformat(),
+                       "success_count": br["success_count"], "success_users": br["success_users"],
+                       "failed_users": br["failed_users"]} if br else None,
             "_country": p["country"], "_stypes": p["source_types"],
         })
 
@@ -684,6 +698,7 @@ def correlation_graph(db: Session = Depends(get_db),
 
     all_attackers = list(attackers.values())
     summary = {
+        "breach": sum(1 for a in all_attackers if a["status"] == "breach"),
         "attackers": len(all_attackers),
         "blocked": sum(1 for a in all_attackers if a["status"] == "blocked"),
         "active": sum(1 for a in all_attackers if a["status"] in ("active", "leak")),
@@ -736,9 +751,15 @@ def correlation_timeline(ip: str, db: Session = Depends(get_db),
         select(_graph_time(), _graph_server(), Event.payload["action"].astext, Event.payload["service"].astext)
         .where(Event.source_type == "fail2ban", Event.source_ip == ip, _period_clause(days))
         .order_by(_graph_time())).all()
+    succ = db.execute(
+        select(_graph_time(), _graph_server(), Event.actor_user)
+        .where(Event.source_ip == ip, Event.event_category == "authentication", Event.event_result == "success",
+               _period_clause(days))
+        .order_by(_graph_time().desc()).limit(50)).all()
     return {
         "ip": ip, "unit": unit,
         "series": [{"bucket": b.isoformat(), "server": s or "-", "count": c} for b, s, c in rows],
+        "success_events": [{"time": ts.isoformat(), "server": s or "-", "user": u} for ts, s, u in succ],
         "ban_events": [{"time": ts.isoformat(), "server": s or "-", "action": a, "jail": j}
                        for ts, s, a, j in ban_events if a in ("Ban", "Unban", "Restore")],
         "ban_state": [{"server": srv, "banned": b["banned"],
