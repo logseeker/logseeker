@@ -153,6 +153,7 @@ def run(db: Session) -> None:
     _move_normalized_into_events(db)
     _add_user_sso_columns(db)
     _add_user_mfa_columns(db)
+    _add_user_password_change_required(db)
     log.info("case/incident management migrations: done.")
 
 
@@ -460,4 +461,13 @@ def _fix_user_fk_ondelete(db: Session) -> None:
             f"ALTER TABLE {table} ADD CONSTRAINT {constraint} "
             f"FOREIGN KEY ({column}) REFERENCES users(id) ON DELETE SET NULL"
         ))
+    db.commit()
+
+
+def _add_user_password_change_required(db: Session) -> None:
+    """パスワード要件（password_policy.py）を満たさない管理者に変更を強制するためのフラグ。
+    既存のパスワードは平文が無く判定できないので、次回ログイン時に判定して立てる（auth_api.py）。"""
+    if not _table_exists(db, "users"):
+        return
+    db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_change_required BOOLEAN NOT NULL DEFAULT false"))
     db.commit()

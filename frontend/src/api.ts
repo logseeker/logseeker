@@ -280,6 +280,8 @@ export const api = {
   mfaVerify: (mfa_token: string, code: string) =>
     post<{ token: string; user: AuthUser; recovery_codes_left?: number }>(`/api/auth/mfa/verify`, { mfa_token, code }),
   mfaSetupStart: (mfa_token: string) => post<MfaSetupInfo>(`/api/auth/mfa/setup/start`, { mfa_token }),
+  changePassword: (current_password: string, new_password: string) =>
+    post<{ ok: boolean; user: AuthUser }>(`/api/auth/password`, { current_password, new_password }),
   mfaSetupConfirm: (mfa_token: string, code: string) =>
     post<{ token: string; user: AuthUser; recovery_codes: string[] }>(`/api/auth/mfa/setup/confirm`, { mfa_token, code }),
   // SSOのコールバック後、URLの一回限りコードをセッショントークンに交換する（Cookieも同時に照合される）

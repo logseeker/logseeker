@@ -64,6 +64,11 @@ class MfaCode(BaseModel):
     code: str                     # 認証アプリの6桁、またはリカバリーコード
 
 
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
+
+
 class UserUpdate(BaseModel):
     display_name: str | None = None
     role: str | None = None

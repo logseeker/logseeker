@@ -349,6 +349,9 @@ class User(Base):
     mfa_recovery_codes: Mapped[str | None] = mapped_column(Text, nullable=True)  # sha256のJSON配列（一回限り）
     mfa_fail_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     mfa_locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # パスワードが要件（password_policy.py）を満たしていない、または他人が設定した仮パスワード。
+    # True の間は自分のパスワード変更以外の操作をさせない（main.py の enforce_auth）。
+    password_change_required: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     enabled: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

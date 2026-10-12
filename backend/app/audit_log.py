@@ -109,6 +109,7 @@ ROUTES: dict[tuple[str, str], str] = {
     ("POST", "/api/notifications/send-now"): "notify.send_now",
     ("POST", "/api/users"): "user.create",
     ("PUT", "/api/users/{user_id}"): "user.update",
+    ("POST", "/api/auth/password"): "user.password",
     ("DELETE", "/api/users/{user_id}"): "user.delete",
     ("POST", "/api/auth/require"): "auth.toggle",
     ("PUT", "/api/sso"): "sso.config",        # 旧パス（過去の監査ログ表示用）

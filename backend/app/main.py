@@ -151,6 +151,8 @@ async def audit_mutations(request: Request, call_next):
 _AUTH_OPEN_PATHS = {"/api/auth/login", "/api/auth/status", "/api/auth/admin-login",
                     "/api/auth/mfa/verify", "/api/auth/mfa/setup/start", "/api/auth/mfa/setup/confirm"}
 _AUTH_OPEN_PREFIXES = ("/api/sso/",)  # SSO設定(管理)は /api/admin/sso なのでここには含まれない
+# パスワード変更が必要な管理者（password_change_required）が使ってよいAPI
+_PW_CHANGE_ALLOWED_PATHS = {"/api/auth/me", "/api/auth/logout", "/api/auth/password", "/api/auth/admin-status"}
 
 
 @app.middleware("http")
@@ -161,8 +163,14 @@ async def enforce_auth(request: Request, call_next):
         from .db import SessionLocal
         db = SessionLocal()
         try:
-            if is_auth_required(db) and get_current_user(request.headers.get("authorization"), db) is None:
+            user = get_current_user(request.headers.get("authorization"), db)
+            if is_auth_required(db) and user is None:
                 return JSONResponse({"error": "ログインが必要です"}, status_code=401)
+            # パスワードが要件を満たしていない／仮パスワードの管理者は、変更が済むまで他の操作をさせない
+            # （password_policy.py）。認証OFFでもログイン中の本人には適用する。
+            if user is not None and user.password_change_required and path not in _PW_CHANGE_ALLOWED_PATHS:
+                return JSONResponse({"error": "パスワードの変更が必要です", "password_change_required": True},
+                                    status_code=403)
         finally:
             db.close()
     return await call_next(request)

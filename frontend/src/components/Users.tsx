@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import type { AuthStatus, AuthUser, CreateUserResult, Role } from "../types";
 import { fmtTime } from "../labels";
+import { isPasswordCompliant, PASSWORD_RULE_TEXT, PasswordChecklist } from "../passwordPolicy";
 
 const ROLE_OPTS: { v: Role; label: string; desc: string }[] = [
   { v: "viewer", label: "閲覧者", desc: "閲覧・ダウンロード" },
@@ -43,7 +44,7 @@ export function Users({ auth, onChanged }: { auth: AuthStatus; onChanged: () => 
     setNu(EMPTY_NU);
     if (r.email_sent) setCreated(r); else flash("ユーザーを作成しました");
   });
-  const canCreate = nu.username && (isSsoNew || emailEnabled ? nu.email : nu.password);
+  const canCreate = nu.username && (isSsoNew || emailEnabled ? nu.email : isPasswordCompliant(nu.password));
 
   const ssoLabel = (u: AuthUser) => u.sso_provider === "google" ? "Google" : u.sso_provider === "microsoft" ? "Microsoft 365" : null;
   const changeEmail = (u: AuthUser) => {
@@ -138,7 +139,7 @@ export function Users({ auth, onChanged }: { auth: AuthStatus; onChanged: () => 
                         ) : (
                           <>
                             <button className="btn btn-sm" disabled={!canManage}
-                              onClick={() => { const p = prompt(`「${u.username}」の新しいパスワード`); if (p) guard(async () => { await api.updateUser(u.id, { password: p }); flash("パスワードを再設定しました"); }); }}>
+                              onClick={() => { const p = prompt(`「${u.username}」の新しいパスワード（${PASSWORD_RULE_TEXT}）\n自分以外のアカウントの場合、本人は次回ログイン時に変更を求められます。`); if (p) guard(async () => { await api.updateUser(u.id, { password: p }); flash("パスワードを再設定しました"); }); }}>
                               パスワード再設定
                             </button>
                             {u.mfa_enabled && (
@@ -209,6 +210,7 @@ export function Users({ auth, onChanged }: { auth: AuthStatus; onChanged: () => 
                 <div className="col-md-4">
                   <label className="form-label">初期パスワード</label>
                   <input className="form-control" type="text" value={nu.password} onChange={(e) => setNu({ ...nu, password: e.target.value })} />
+                  <div className="mt-1"><PasswordChecklist password={nu.password} /></div>
                 </div>
               )}
               <div className="col-md-4 ms-auto d-flex align-items-end">
@@ -220,7 +222,7 @@ export function Users({ auth, onChanged }: { auth: AuthStatus; onChanged: () => 
                 ? "招待制です。本人がGoogle / Microsoft 365でログインした時、このメールアドレス（IdPのログインID）と一致すれば紐付けます。管理パネルの「SSO」設定が有効になっている必要があります。"
                 : emailEnabled
                 ? "メール通知が有効なため、初期パスワードは自動生成してメールアドレス宛にのみ送信します（画面には表示されません）。"
-                : "メール通知が無効なため、初期パスワードを直接入力してください。「通知」画面でメール通知を有効にすると、メールアドレス指定に切り替わります。"}
+                : "メール通知が無効なため、初期パスワードを直接入力してください。本人は初回ログイン時に自分のパスワードへの変更を求められます。「通知」画面でメール通知を有効にすると、メールアドレス指定に切り替わります。"}
             </div>
           </div>
         </div>

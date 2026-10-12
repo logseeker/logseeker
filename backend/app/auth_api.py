@@ -21,11 +21,12 @@ from sqlalchemy.orm import Session
 from . import auth as A
 from . import audit_log as L
 from . import mfa as M
+from . import password_policy as P
 from . import sso as S
 from .db import get_db
 from .models import AuditLog, User
-from .schema import (AuthToggle, IpRestrictSave, LoginRequest, MfaCode, MfaToken, SSOConfig, SsoExchange,
-                     UserCreate, UserUpdate)
+from .schema import (AuthToggle, IpRestrictSave, LoginRequest, MfaCode, MfaToken, PasswordChange, SSOConfig,
+                     SsoExchange, UserCreate, UserUpdate)
 
 router = APIRouter(prefix="/api")
 
@@ -40,6 +41,7 @@ def _user_dict(u: User) -> dict:
         "is_sso": u.auth_method == "sso", "email": u.email,
         "sso_provider": u.sso_provider,  # None = SSOユーザーだがまだ一度もSSOログインしていない（未紐付け）
         "mfa_enabled": M.is_enabled(u),  # パスワード認証（管理者）のみ意味を持つ
+        "password_change_required": bool(u.password_change_required),
         "created_at": u.created_at.isoformat() if u.created_at else None,
         "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
     }
@@ -93,6 +95,11 @@ def _password_login(body: LoginRequest, request: Request, db: Session, purpose: 
         if purpose == "admin":
             return _json_error(403, "この画面は管理者(admin)アカウントのみ利用できます")
         return _json_error(403, "パスワードでログインできるのは管理者のみです。Google / Microsoft 365 でログインしてください")
+    # 既存のパスワード（初期パスワード・要件導入前に設定したもの）は平文が無く、ここでしか判定できない。
+    # 要件を満たさなければ、2段階認証の後に変更を強制する（main.py の enforce_auth）。
+    if not P.is_compliant(body.password) and not u.password_change_required:
+        u.password_change_required = True
+        db.commit()
     return M.start_challenge(db, u, purpose)
 
 
@@ -196,6 +203,35 @@ def me(user: User | None = Depends(A.get_current_user)):
     return _user_dict(user) if user else {"user": None}
 
 
+@router.post("/auth/password")
+def change_own_password(body: PasswordChange, request: Request,
+                        user: User | None = Depends(A.get_current_user), db: Session = Depends(get_db)):
+    """自分のパスワード変更（管理者）。要件を満たさないパスワードや仮パスワードの管理者は、
+    これを済ませるまで他の操作ができない（main.py の enforce_auth）。"""
+    if not user:
+        return _json_error(401, "ログインが必要です")
+    if user.auth_method == "sso":
+        return _json_error(400, "SSOユーザーのパスワードはGoogle / Microsoft 365 側で管理します")
+    def fail(msg: str) -> Response:
+        # 失敗も監査ログに残る（記録はミドルウェア。HTTP 400 として残る）
+        L.note(request, "user.password", target=user.username, detail=f"本人によるパスワード変更に失敗: {msg}")
+        return _json_error(400, msg)
+
+    if not A.verify_password(body.current_password, user.password_hash):
+        return fail("現在のパスワードが違います")
+    if msg := P.error_message(body.new_password):
+        return fail(msg)
+    if body.new_password == body.current_password:
+        return fail("現在と同じパスワードは使えません")
+    was_required = bool(user.password_change_required)
+    user.password_hash = A.hash_password(body.new_password)
+    user.password_change_required = False
+    db.commit()
+    L.note(request, "user.password", target=user.username,
+           detail="パスワードを変更（本人が変更）" + ("・要件を満たすパスワードへの変更が必要だったため" if was_required else ""))
+    return {"ok": True, "user": _user_dict(user)}
+
+
 # ---------------- ユーザー管理 ----------------
 def _can_manage_target_role(actor: User | None, target_role: str, db: Session) -> bool:
     """sysadmin は viewer/editor のみ管理可。admin は全ロール可。認証OFF時は全許可。"""
@@ -264,8 +300,8 @@ def create_user(body: UserCreate, request: Request,
         text = (f"LogSeekerのアカウントが作成されました。\n\n"
                 f"ユーザー名: {body.username}\n"
                 f"仮パスワード: {password}\n\n"
-                f"初回ログイン時に、認証アプリ（Google Authenticator 等）の登録を求められます。\n"
-                f"ログイン後、パスワードの変更をおすすめします。\n")
+                f"初回ログイン時に、認証アプリ（Google Authenticator 等）の登録と、\n"
+                f"パスワードの変更（{P.MIN_LENGTH}文字以上・英大文字/小文字/数字/記号をすべて含む）を求められます。\n")
         err = send_email([body.email], subject, text, db)
         if err:
             return Response(status_code=502, content=json.dumps({"error": f"メール送信に失敗しました: {err}"}),
@@ -276,10 +312,13 @@ def create_user(body: UserCreate, request: Request,
         if not body.password:
             return Response(status_code=400, content='{"error":"パスワードを入力してください"}',
                             media_type="application/json")
+        if msg := P.error_message(body.password):
+            return _json_error(400, msg)
         password = body.password
 
+    # 他人（作成した管理者）が知っている仮パスワードなので、本人に初回ログインで変更させる
     u = User(username=body.username, display_name=body.display_name, role=body.role,
-             password_hash=A.hash_password(password), enabled=True)
+             password_hash=A.hash_password(password), enabled=True, password_change_required=True)
     db.add(u)
     db.commit()
     L.note(request, "user.create", target=body.username,
@@ -331,9 +370,14 @@ def update_user(user_id: int, body: UserUpdate, request: Request,
     if body.password:
         if u.auth_method == "sso":
             return _json_error(400, "SSOユーザーにはパスワードを設定できません")
+        if msg := P.error_message(body.password):
+            return _json_error(400, msg)
         u.password_hash = A.hash_password(body.password)
-        changes.append("パスワードを変更（本人が変更）" if actor and actor.id == u.id
-                       else "パスワードを変更（再設定）")
+        is_self = bool(actor and actor.id == u.id)
+        # 他人が再設定したパスワードは仮パスワード扱い（本人に次回ログインで変更させる）
+        u.password_change_required = not is_self
+        changes.append("パスワードを変更（本人が変更）" if is_self
+                       else "パスワードを変更（再設定・次回ログイン時に本人が変更）")
     if body.email is not None and u.auth_method == "sso":
         email = body.email.strip().lower()
         if email != (u.email or ""):

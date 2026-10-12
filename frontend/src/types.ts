@@ -249,6 +249,7 @@ export interface AuthUser {
   email: string | null;
   sso_provider: SsoProviderId | null;   // SSOユーザーで null = まだ一度もSSOログインしていない（未紐付け）
   mfa_enabled: boolean;                 // 管理者（パスワード認証）のみ意味を持つ
+  password_change_required: boolean;    // 要件を満たさない／仮パスワード。変更するまで他の操作不可
   created_at: string | null; last_login_at: string | null;
 }
 export interface CreateUserResult extends AuthUser {

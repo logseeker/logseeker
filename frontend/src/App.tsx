@@ -37,6 +37,7 @@ import { api, setUnauthorizedHandler, tokenStore } from "./api";
 import type { EventQuery } from "./api";
 import { fieldLabel } from "./labels";
 import type { AuthStatus, FilterState, Role, Screen } from "./types";
+import { ChangePassword } from "./components/ChangePassword";
 import "./styles.css";
 
 const ROLE_RANK: Record<Role, number> = { viewer: 1, editor: 2, sysadmin: 3, admin: 4 };
@@ -308,6 +309,10 @@ export default function App() {
   // ログイン必須なのに未ログイン → ログイン画面
   if (auth?.auth_required && !auth.user) {
     return <Login sso={auth.sso} ssoError={ssoError} onLoggedIn={() => { setSsoError(null); loadAuth(); setScreen("dashboard"); }} />;
+  }
+  // パスワードが要件を満たしていない／仮パスワードの管理者は、変更が済むまで他の画面に入れない
+  if (auth?.user?.password_change_required) {
+    return <ChangePassword user={auth.user} onDone={() => loadAuth()} onLogout={logout} />;
   }
   const visibleMenu = MENU.filter((m) => canSee(m.key));
 

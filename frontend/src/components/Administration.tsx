@@ -3,6 +3,7 @@ import { api, tokenStore } from "../api";
 import type {
   AuthUser, IpAllowEntry, IpRestrictStatus, MfaChallenge, SsoAdminInput, SsoAdminStatus, SsoProviderId, SsoProviderInput,
 } from "../types";
+import { ChangePassword } from "./ChangePassword";
 import { MfaStep } from "./MfaStep";
 
 // 通常のログイン後画面（左メニュー）とは完全に切り離した、管理者(admin)専用の管理パネル。
@@ -45,6 +46,12 @@ export function Administration() {
 
   if (checking) {
     return <div className="page page-center"><div className="text-secondary">確認中…</div></div>;
+  }
+
+  // パスワードが要件を満たしていない／仮パスワードの管理者は、変更が済むまで管理パネルに入れない
+  if (user?.password_change_required) {
+    return <ChangePassword user={user} onDone={(u) => setUser(u)}
+      onLogout={async () => { try { await api.logout(); } catch { /* noop */ } tokenStore.clear(); setUser(null); }} />;
   }
 
   if (!user) {
