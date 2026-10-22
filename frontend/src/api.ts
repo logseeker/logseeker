@@ -4,8 +4,8 @@ import type {
   ColumnSets, DashboardOverview, DashboardTimeline, DeadLettersResponse, EntityDetail, EntityRow, EventDetailData, EventRow,
   EventsClassesResponse, EventsFields, EventsSearchResponse, FacetResponse, FieldInfo, FilterState, HistogramResponse,
   IncidentActivityItem, IncidentDetail, IncidentResponseActionTypeDef, IncidentRow, IncidentStatusDef,
-  IngestStatus, IngestVolume, IocFeedsInfo, IpRestrictStatus, LicenseInfo, MappingsResponse, MfaChallenge,
-  MfaSetupInfo, NotificationConfig,
+  IngestStatus, IngestVolume, IocFeedsInfo, IpRestrictStatus, LicenseInfo, M365ConfigInput, M365Status,
+  M365TestResult, MappingsResponse, MfaChallenge, MfaSetupInfo, NotificationConfig,
   ReleaseItem, Role, RuleDef, RuleHit, SsoAdminInput, SsoAdminStatus, Verdict, CorrelationGraph, CorrelationTimeline } from "./types";
 
 const BASE = (import.meta.env.VITE_API_BASE as string) || "";
@@ -247,6 +247,12 @@ export const api = {
     post<{ ok: boolean }>(`/api/ioc/feeds`, b),
   iocSettings: (sync_hours: number) => post<{ ok: boolean }>(`/api/ioc/settings`, { sync_hours }),
   iocSyncNow: () => post<{ results: { name: string; count: number; status: string }[] }>(`/api/ioc/sync`, {}),
+
+  // 外部連携（Microsoft 365 監査ログ）
+  m365Status: () => get<M365Status>(`/api/connectors/m365`),
+  m365Save: (b: M365ConfigInput) => put<M365Status>(`/api/connectors/m365`, b),
+  m365Test: () => post<M365TestResult>(`/api/connectors/m365/test`, {}),
+  m365Run: () => post<{ started: boolean }>(`/api/connectors/m365/run`, {}),
 
   // 相関分析（AI不要・複数ソース横断）
   correlationGraph: (days = 1, limit = 20) =>

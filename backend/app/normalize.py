@@ -8,6 +8,7 @@ from typing import Any
 
 from . import extractors
 from . import taxonomy_fields as tf
+from .m365_audit import normalize_m365
 from .timeparse import resolve_time
 
 # 意味ごとのTaxonomy KEY（優先順）→ 導出フィールド名。
@@ -79,6 +80,7 @@ SOURCE_CONFIG: dict[str, dict[str, str | None]] = {
     "nas": {"source_name": "NAS", "device_name": None},
     "litespeed": {"source_name": None, "device_name": None},  # Web: source_name=ドメイン(vhost)
     "google_workspace": {"source_name": "Google Workspace", "device_name": None},
+    "m365": {"source_name": "Microsoft 365", "device_name": None},
 }
 
 PARSER_VERSION = "0.1"
@@ -162,6 +164,10 @@ def _category_extras(source_type: str, payload: dict, norm: dict) -> None:
     elif source_type == "google_workspace_audit":
         norm["event_category"] = "audit"
         norm["event_result"] = "unknown"
+
+    elif source_type == "m365_audit":
+        # Microsoft 365 統合監査ログ。時刻(UTC)・操作・結果・ユーザー・送信元IPの決め方は m365_audit.py
+        normalize_m365(payload, norm)
 
     elif source_type == "router":
         norm["event_category"] = "network"

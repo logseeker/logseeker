@@ -341,6 +341,8 @@ Teams
 
 connector で取得したイベントも、内部的には ingest pipeline に流す。
 
+Microsoft 365（統合監査ログ。Office 365 Management Activity API）は実装済み（`source_type = m365_audit`。設定は画面「外部連携」、詳細は docs/m365.md）。
+
 ---
 
 ## 3. ingest pipeline

@@ -241,6 +241,23 @@ export interface IocFeedsInfo {
   sync_hours: number; total_ioc: number; feeds: IocFeed[];
 }
 
+// 外部連携: Microsoft 365 監査ログ（/api/connectors/m365）。client_secret は返らない（has_secret のみ）
+export interface M365Status {
+  enabled: boolean; tenant_id: string; client_id: string; has_secret: boolean;
+  content_types: string[]; interval_min: number;
+  all_content_types: string[]; intervals: number[];
+  running: boolean; last_run_at: string | null; last_status: string | null; last_ok: boolean;
+  cursors: Record<string, string>;
+  event_count: number; event_count_24h: number;
+}
+export interface M365ConfigInput {
+  enabled: boolean; tenant_id: string; client_id: string; client_secret?: string;
+  content_types: string[]; interval_min: number;
+}
+export interface M365TestResult {
+  ok: boolean; message: string; subscriptions?: Record<string, string>;
+}
+
 export type Role = "viewer" | "editor" | "sysadmin" | "admin";
 export interface AuthUser {
   id: number; username: string; display_name: string | null;
@@ -388,7 +405,7 @@ export type Screen =
   | "dashboard" | "events" | "sources" | "hosts" | "assets" | "entities" | "correlations"
   | "fields" | "mappings" | "ingest" | "operations" | "deadletters" | "cases" | "incident" | "incidents"
   | "mastersettings" | "rules"
-  | "threatintel" | "notifications" | "license" | "admin" | "users" | "audit" | "changelog"
+  | "threatintel" | "connectors" | "notifications" | "license" | "admin" | "users" | "audit" | "changelog"
   | "administration";
 
 export interface ReleaseItem {

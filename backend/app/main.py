@@ -13,6 +13,7 @@ from .api import router as api_router
 from .events_api import router as events_router
 from .auth_api import router as auth_router
 from .config import settings
+from .connectors_api import router as connectors_router
 from .db import Base, engine
 from .ingest import router as ingest_router
 
@@ -125,6 +126,12 @@ def _init_db() -> None:
         start_monitor()
     except Exception as e:  # noqa
         log.warning("failed to start monitor scheduler: %s", e)
+    # Microsoft 365 監査ログの定期取得（画面で有効にした場合のみ取得する）
+    try:
+        from .m365_connector import start as start_m365
+        start_m365()
+    except Exception as e:  # noqa
+        log.warning("failed to start M365 connector: %s", e)
 
 
 @app.get("/health")
@@ -206,3 +213,4 @@ app.include_router(ingest_router)
 app.include_router(auth_router)
 app.include_router(events_router)   # Events/Dashboard（v12 A案・新実装）
 app.include_router(api_router)
+app.include_router(connectors_router)

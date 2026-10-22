@@ -66,6 +66,11 @@ class Settings:
     CHANGELOG_GITHUB_TOKEN: str = os.getenv("CHANGELOG_GITHUB_TOKEN", "").strip()
     CHANGELOG_CACHE_HOURS: int = int(os.getenv("CHANGELOG_CACHE_HOURS", "1"))
 
+    # Microsoft 365 監査ログコネクタ（m365_connector.py）の接続先。既定は一般の商用クラウド。
+    # GCC等の別クラウドを使うとき（GCC: https://manage-gcc.office.com）だけ変更する。
+    M365_LOGIN_BASE: str = os.getenv("M365_LOGIN_BASE", "https://login.microsoftonline.com").rstrip("/")
+    M365_API_BASE: str = os.getenv("M365_API_BASE", "https://manage.office.com").rstrip("/")
+
     @property
     def auth_enabled(self) -> bool:
         return bool(self.INGEST_TOKEN)

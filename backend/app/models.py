@@ -463,3 +463,14 @@ class NotifySent(Base):
     key: Mapped[str] = mapped_column(String(255), primary_key=True)
     rule_id: Mapped[str] = mapped_column(String(64), index=True)
     notified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class ConnectorSeen(Base):
+    """外部から取得したレコードの取り込み済み記録（同じものを二度取り込まないため。m365_audit.py）。
+    connector: "m365"=監査レコードの Id / "m365_blob"=Management Activity API のコンテンツID。
+    events とは別に持つのは、取り込み済みかを payload(JSONB) の検索で調べると events 全体を読むことになるため。
+    m365 は events と同じ保持期間で消す（retention.py）。m365_blob はAPI側が7日で消すので8日で消す。"""
+    __tablename__ = "connector_seen"
+    connector: Mapped[str] = mapped_column(String(32), primary_key=True)
+    item_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, index=True)

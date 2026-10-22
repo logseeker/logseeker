@@ -11,7 +11,7 @@ from sqlalchemy import delete, func, select
 
 from .db import SessionLocal
 from .license import current_license, retention_days
-from .models import DeadLetter, Event
+from .models import ConnectorSeen, DeadLetter, Event
 
 log = logging.getLogger("retention")
 
@@ -34,6 +34,8 @@ def cleanup_once(db) -> dict:
     dl_count = db.scalar(select(func.count()).select_from(DeadLetter).where(DeadLetter.received_at < cutoff)) or 0
     if dl_count:
         db.execute(delete(DeadLetter).where(DeadLetter.received_at < cutoff))
+    # M365等の取り込み済みの記録も同じ期間で消す（記録だけが無期限に溜まらないように）
+    db.execute(delete(ConnectorSeen).where(ConnectorSeen.seen_at < cutoff))
     db.commit()
     if ev_count or dl_count:
         log.info("retention cleanup: deleted %d events, %d dead_letters (cutoff=%s, retention=%d days)",

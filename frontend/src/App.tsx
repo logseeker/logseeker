@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import {
   IconAdjustments, IconAffiliate, IconAlertTriangle, IconArrowsExchange, IconBell, IconClipboardList,
   IconColumns, IconFileText, IconFlame, IconCloudDownload, IconGauge, IconInbox, IconLayoutDashboard,
-  IconLicense, IconList, IconLogout, IconServer, IconSettings, IconShield, IconShieldCheck, IconSitemap,
+  IconLicense, IconList, IconLogout, IconPlugConnected, IconServer, IconSettings, IconShield, IconShieldCheck, IconSitemap,
   IconSpeakerphone, IconUsers, IconWorld,
 } from "@tabler/icons-react";
 import { useChangelog } from "./changelog";
@@ -22,6 +22,7 @@ import { IncidentsList } from "./components/IncidentsList";
 import { MasterSettings } from "./components/MasterSettings";
 import { Rules } from "./components/Rules";
 import { ThreatIntel } from "./components/ThreatIntel";
+import { Connectors } from "./components/Connectors";
 import { License } from "./components/License";
 import { Notifications } from "./components/Notifications";
 import { Correlations } from "./components/Correlations";
@@ -43,7 +44,7 @@ import "./styles.css";
 const ROLE_RANK: Record<Role, number> = { viewer: 1, editor: 2, sysadmin: 3, admin: 4 };
 // 画面ごとの最低ロール（未指定＝ログインすれば誰でも）。認証OFF時は全開放。
 const MIN_ROLE: Partial<Record<Screen, Role>> = {
-  notifications: "sysadmin", license: "sysadmin", threatintel: "sysadmin",
+  notifications: "sysadmin", license: "sysadmin", threatintel: "sysadmin", connectors: "sysadmin",
   users: "sysadmin", audit: "sysadmin", mastersettings: "sysadmin",
 };
 
@@ -103,6 +104,7 @@ const MENU: { key: Screen; label: string; Icon: typeof IconList; ready: boolean 
   { key: "incidents", label: "インシデント", Icon: IconFlame, ready: true },
   { key: "rules", label: "ルール / 注意喚起", Icon: IconShield, ready: true },
   { key: "threatintel", label: "脅威インテリ", Icon: IconCloudDownload, ready: true },
+  { key: "connectors", label: "外部連携", Icon: IconPlugConnected, ready: true },
   { key: "notifications", label: "通知設定", Icon: IconBell, ready: true },
   { key: "license", label: "ライセンス", Icon: IconLicense, ready: true },
   { key: "users", label: "ユーザー管理", Icon: IconUsers, ready: true },
@@ -292,6 +294,7 @@ export default function App() {
       case "mastersettings": return <MasterSettings />;
       case "rules": return <Rules filter={filter} onPick={drill} auth={auth ?? undefined} />;
       case "threatintel": return <ThreatIntel />;
+      case "connectors": return <Connectors />;
       case "notifications": return <Notifications />;
       case "correlations": return <Correlations onPick={drill} onEntity={navEntity} />;
       case "mappings": return <Mappings />;

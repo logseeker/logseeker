@@ -202,15 +202,18 @@ def auth_success_after_failure(db: Session, conds: list | None = None, days: int
     ルール（auth_success_after_failure）と相関分析の関係図の両方で使う。
     サーバー＝送信側が付けた source（無ければ host_name / source_name）。
     失敗は sshd(linux) と auditd(audit) の二重計上を避けるため audit を除いて数える（auth_bruteforce_ip と同じ理由）。
+    Microsoft 365（m365_audit）は対象外。会社の出口IPを社員全員で共有するため、別々の人の打ち間違いが
+    1つの送信元にまとまり、実データでは誤検知しか出なかった（M365はルールパックの [M365] ルールで見る）。
     conds（画面の絞り込み）は成功側にだけ掛ける。"""
     since = datetime.now(timezone.utc) - timedelta(days=days)
     server = func.coalesce(Event.source, Event.host_name, Event.source_name)
     t = func.coalesce(Event.event_time, Event.received_at)
+    not_m365 = or_(Event.source_type.is_(None), Event.source_type != "m365_audit")
     ok = (select(Event.source_ip.label("ip"), server.label("srv"), func.min(t).label("first_ok"),
                  func.max(t).label("last_ok"), func.count().label("ok_cnt"),
                  func.array_agg(func.distinct(Event.actor_user)).label("ok_users"))
           .where(Event.event_category == "authentication", Event.event_result == "success",
-                 Event.source_ip.isnot(None), Event.received_at >= since, *(conds or []))
+                 Event.source_ip.isnot(None), Event.received_at >= since, not_m365, *(conds or []))
           .group_by(Event.source_ip, server).subquery())
     F = aliased(Event)
     fserver = func.coalesce(F.source, F.host_name, F.source_name)
@@ -389,10 +392,14 @@ def evaluate(db: Session, conds: list | None = None) -> list[dict[str, Any]]:
             pivot={"field": "source_ip", "value": ip})
 
     # --- 海外アクセス: GeoIP mmdb 設置時のみ評価（未設置なら source_country は常に null で0件）---
+    # Microsoft 365（m365_audit）は除く。アプリ経由のメール・ファイル操作の接続元はMicrosoftのサービスのIP
+    # （実データでは MailItemsAccessed の大半が 20.190.x / 40.126.x）で、利用者の居場所を表さない。
+    # M365はサインイン（UserLoggedIn）に限って [M365] 海外からのサインイン（ルールパック）で見る。
     rows = db.execute(
         select(Event.source_country, Event.source_ip, func.count())
         .select_from(Event)
-        .where(Event.source_country.isnot(None), Event.source_country != HOME_COUNTRY, Event.source_ip.isnot(None), *w)
+        .where(Event.source_country.isnot(None), Event.source_country != HOME_COUNTRY, Event.source_ip.isnot(None),
+               or_(Event.source_type.is_(None), Event.source_type != "m365_audit"), *w)
         .group_by(Event.source_country, Event.source_ip)
         .order_by(func.count().desc()).limit(MAX_HITS_PER_RULE)
     ).all()

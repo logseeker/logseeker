@@ -6,7 +6,7 @@
 # - 正規表現は PostgreSQL の ~*（大文字小文字を区別しない）で評価する。\b は使えない。
 format: 1
 pack: builtin
-version: "2026.10.03-1"
+version: "2026.10.22-1"
 
 rules:
   # ================================================================ Windows（windows_event）
@@ -400,3 +400,294 @@ rules:
     evidence:
       - {label: 例外, key: exception.class, limit: 5}
       - {label: メッセージ, key: [message, exception.message], limit: 3, truncate: 120}
+
+  # ================================================================ Microsoft 365（m365_audit）
+  # M365コネクタ（m365_connector.py）・CSV取り込みツール（tools/import_m365_csv.py）で取り込んだ統合監査ログ。
+  # taxonomy.md v1.15 で追加したKEYを使う。正規化（m365_audit.py）で event_action=Operation・
+  # actor_user=UserId・source_ip=ClientIP等・service_name=Workload が入るので、scope は列で絞れる。
+  # UserLoginFailed の event_result=failure は資格情報の失敗（パスワード誤り・ロック・MFA拒否等）だけ。
+  # MFAを求めるための中断（50074）等は unknown なので、正規のMFA付きサインインでは発火しない。
+
+  - id: m365_password_spray
+    name: "[M365] パスワードスプレーの疑い"
+    title: M365へのパスワードスプレーの疑い
+    severity: high
+    category: security
+    description: >-
+      同じ送信元IPから、5つ以上のアカウントでパスワード誤り等のサインイン失敗が出ている。よく使われるパスワードを多数のアカウントに少しずつ試す攻撃（パスワードスプレー）の典型。
+    recommendation: >-
+      送信元IPが自社・既知の拠点か確認し、心当たりが無ければ条件付きアクセス（ネームドロケーション）で遮断する。狙われたアカウントのMFA登録状況と、同じIPからのサインイン成功（UserLoggedIn）が無いか確認する。
+    scope: {source_type: m365_audit, event_action: [UserLoginFailed]}
+    match: {col: event_result, eq: failure}
+    group_by: [source_ip]
+    threshold: {distinct: {col: actor_user}, min_distinct: 5}
+    evidence:
+      - {label: 対象アカウント, col: actor_user, limit: 5}
+      - {label: アカウント数, col: actor_user, show: count}
+      - {label: エラー, key: logonerror}
+
+  - id: m365_mfa_failed
+    name: "[M365] MFAの失敗・拒否の繰り返し"
+    title: M365のMFAの失敗・拒否の繰り返し
+    severity: high
+    category: security
+    description: >-
+      パスワードは通ったが、MFA（多要素認証）で失敗・拒否が3回以上続いている（エラー500121）。パスワードが漏れており、攻撃者がMFAの承認を求め続けている（MFA疲労攻撃）可能性がある。
+    recommendation: >-
+      本人に心当たりを確認する。身に覚えが無ければ直ちにパスワードを変更し、サインインセッションを取り消す。Authenticatorの番号の一致（number matching）が有効か確認する。
+    scope: {source_type: m365_audit, event_action: [UserLoginFailed]}
+    match: {key: errornumber, eq: "500121"}
+    group_by: [actor_user]
+    threshold: {count: 3}
+    evidence:
+      - {label: 送信元IP, col: source_ip, limit: 5}
+
+  - id: m365_foreign_signin
+    name: "[M365] 海外からのサインイン"
+    title: M365への海外からのサインイン
+    severity: high
+    category: security
+    description: >-
+      日本以外の国のIPから Microsoft 365 へのサインインに成功した（GeoIPによる国の判定。GeoLite2-Country.mmdb を置いていない環境では働かない）。
+    recommendation: >-
+      本人の出張・VPN・海外拠点からの利用か確認する。心当たりが無ければパスワードを変更してサインインセッションを取り消し、条件付きアクセスで国外からのサインインを制限する。
+    scope: {source_type: m365_audit, event_action: [UserLoggedIn]}
+    match:
+      all:
+        - {col: source_country, exists: true}
+        - {col: source_country, ne: JP}
+    group_by: [actor_user]
+    evidence:
+      - {label: 国, col: source_country}
+      - {label: 送信元IP, col: source_ip, limit: 5}
+
+  - id: m365_inbox_rule_forward
+    name: "[M365] 転送・削除をする受信トレイルール"
+    title: 転送・削除をする受信トレイルールの作成
+    severity: high
+    category: security
+    description: >-
+      メールを転送・リダイレクトする、または受信したメールを削除する受信トレイルールが作成・変更された。メールを乗っ取った攻撃者が、やり取りを盗み見たり警告メールを隠したりするために作る典型的な手口。
+    recommendation: >-
+      本人が作ったルールか確認する。心当たりが無ければルールを削除し、パスワード変更・サインインセッションの取り消し・MFAの確認を行う。転送先のアドレスへ既に送られたメールが無いか確認する。
+    scope: {source_type: m365_audit, event_action: [New-InboxRule, Set-InboxRule, UpdateInboxRules]}
+    match:
+      any:
+        # New-InboxRule / Set-InboxRule（PowerShell・OWA）は Parameters に引数名が入る
+        - {key: parameters, regex: '"(ForwardTo|ForwardAsAttachmentTo|RedirectTo|DeleteMessage|SoftDeleteMessage)"'}
+        # UpdateInboxRules（Outlookクライアント）は OperationProperties の RuleActions に動作の種類が入る
+        - {key: operationproperties, regex: 'ActionType[^A-Za-z]+(Forward|Redirect|Delete|PermanentDelete)'}
+    group_by: [actor_user]
+    evidence:
+      - {label: 操作, col: event_action}
+      - {label: 送信元IP, col: source_ip}
+
+  - id: m365_inbox_rule_change
+    name: "[M365] 受信トレイルールの作成・変更"
+    title: 受信トレイルールの作成・変更
+    severity: info
+    category: security
+    description: 受信トレイルール（仕分けルール）が作成・変更された。転送・削除をするものは別のルール（high）で知らせる。
+    recommendation: 普段ルールを作らない利用者や、心当たりの無い時間帯・送信元IPからの変更であれば、本人に確認する。
+    scope: {source_type: m365_audit, event_action: [New-InboxRule, Set-InboxRule, UpdateInboxRules]}
+    group_by: [actor_user]
+    evidence:
+      - {label: 操作, col: event_action}
+      - {label: 送信元IP, col: source_ip}
+
+  - id: m365_mailbox_forwarding
+    name: "[M365] メールボックスの自動転送の設定"
+    title: メールボックスの自動転送の設定
+    severity: high
+    category: security
+    description: >-
+      Set-Mailbox でメールボックスの転送先（ForwardingSmtpAddress / ForwardingAddress）が設定された。届いたメールがすべて転送先へ送られる。
+    recommendation: >-
+      転送先のアドレスと設定した操作者を確認する。心当たりが無ければ転送を解除し、操作者のアカウントの侵害を疑って調査する。組織外への自動転送は送信スパムフィルターのポリシーで止められる。
+    scope: {source_type: m365_audit, event_action: [Set-Mailbox]}
+    match: {key: parameters, regex: 'Forwarding(Smtp)?Address", "Value": "[^"]'}
+    group_by: [actor_user]
+    evidence:
+      - {label: 対象, key: objectid}
+      - {label: 送信元IP, col: source_ip}
+
+  - id: m365_transport_rule
+    name: "[M365] メールフロールールの作成・変更"
+    title: メールフロールール（トランスポートルール）の作成・変更
+    severity: warning
+    category: security
+    description: >-
+      組織全体のメールに適用されるメールフロールール（トランスポートルール）が作成・変更・削除された。組織のメールをまとめて外部へ転送する、警告を消す等に悪用されることがある。
+    recommendation: 変更した管理者と内容（Parameters）を確認し、予定された変更でなければ元に戻す。
+    scope: {source_type: m365_audit, event_action: [New-TransportRule, Set-TransportRule, Remove-TransportRule, Enable-TransportRule, Disable-TransportRule]}
+    group_by: [actor_user]
+    evidence:
+      - {label: 操作, col: event_action}
+      - {label: 対象, key: objectid}
+
+  - id: m365_mailbox_permission
+    name: "[M365] メールボックスのアクセス権の付与"
+    title: メールボックスのアクセス権の付与
+    severity: warning
+    category: security
+    description: >-
+      他人のメールボックスへのフルアクセス・送信者としての送信（SendAs）の権限が付与された。Exchangeのシステム処理（NT SERVICE\…）による付与は除く。
+    recommendation: 付与した管理者と付与先・対象のメールボックスを確認し、業務上の理由が無ければ権限を外す。
+    scope: {source_type: m365_audit, event_action: [Add-MailboxPermission, Add-RecipientPermission]}
+    match:
+      not: {col: actor_user, startswith: NT SERVICE}
+    group_by: [actor_user]
+    evidence:
+      - {label: 対象, key: objectid}
+      - {label: 内容, key: parameters, truncate: 200}
+
+  - id: m365_admin_role
+    name: "[M365] 管理者ロールの付与"
+    title: Entra IDの管理者ロールの付与
+    severity: high
+    category: security
+    description: >-
+      Entra ID の管理者ロール（グローバル管理者等）にメンバーが追加された。乗っ取ったアカウントに権限を与える・裏口の管理者を作るといった侵害後の典型的な操作。
+    recommendation: >-
+      付与した管理者・付与されたユーザー・ロールを確認し、予定された変更でなければ直ちに取り消す。管理者ロールは必要最小限の人数にし、Privileged Identity Management での一時付与を検討する。
+    scope: {source_type: m365_audit, event_action: ["Add member to role.", "Add eligible member to role.", "Add scoped member to role."]}
+    group_by: [actor_user]
+    evidence:
+      - {label: 対象, key: objectid}
+      - {label: 内容, key: modifiedproperties, truncate: 200}
+
+  - id: m365_app_consent
+    name: "[M365] アプリへの同意"
+    title: アプリへのアクセス許可の同意
+    severity: warning
+    category: security
+    description: >-
+      アプリにテナントのデータ（メール・ファイル・チャット等）へのアクセス許可が与えられた（Consent to application）。不正なアプリに同意させてデータを抜き取る手口（同意フィッシング）がある。
+    recommendation: >-
+      同意したユーザーとアプリ、許可の範囲（証跡の内容の Scope）を確認する。心当たりの無いアプリは Entra 管理センターの「エンタープライズ アプリケーション」から削除し、ユーザーによる同意を管理者承認制にすることを検討する。
+    scope: {source_type: m365_audit, event_action: ["Consent to application."]}
+    group_by: [actor_user]
+    evidence:
+      - {label: アプリ（ID）, key: objectid, limit: 5}
+
+  - id: m365_app_credential
+    name: "[M365] アプリへの資格情報の追加"
+    title: アプリへのシークレット・証明書の追加
+    severity: warning
+    category: security
+    description: アプリ（サービスプリンシパル）にクライアントシークレット・証明書が追加された。既存のアプリに裏口の資格情報を足して、パスワード変更後もアクセスし続ける手口がある。
+    recommendation: 追加した管理者と対象のアプリを確認し、予定された作業でなければ追加された資格情報を削除する。
+    scope: {source_type: m365_audit, event_action: ["Add service principal credentials.", "Update application – Certificates and secrets management"]}
+    group_by: [actor_user]
+    evidence:
+      - {label: 対象, key: objectid}
+
+  - id: m365_user_admin
+    name: "[M365] ユーザーの追加・削除・パスワードリセット"
+    title: ユーザーの追加・削除・パスワードリセット
+    severity: info
+    category: security
+    description: Entra ID でユーザーの追加・削除、または管理者によるパスワードのリセットが行われた。
+    recommendation: 予定された作業か確認する。心当たりの無いユーザーの追加は、侵害後の裏口アカウントの可能性がある。
+    scope: {source_type: m365_audit, event_action: ["Add user.", "Delete user.", "Reset user password.", "Set force change user password."]}
+    group_by: [actor_user]
+    evidence:
+      - {label: 操作, col: event_action}
+      - {label: 対象, key: objectid, limit: 5}
+
+  - id: m365_ca_policy
+    name: "[M365] 条件付きアクセスの変更"
+    title: 条件付きアクセスのポリシーの変更
+    severity: warning
+    category: security
+    description: >-
+      条件付きアクセスのポリシー（MFAの要求・国外からのブロック等）が追加・変更・削除された。防御を弱める変更が侵害後に行われることがある。Exchangeのシステム処理（Set-ConditionalAccessPolicy）は含まない。
+    recommendation: 変更した管理者と変更内容を確認し、予定された変更でなければ元に戻す。
+    scope: {source_type: m365_audit, event_action: ["Add conditional access policy.", "Update conditional access policy.", "Delete conditional access policy."]}
+    group_by: [actor_user]
+    evidence:
+      - {label: 操作, col: event_action}
+      - {label: 対象, key: objectid}
+
+  - id: m365_audit_disabled
+    name: "[M365] 監査ログの無効化"
+    title: 監査ログの記録の無効化
+    severity: critical
+    category: security
+    description: >-
+      統合監査ログの取り込み（UnifiedAuditLogIngestionEnabled）またはメールボックスの監査（AuditEnabled）が無効にされた、あるいは監査の対象外（AuditBypassEnabled）にされた。侵入後の痕跡隠しで行われる。
+    recommendation: 直ちに設定を元に戻し、変更した管理者のアカウントの侵害を前提に調査する。無効になっていた間の操作は記録されていない。
+    scope: {source_type: m365_audit, event_action: [Set-AdminAuditLogConfig, Set-Mailbox, Set-MailboxAuditBypassAssociation, Set-OrganizationConfig]}
+    match:
+      any:
+        - {key: parameters, regex: '"(UnifiedAuditLogIngestionEnabled|AuditEnabled)", "Value": "False"'}
+        - {key: parameters, regex: '"(AuditBypassEnabled|AuditDisabled)", "Value": "True"'}
+    group_by: [actor_user]
+    evidence:
+      - {label: 操作, col: event_action}
+      - {label: 対象, key: objectid}
+
+  - id: m365_anonymous_link
+    name: "[M365] 匿名の共有リンクの作成"
+    title: 誰でも開ける共有リンクの作成
+    severity: warning
+    category: security
+    description: SharePoint / OneDrive で、サインイン不要で誰でも開ける共有リンク（Anyone リンク）が作られた。リンクを知っていれば社外の誰でもファイルを開ける。
+    recommendation: 共有したファイルと相手が業務上妥当か確認する。不要なら共有を解除し、Anyone リンクの有効期限・作成の可否を SharePoint 管理センターで制限することを検討する。
+    scope: {source_type: m365_audit, event_action: [AnonymousLinkCreated, AnonymousLinkUpdated]}
+    group_by: [actor_user]
+    evidence:
+      - {label: ファイル, key: [sourcefilename, objectid], limit: 5, truncate: 120}
+
+  - id: m365_mass_download
+    name: "[M365] ファイルの大量ダウンロード"
+    title: ファイルの大量ダウンロード
+    severity: warning
+    category: security
+    description: >-
+      1人のユーザーが SharePoint / OneDrive のファイルを200件以上ダウンロードした（評価期間内。既定は直近24時間）。退職前の持ち出しや、乗っ取ったアカウントからのデータの抜き取りの可能性がある。SharePointのシステム（app@sharepoint）は除く。
+    recommendation: ダウンロードしたユーザーと送信元IP・ファイルを確認する。同期クライアント（OneDrive）の初回同期でも件数が増えるため、端末の入れ替えなどの心当たりも確認する。
+    scope: {source_type: m365_audit, event_action: [FileDownloaded, FileSyncDownloadedFull]}
+    match: {col: actor_user, ne: app@sharepoint}
+    group_by: [actor_user]
+    threshold: {count: 200}
+    evidence:
+      - {label: 送信元IP, col: source_ip, limit: 5}
+      - {label: ファイル, key: sourcefilename, limit: 5, truncate: 80}
+      - {label: ファイル数, key: sourcefilename, show: count}
+
+  - id: m365_mass_delete
+    name: "[M365] ファイルの大量削除"
+    title: ファイルの大量削除
+    severity: warning
+    category: security
+    description: >-
+      1人のユーザーが SharePoint / OneDrive のファイル・フォルダーを100件以上削除した（評価期間内。既定は直近24時間）。ランサムウェア・誤操作・嫌がらせの可能性がある。SharePointのシステム（SHAREPOINT\system）は除く。
+    recommendation: 削除したユーザーと送信元IPを確認する。意図しない削除であれば、ごみ箱（第1段階・第2段階）から復元できる（既定で93日間）。
+    scope: {source_type: m365_audit, event_action: [FileDeleted, FileRecycled, FileDeletedFirstStageRecycleBin, FileDeletedSecondStageRecycleBin, FolderDeleted, FolderRecycled, FolderDeletedFirstStageRecycleBin, FolderDeletedSecondStageRecycleBin]}
+    match:
+      not: {col: actor_user, startswith: SHAREPOINT}
+    group_by: [actor_user]
+    threshold: {count: 100}
+    evidence:
+      - {label: 送信元IP, col: source_ip, limit: 5}
+      - {label: ファイル, key: [sourcefilename, objectid], limit: 5, truncate: 80}
+
+  - id: m365_phish_delivered
+    name: "[M365] フィッシング・マルウェアメールの配信"
+    title: フィッシング・マルウェアと判定されたメールの受信トレイへの配信
+    severity: high
+    category: security
+    description: >-
+      Defender for Office 365 がフィッシング・マルウェアと判定したメールが、ブロックされずに受信トレイへ配信された（TIMailData の DeliveryAction=Delivered）。迷惑メールフォルダーへの配信（DeliveredAsSpam）とブロックは含まない。
+    recommendation: 受信者がメールを開いた・リンクを押した可能性を確認し、Defender の「脅威エクスプローラー」から該当メールを削除する。同じ送信者からの他のメールも確認する。
+    scope: {source_type: m365_audit, event_action: [TIMailData]}
+    match:
+      all:
+        - {key: deliveryaction, eq: Delivered}
+        - {key: verdict, in: [Phish, Malware]}
+    group_by: [source]
+    evidence:
+      - {label: 送信者, key: p1sender, limit: 5}
+      - {label: 件名, key: subject, limit: 3, truncate: 80}
+      - {label: 判定, key: verdict}
