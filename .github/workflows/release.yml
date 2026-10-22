@@ -4,9 +4,11 @@ name: Auto Release
 # （push毎だと1リリースの中身が薄くなりすぎるため、タグpushという明示的な操作を
 #  トリガーにして、ある程度まとまった単位でリリースを切れるようにする）。
 #
-# 本文(release notes)は前回タグ以降のコミットのsubject行を並べて作る
+# 本文(release notes)は前回タグ以降のコミットを、件名(見出し)＋本文(何を・なぜ)で並べて作る
 # （このリポジトリはPRを使わず直接mainへpushする運用のため、PRタイトルを前提にした
 #  GitHubの generate_release_notes だと拾うものが無く内容が空になってしまう）。
+# 件名だけでは変更の理由や確認内容が伝わらないため、コミットの本文も載せる（Co-Authored-By 行は除く）。
+# 本文はアプリの「お知らせ」画面にもMarkdownとして表示される。
 #
 # リリースを切りたいとき:
 #   git tag v1.2.0
@@ -27,7 +29,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Build release notes from commit subjects since previous tag
+      - name: Build release notes from commits since previous tag
         id: notes
         run: |
           PREV_TAG=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || echo "")
@@ -38,19 +40,33 @@ jobs:
           fi
           {
             echo "notes<<RELEASE_NOTES_EOF"
-            git log "$RANGE" --no-merges --pretty=format:"- %s"
+            # コミットごとに「### 件名」＋本文。Co-Authored-By 行を除き、連続する空行は1行にまとめる
+            git log "$RANGE" --no-merges --pretty=format:'### %s%n%n%b%n' \
+              | grep -v -E '^Co-Authored-By:' | cat -s
             echo ""
-            echo ""
-            echo "## 本番サーバーへの反映手順（インストール済みの場合）"
-            echo ""
-            echo '```bash'
-            echo "cd /opt/logseeker"
-            echo "sudo -u logseeker git pull                    # origin = logseeker/logseeker"
-            echo "sudo systemctl restart logseeker-backend      # 依存を追加した場合は venv で pip install も"
-            echo "cd frontend && sudo -u logseeker env VITE_API_BASE= npm run build"
-            echo "sudo cp -a dist/. /var/www/logseeker/"
-            echo "sudo chown -R apache:apache /var/www/logseeker"
-            echo '```'
+            # 本番でフロントエンドをビルドしない手順にする。ビルドは Node が約1GBのメモリを使い、
+            # メモリの少ない本番サーバーでは実行中に応答不能になったことがある（2026-08-13）
+            cat <<'DEPLOY'
+          ## 本番サーバーへの反映手順（インストール済みの場合）
+
+          **本番サーバーでフロントエンドをビルドしないこと。** ビルドは Node.js が約1GBのメモリを使うため、メモリの少ないサーバーでは応答不能になることがある。ビルドは別のマシン（開発環境など）で行い、成果物（dist）だけを本番へ転送する。
+
+          ```bash
+          # 1) ビルド用のマシンで（このタグのソースで）
+          cd frontend && npm ci && VITE_API_BASE= npm run build && tar czf /tmp/dist.tgz -C dist .
+          #    → /tmp/dist.tgz を本番サーバーの /tmp/dist.tgz へコピーする（scp 等）
+
+          # 2) 本番サーバーで
+          cd /opt/logseeker
+          sudo -u logseeker git pull                    # origin = logseeker/logseeker
+          sudo systemctl restart logseeker-backend      # 依存を追加した場合は venv で pip install も
+          sudo rm -rf /var/www/logseeker/assets
+          sudo tar xzf /tmp/dist.tgz -C /var/www/logseeker/
+          sudo chown -R apache:apache /var/www/logseeker && rm -f /tmp/dist.tgz
+          ```
+
+          フロントエンド（frontend/）に変更が無いリリースは、2) の `git pull` と `systemctl restart` だけでよい。
+          DEPLOY
             echo "RELEASE_NOTES_EOF"
           } >> "$GITHUB_OUTPUT"
 
