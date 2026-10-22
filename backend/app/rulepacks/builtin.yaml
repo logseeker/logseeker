@@ -6,7 +6,7 @@
 # - 正規表現は PostgreSQL の ~*（大文字小文字を区別しない）で評価する。\b は使えない。
 format: 1
 pack: builtin
-version: "2026.10.22-1"
+version: "2026.10.23-1"
 
 rules:
   # ================================================================ Windows（windows_event）
@@ -403,8 +403,11 @@ rules:
 
   # ================================================================ Microsoft 365（m365_audit）
   # M365コネクタ（m365_connector.py）・CSV取り込みツール（tools/import_m365_csv.py）で取り込んだ統合監査ログ。
-  # taxonomy.md v1.15 で追加したKEYを使う。正規化（m365_audit.py）で event_action=Operation・
-  # actor_user=UserId・source_ip=ClientIP等・service_name=Workload が入るので、scope は列で絞れる。
+  # コネクタ・CSVツールが送信元として監査レコードを既存KEY（action=Operation・username=UserId・
+  # srcipv4/srcipv6=ClientIP等・service=Workload・errorcode=ErrorNumber・objectname=ObjectId 等）で組み立て、
+  # レコード全体を rawmsg に残す（taxonomy.md v1.15 §6.8。KEYの追加は無い）。既存KEYに対応の無い値
+  # （OperationProperties・Verdict 等）は rawmsg を正規表現で見る。rawmsg は区切りに空白の無いJSON。
+  # 正規化で event_action・actor_user・source_ip・service_name が入るので、scope は列で絞れる。
   # UserLoginFailed の event_result=failure は資格情報の失敗（パスワード誤り・ロック・MFA拒否等）だけ。
   # MFAを求めるための中断（50074）等は unknown なので、正規のMFA付きサインインでは発火しない。
 
@@ -424,7 +427,7 @@ rules:
     evidence:
       - {label: 対象アカウント, col: actor_user, limit: 5}
       - {label: アカウント数, col: actor_user, show: count}
-      - {label: エラー, key: logonerror}
+      - {label: エラー, key: failurereason}
 
   - id: m365_mfa_failed
     name: "[M365] MFAの失敗・拒否の繰り返し"
@@ -436,7 +439,7 @@ rules:
     recommendation: >-
       本人に心当たりを確認する。身に覚えが無ければ直ちにパスワードを変更し、サインインセッションを取り消す。Authenticatorの番号の一致（number matching）が有効か確認する。
     scope: {source_type: m365_audit, event_action: [UserLoginFailed]}
-    match: {key: errornumber, eq: "500121"}
+    match: {key: errorcode, eq: "500121"}
     group_by: [actor_user]
     threshold: {count: 3}
     evidence:
@@ -475,8 +478,8 @@ rules:
       any:
         # New-InboxRule / Set-InboxRule（PowerShell・OWA）は Parameters に引数名が入る
         - {key: parameters, regex: '"(ForwardTo|ForwardAsAttachmentTo|RedirectTo|DeleteMessage|SoftDeleteMessage)"'}
-        # UpdateInboxRules（Outlookクライアント）は OperationProperties の RuleActions に動作の種類が入る
-        - {key: operationproperties, regex: 'ActionType[^A-Za-z]+(Forward|Redirect|Delete|PermanentDelete)'}
+        # UpdateInboxRules（Outlookクライアント）は OperationProperties の RuleActions に動作の種類が入る（rawmsg）
+        - {key: rawmsg, regex: 'ActionType[^A-Za-z]+(Forward|Redirect|Delete|PermanentDelete)'}
     group_by: [actor_user]
     evidence:
       - {label: 操作, col: event_action}
@@ -508,7 +511,7 @@ rules:
     match: {key: parameters, regex: 'Forwarding(Smtp)?Address", "Value": "[^"]'}
     group_by: [actor_user]
     evidence:
-      - {label: 対象, key: objectid}
+      - {label: 対象, key: objectname}
       - {label: 送信元IP, col: source_ip}
 
   - id: m365_transport_rule
@@ -523,7 +526,7 @@ rules:
     group_by: [actor_user]
     evidence:
       - {label: 操作, col: event_action}
-      - {label: 対象, key: objectid}
+      - {label: 対象, key: objectname}
 
   - id: m365_mailbox_permission
     name: "[M365] メールボックスのアクセス権の付与"
@@ -538,7 +541,7 @@ rules:
       not: {col: actor_user, startswith: NT SERVICE}
     group_by: [actor_user]
     evidence:
-      - {label: 対象, key: objectid}
+      - {label: 対象, key: objectname}
       - {label: 内容, key: parameters, truncate: 200}
 
   - id: m365_admin_role
@@ -553,7 +556,7 @@ rules:
     scope: {source_type: m365_audit, event_action: ["Add member to role.", "Add eligible member to role.", "Add scoped member to role."]}
     group_by: [actor_user]
     evidence:
-      - {label: 対象, key: objectid}
+      - {label: 対象, key: objectname}
       - {label: 内容, key: modifiedproperties, truncate: 200}
 
   - id: m365_app_consent
@@ -568,7 +571,7 @@ rules:
     scope: {source_type: m365_audit, event_action: ["Consent to application."]}
     group_by: [actor_user]
     evidence:
-      - {label: アプリ（ID）, key: objectid, limit: 5}
+      - {label: アプリ（ID）, key: objectname, limit: 5}
 
   - id: m365_app_credential
     name: "[M365] アプリへの資格情報の追加"
@@ -580,7 +583,7 @@ rules:
     scope: {source_type: m365_audit, event_action: ["Add service principal credentials.", "Update application – Certificates and secrets management"]}
     group_by: [actor_user]
     evidence:
-      - {label: 対象, key: objectid}
+      - {label: 対象, key: objectname}
 
   - id: m365_user_admin
     name: "[M365] ユーザーの追加・削除・パスワードリセット"
@@ -593,7 +596,7 @@ rules:
     group_by: [actor_user]
     evidence:
       - {label: 操作, col: event_action}
-      - {label: 対象, key: objectid, limit: 5}
+      - {label: 対象, key: objectname, limit: 5}
 
   - id: m365_ca_policy
     name: "[M365] 条件付きアクセスの変更"
@@ -607,7 +610,7 @@ rules:
     group_by: [actor_user]
     evidence:
       - {label: 操作, col: event_action}
-      - {label: 対象, key: objectid}
+      - {label: 対象, key: objectname}
 
   - id: m365_audit_disabled
     name: "[M365] 監査ログの無効化"
@@ -625,7 +628,7 @@ rules:
     group_by: [actor_user]
     evidence:
       - {label: 操作, col: event_action}
-      - {label: 対象, key: objectid}
+      - {label: 対象, key: objectname}
 
   - id: m365_anonymous_link
     name: "[M365] 匿名の共有リンクの作成"
@@ -637,7 +640,7 @@ rules:
     scope: {source_type: m365_audit, event_action: [AnonymousLinkCreated, AnonymousLinkUpdated]}
     group_by: [actor_user]
     evidence:
-      - {label: ファイル, key: [sourcefilename, objectid], limit: 5, truncate: 120}
+      - {label: ファイル, key: [filename, objectname], limit: 5, truncate: 120}
 
   - id: m365_mass_download
     name: "[M365] ファイルの大量ダウンロード"
@@ -653,8 +656,8 @@ rules:
     threshold: {count: 200}
     evidence:
       - {label: 送信元IP, col: source_ip, limit: 5}
-      - {label: ファイル, key: sourcefilename, limit: 5, truncate: 80}
-      - {label: ファイル数, key: sourcefilename, show: count}
+      - {label: ファイル, key: filename, limit: 5, truncate: 80}
+      - {label: ファイル数, key: filename, show: count}
 
   - id: m365_mass_delete
     name: "[M365] ファイルの大量削除"
@@ -671,7 +674,7 @@ rules:
     threshold: {count: 100}
     evidence:
       - {label: 送信元IP, col: source_ip, limit: 5}
-      - {label: ファイル, key: [sourcefilename, objectid], limit: 5, truncate: 80}
+      - {label: ファイル, key: [filename, objectname], limit: 5, truncate: 80}
 
   - id: m365_phish_delivered
     name: "[M365] フィッシング・マルウェアメールの配信"
@@ -684,10 +687,9 @@ rules:
     scope: {source_type: m365_audit, event_action: [TIMailData]}
     match:
       all:
-        - {key: deliveryaction, eq: Delivered}
-        - {key: verdict, in: [Phish, Malware]}
+        - {key: rawmsg, regex: '"DeliveryAction":"Delivered"'}
+        - {key: rawmsg, regex: '"Verdict":"(Phish|Malware)"'}
     group_by: [source]
     evidence:
-      - {label: 送信者, key: p1sender, limit: 5}
+      - {label: 送信者, key: mailfrom, limit: 5}
       - {label: 件名, key: subject, limit: 3, truncate: 80}
-      - {label: 判定, key: verdict}
