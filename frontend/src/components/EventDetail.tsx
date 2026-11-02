@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { adviseForEvent } from "../advice";
 import { api } from "../api";
-import { fmtTime } from "../labels";
+import { fmtTime, statusCodeInfo, STATUS_CODE_KEYS } from "../labels";
 import type { EventDetailData, EventRow } from "../types";
 
 type Props = {
@@ -197,6 +197,10 @@ export function EventDetail({ id, onClose, onEntity, onOpenCase, onOpenIncident,
                       絞り込みはEvents一覧の各列（⌄）から行う。 */}
                   <div className="small text-start text-break flex-fill" style={{ userSelect: "text" }}>
                     {typeof f.value === "object" ? JSON.stringify(f.value) : String(f.value)}
+                    {STATUS_CODE_KEYS.includes(f.key) && (() => {
+                      const sc = statusCodeInfo(f.value);
+                      return sc && <span className={`badge ${sc.badge} ms-2`} title={sc.hint}>{sc.short}</span>;
+                    })()}
                   </div>
                   {f.value !== null && f.value !== undefined && f.value !== "" && (
                     <button className="btn btn-sm btn-ghost-secondary py-0 px-1 lh-1" title="値をコピー"

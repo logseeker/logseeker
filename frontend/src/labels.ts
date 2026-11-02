@@ -60,3 +60,31 @@ export const fmtTime = (iso: string | null | undefined): string => {
 export const toJstInput = (iso?: string): string => (iso ? fmtTime(iso).slice(0, 16).replace(" ", "T") : "");
 export const fromJstInput = (local: string): string | undefined =>
   local ? new Date(`${local}:00+09:00`).toISOString() : undefined;
+
+// HTTP等のステータスコード列（Taxonomy KEY）。値の先頭桁で色分けし、5xxは「サーバー側の障害」と
+// 一目で分かるようにする（4xxの探索・攻撃と5xxの障害を同じ見た目にしない）。
+export const STATUS_CODE_KEYS = ["statuscode", "proxystatuscode", "serverstatuscode"];
+
+const STATUS_NAME: Record<string, string> = {
+  "200": "OK", "301": "Moved Permanently", "302": "Found", "304": "Not Modified",
+  "400": "Bad Request", "401": "Unauthorized", "403": "Forbidden", "404": "Not Found",
+  "405": "Method Not Allowed", "429": "Too Many Requests",
+  "500": "Internal Server Error", "502": "Bad Gateway", "503": "Service Unavailable", "504": "Gateway Timeout",
+};
+
+/** 3桁のステータスコードなら表示用の色・短い説明・ツールチップを返す（それ以外は null）。 */
+export const statusCodeInfo = (v: unknown): { badge: string; short: string; hint: string } | null => {
+  const s = v === null || v === undefined ? "" : String(v).trim();
+  if (!/^[1-5]\d\d$/.test(s)) return null;
+  const name = STATUS_NAME[s] ? `${s} ${STATUS_NAME[s]}` : s;
+  switch (s[0]) {
+    case "5": return { badge: "bg-red text-red-fg", short: "サーバー側エラー",
+      hint: `${name}：サーバー側のエラー。Webサーバー/アプリ/上流の障害・過負荷・メンテナンス中など（要求元の問題ではない）` };
+    case "4": return { badge: "bg-orange-lt", short: "要求側エラー",
+      hint: `${name}：要求側（クライアント）のエラー。存在しないパスや権限不足。多発する場合は探索・攻撃の可能性` };
+    case "3": return { badge: "bg-azure-lt", short: "転送",
+      hint: `${name}：リダイレクト（別URLへの転送）` };
+    case "2": return { badge: "bg-green-lt", short: "成功", hint: `${name}：正常に処理された` };
+    default: return { badge: "bg-secondary-lt", short: "情報", hint: `${name}：情報レスポンス` };
+  }
+};

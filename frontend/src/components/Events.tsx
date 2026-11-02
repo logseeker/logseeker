@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import { api } from "../api";
 import type { EventQuery } from "../api";
-import { fieldLabel, fmtTime, fromJstInput, toJstInput } from "../labels";
+import { fieldLabel, fmtTime, fromJstInput, statusCodeInfo, STATUS_CODE_KEYS, toJstInput } from "../labels";
 import { EventDetail } from "./EventDetail";
 import { adviseForEvent } from "../advice";
 import type {
@@ -314,9 +314,12 @@ export function Events({ onEntity, onNav, onOpenCase, onOpenIncident, auth, init
               表示列は taxonomy.md のTaxonomy KEYから選択します（{fields.length}件）
             </span>
           </div>
-          <div className="table-responsive">
+          {/* 表は画面の高さに収まる内部フレームでスクロールさせる。ページ全体で縦に伸ばすと
+              横スクロールバーが最終行の下に来てしまい、右端の対応策列まで横に動かせなかった。
+              見出しは枠内で上に固定する。 */}
+          <div className="table-responsive" style={{ maxHeight: "calc(100vh - 340px)", minHeight: 240, overflow: "auto" }}>
             <table className="table table-sm table-vcenter card-table">
-              <thead>
+              <thead style={{ position: "sticky", top: 0, zIndex: 2, background: "var(--tblr-bg-surface)" }}>
                 <tr>
                   {/* 「対応」トグル列（events.resolved）は廃止した。対応状況はインシデントの
                       ステータスで管理する（イベント一覧はアラート一覧ではないため、何もして
@@ -355,7 +358,7 @@ export function Events({ onEntity, onNav, onOpenCase, onOpenIncident, auth, init
                         <td key={k} className="text-truncate" style={{ maxWidth: 240 }} title={s}>
                           {s ? (
                             <span className="d-inline-flex align-items-center gap-1">
-                              <span className="text-truncate">{s}</span>
+                              <CellValue k={k} s={s} />
                               <button className="btn btn-sm btn-ghost-secondary p-0" title={`${labelOf(k)} = ${s} で絞り込む`}
                                 onClick={(e) => { e.stopPropagation(); pivot(k, s); }}>⌄</button>
                             </span>
@@ -479,6 +482,17 @@ function ColumnFilter({ field, label, query, active, onPick, onClear }: {
           </div>
         </>
       )}
+    </span>
+  );
+}
+
+/** 一覧セルの値。ステータスコード列は色付きバッジにし、5xx（サーバー側）を4xxと見分けられるようにする。 */
+function CellValue({ k, s }: { k: string; s: string }) {
+  const sc = STATUS_CODE_KEYS.includes(k) ? statusCodeInfo(s) : null;
+  if (!sc) return <span className="text-truncate">{s}</span>;
+  return (
+    <span className={`badge ${sc.badge}`} title={sc.hint}>
+      {s}<span className="ms-1 fw-normal">{sc.short}</span>
     </span>
   );
 }
