@@ -6,7 +6,7 @@
 # - 正規表現は PostgreSQL の ~*（大文字小文字を区別しない）で評価する。\b は使えない。
 format: 1
 pack: builtin
-version: "2026.10.23-1"
+version: "2026.11.20-1"
 
 rules:
   # ================================================================ Windows（windows_event）
@@ -93,14 +93,20 @@ rules:
     title: 外部IPからのRDPログオン成功
     severity: high
     category: security
-    description: グローバルIPからのリモートデスクトップ(4624 LogonType 10)でログオンに成功した。
+    description: >-
+      グローバルIPからのリモートデスクトップでログオン・認証に成功した（Security の 4624 LogonType 10、または
+      TerminalServices-RemoteConnectionManager の 1149）。1149 は Security ログの監査設定に関係なく記録されるため、4624 が取れない端末でも拾える。
     recommendation: >-
       接続元と利用者に心当たりが無ければ該当アカウントを無効化。RDPをインターネットへ直接公開せず、VPN経由・IP制限・NLA・MFAを導入。
-    scope: {source_type: windows_event, event_action: ["4624"]}
+    scope: {source_type: windows_event, event_action: ["4624", "1149"]}
     match:
       all:
-        - {key: logontype, eq: "10"}
         - {col: source_ip, ip_global: true}
+        - any:
+            - {key: logontype, eq: "10"}
+            - all:
+                - {col: event_action, eq: "1149"}
+                - {key: channel, contains: terminalservices-remoteconnectionmanager}
     group_by: [source_ip]
     evidence:
       - {label: アカウント, col: actor_user}
@@ -226,6 +232,120 @@ rules:
     group_by: [host_name]
     evidence:
       - {label: 操作者, key: subjectusername}
+
+  # --- 2026-11-20 追加（開発環境に届いている実機2台のWindowsログで、出方とノイズを確認して作成）
+
+  - id: win_account_deleted
+    name: "[Windows] ユーザーアカウントの削除"
+    title: ユーザーアカウントの削除
+    severity: warning
+    category: security
+    description: ユーザーアカウントが削除された(4726)。退職者の整理などの正規作業のほか、攻撃者が作った裏口アカウントの後片付けや、業務妨害でも行われる。
+    recommendation: 削除した操作者と削除されたアカウントが承認済みの作業か確認。心当たりが無ければ操作者のアカウントを止めて調査。
+    scope: {source_type: windows_event, event_action: ["4726"]}
+    group_by: [host_name]
+    evidence:
+      - {label: 削除されたアカウント, key: targetusername}
+      - {label: 操作者, key: subjectusername}
+
+  - id: win_password_reset
+    name: "[Windows] 他のアカウントによるパスワードのリセット"
+    title: パスワードのリセット
+    severity: warning
+    category: security
+    description: >-
+      管理者などの別アカウントがパスワードをリセットした(4724)。本人による変更(4723)とは別のイベント。乗っ取った管理者権限で他人のアカウントを奪う手口がある。
+    recommendation: 操作者とリセットされたアカウントを確認し、依頼の無いリセットであれば対象アカウントを止め、操作者のログオン元を調査。
+    scope: {source_type: windows_event, event_action: ["4724"]}
+    group_by: [host_name]
+    evidence:
+      - {label: 対象アカウント, key: targetusername}
+      - {label: 操作者, key: subjectusername}
+
+  - id: win_builtin_account_enabled
+    name: "[Windows] 組み込みアカウントの有効化"
+    title: 組み込みアカウントの有効化
+    severity: high
+    category: security
+    description: >-
+      既定で無効の組み込みアカウント（Administrator・Guest・DefaultAccount・WDAGUtilityAccount）が有効化された(4722)。名前が知られているため総当たりの標的になり、裏口としても使われる。
+    recommendation: 有効化した操作者と理由を確認し、不要であれば再び無効化する。Administrator を使う場合は長いパスワードにし、ネットワークからのログオンを拒否する。
+    scope: {source_type: windows_event, event_action: ["4722"]}
+    match:
+      # 日本語版Windowsでも組み込みアカウント名は英語のまま
+      key: targetusername
+      in: [administrator, guest, defaultaccount, wdagutilityaccount]
+    group_by: [host_name]
+    evidence:
+      - {label: 有効化されたアカウント, key: targetusername}
+      - {label: 操作者, key: subjectusername}
+
+  - id: win_time_changed
+    name: "[Windows] システム時刻の変更（時刻同期以外）"
+    title: システム時刻の変更
+    severity: warning
+    category: security
+    description: >-
+      Windows の時刻同期（svchost.exe）以外のプロセスがシステム時刻を変更した(4616)。ログの時系列を狂わせる痕跡隠しや、証明書・ライセンスの期限回避で使われる。
+    recommendation: 変更したプロセスと操作者を確認する。手作業の時刻合わせでなければ、前後のログオン・プロセス起動を調べる。
+    scope: {source_type: windows_event, event_action: ["4616"]}
+    match:
+      # 時刻同期サービスと仮想化ゲストツールによる変更は正常動作なので除く
+      not: {key: processname, regex: '(svchost|vmtoolsd|vboxservice)\.exe$'}
+    group_by: [host_name]
+    evidence:
+      - {label: プロセス, key: processname}
+      - {label: 操作者, key: subjectusername}
+
+  - id: win_boot_config_insecure
+    name: "[Windows] 起動時の保護の無効化（テスト署名・カーネルデバッグ等）"
+    title: 起動時の保護が無効
+    severity: high
+    category: security
+    description: >-
+      起動構成(4826)で、テスト署名・ドライバー署名の整合性チェックの無効化・カーネルデバッグのいずれかが有効になっている。署名の無いドライバー（ルートキット等）を読み込むために使われる。
+    recommendation: bcdedit で該当設定を確認し、開発・検証用の端末でなければ元に戻す（bcdedit /set testsigning off 等）。設定した操作者を確認する。
+    scope: {source_type: windows_event, event_action: ["4826"]}
+    match:
+      # 項目名は日本語版・英語版でメッセージ本文の表記が違うため、両方を見る（値の KEY は Taxonomy に無い）
+      key: message
+      regex:
+        - '(テスト署名|整合性チェックの無効化|カーネル デバッグ):\s+はい'
+        - '(test ?signing|integrity checks|kernel debug[a-z]*):\s+yes'
+    group_by: [host_name]
+    evidence:
+      - {label: 内容, key: message, limit: 1, truncate: 200}
+
+  - id: win_defender_detection
+    name: "[Windows] Microsoft Defender のマルウェア検出"
+    title: マルウェアの検出
+    severity: high
+    category: security
+    description: >-
+      Microsoft Defender がマルウェア・望ましくないアプリを検出した(1116)、または駆除・隔離を実行・失敗した(1117/1118/1119)。
+      Microsoft-Windows-Windows Defender/Operational チャネルを転送している場合のみ。
+    recommendation: >-
+      検出名と対象ファイルを確認。駆除に失敗(1118/1119)していれば端末をネットワークから切り離して調査。同じ検出が他の端末に無いか、侵入経路（メール添付・ダウンロード・USB）を確認する。
+    scope: {source_type: windows_event, event_action: ["1116", "1117", "1118", "1119"]}
+    match: {key: channel, contains: windows defender}
+    group_by: [host_name]
+    evidence:
+      - {label: 内容, key: message, limit: 2, truncate: 200}
+
+  - id: win_defender_disabled
+    name: "[Windows] Microsoft Defender の保護の無効化"
+    title: Defender の保護の無効化
+    severity: high
+    category: security
+    description: >-
+      Microsoft Defender のリアルタイム保護(5001)・マルウェア対策(5010/5012)が無効になった。マルウェアの実行前に無効化する攻撃が多い。
+      Microsoft-Windows-Windows Defender/Operational チャネルを転送している場合のみ（他社製のウイルス対策を入れた端末では、Defender が自動で無効になる際にも出る）。
+    recommendation: 他社製ウイルス対策の導入など意図した変更か確認し、そうでなければ保護を戻して、直前のログオンとプロセス起動を調べる。改ざん防止（Tamper Protection）の有効化を検討。
+    scope: {source_type: windows_event, event_action: ["5001", "5010", "5012"]}
+    match: {key: channel, contains: windows defender}
+    group_by: [host_name]
+    evidence:
+      - {label: 内容, key: message, limit: 2, truncate: 160}
 
   # ================================================================ GitLab（source=gitlab）
   # GitLab（Omnibus）のJSONログを NXLog から source=gitlab, class=gitlab で送る前提。
@@ -693,3 +813,258 @@ rules:
     evidence:
       - {label: 送信者, key: mailfrom, limit: 5}
       - {label: 件名, key: subject, limit: 3, truncate: 80}
+
+  # ================================================================ Linux（source_type=linux）
+  # 2026-11-20 追加。syslog（/var/log/secure・messages・cron）を NXLog の parse_syslog() で送る前提で、
+  # 本文は Message（正規化列 message）、プログラム名は SourceName に入る。対応する Taxonomy KEY が無い値は
+  # message を正規表現で見る。SSH の総当たりは組み込みルール（auth_bruteforce_*・root_ssh_attempt）が見る。
+  # cron・アカウント操作は event_category=system に入る（SSH の大量の失敗を対象から外して軽くするため scope で絞る）。
+
+  - id: linux_cron_suspicious_cmd
+    name: "[Linux] 不審なコマンドのcron実行"
+    title: 不審なコマンドのcron実行
+    severity: critical
+    category: security
+    description: >-
+      cron が、Base64 のデコード結果をシェルに渡す・ダウンロードしたスクリプトをそのまま実行する・/dev/tcp で外部へ接続する・一時フォルダの実行ファイルを起動する、といったコマンドを実行した。
+      バックドアの常駐（毎時の再起動）で典型的に使われる形（実例: nobody の crontab に「echo <Base64> | base64 -d | bash」を仕込む gsocket 系）。
+    recommendation: >-
+      実行ユーザーの crontab（crontab -l -u <ユーザー>、/var/spool/cron/）を退避してから削除し、デコード結果が起動するプログラムと設置場所を特定する。
+      Webサーバーの実行ユーザー（nobody・apache 等）なら、公開領域の Webshell・改ざんされたファイルを探す。侵入口を塞ぐまで同じ仕込みが再設置されると考える。
+    scope: {source_type: linux, event_category: [system]}
+    match:
+      col: message
+      regex:
+        - '^\([^)]+\) CMD \(.*base64\s+(-d|--decode|-D)'
+        - '^\([^)]+\) CMD \(.*(curl|wget|fetch)\s[^|;]*\|\s*(ba|da|z|k)?sh'
+        - '^\([^)]+\) CMD \(.*/dev/(tcp|udp)/'
+        - '^\([^)]+\) CMD \(.*(^|[ ;|&(])(/tmp|/var/tmp|/dev/shm)/'
+        - '^\([^)]+\) CMD \(.*(nc|ncat|socat)\s.*(-e\s|exec:)'
+        - '^\([^)]+\) CMD \(.*(python[0-9.]*\s+-c|perl\s+-e|php\s+-r)\s'
+    group_by: [host_name]
+    evidence:
+      - {label: cron, col: message, limit: 2, truncate: 120}
+
+  - id: linux_cron_service_user
+    name: "[Linux] Webサーバー等のサービス用ユーザーのcron"
+    title: サービス用ユーザーのcron
+    severity: high
+    category: security
+    description: >-
+      nobody・apache・www-data・nginx・lsadm 等、Webサーバーやデーモンの実行ユーザーで cron が実行された、または crontab が書き換えられた。
+      これらのユーザーは通常 crontab を持たないため、Webアプリの脆弱性・Webshell 経由で仕込まれた可能性が高い。
+    recommendation: >-
+      該当ユーザーの crontab を退避してから削除し、実行内容を確認する。Webの公開領域にそのユーザー所有の見覚えの無いファイル（.php 等）が無いか確認する。
+      正規の運用で使っている場合は、そのユーザーを除外したカスタムルールに置き換える。
+    scope: {source_type: linux, event_category: [system]}
+    match:
+      col: message
+      regex: '^\((nobody|nfsnobody|apache|www-data|www|nginx|httpd|lsadm|lsws|php-fpm|daemon|ftp|mysql|postgres)\) (CMD|REPLACE|BEGIN EDIT|DELETE) '
+    group_by: [host_name]
+    evidence:
+      - {label: cron, col: message, limit: 2, truncate: 120}
+
+  - id: linux_crontab_changed
+    name: "[Linux] crontabの変更"
+    title: crontabの変更
+    severity: warning
+    category: security
+    description: crontab コマンドでユーザーの crontab が書き換え・削除された。攻撃者の常駐の手段として最もよく使われる。
+    recommendation: 変更したユーザーと作業の予定を照合する。心当たりが無ければ crontab -l -u <ユーザー> で内容を確認する。
+    scope: {source_type: linux, event_category: [system]}
+    match: {col: message, regex: '^\([^)]+\) (REPLACE|DELETE) \('}
+    group_by: [host_name]
+    evidence:
+      - {label: 操作, col: message, limit: 3, truncate: 80}
+
+  - id: linux_user_created
+    name: "[Linux] ユーザーアカウントの作成"
+    title: ユーザーアカウントの作成
+    severity: warning
+    category: security
+    description: useradd でユーザーアカウントが作成された。攻撃者の永続化（裏口アカウント）でも使われる。
+    recommendation: 作成されたアカウントが承認済みの作業か確認。心当たりが無ければ、ログインシェル・authorized_keys・sudo 権限を確認してロックする。
+    scope: {source_type: linux, event_category: [system]}
+    match: {col: message, regex: '^new user: name='}
+    group_by: [host_name]
+    evidence:
+      - {label: 内容, col: message, limit: 3, truncate: 120}
+
+  - id: linux_priv_group_add
+    name: "[Linux] 管理者グループへのユーザー追加"
+    title: 管理者グループへのユーザー追加
+    severity: high
+    category: security
+    description: >-
+      wheel・sudo・admin・root・docker・lxd 等、root 権限を得られるグループにユーザーが追加された（usermod / gpasswd）。docker・lxd への所属も実質 root 相当。
+    recommendation: 追加した操作者と追加されたユーザーを確認し、承認された変更でなければ直ちにグループから外して調査する。
+    scope: {source_type: linux, event_category: [system]}
+    match:
+      col: message
+      regex:
+        - "add '[^']+' to (shadow )?group '(wheel|sudo|admin|root|adm|docker|lxd)'"
+        - 'user \S+ added by \S+ to group (wheel|sudo|admin|root|adm|docker|lxd)$'
+    group_by: [host_name]
+    evidence:
+      - {label: 内容, col: message, limit: 3, truncate: 120}
+
+  - id: linux_sudo_failure
+    name: "[Linux] sudoの失敗（パスワード誤り・権限なし）"
+    title: sudoの失敗
+    severity: high
+    category: security
+    description: >-
+      sudo でパスワードを誤った、または sudo の権限が無いユーザーが sudo を試みた。乗っ取ったアカウントからの root 権限の奪取（権限昇格）の試みで出る。
+    recommendation: 該当ユーザー本人の操作か確認する。本人でなければそのユーザーのセッション・ログイン元・実行コマンドを調べ、パスワード（鍵）を変更する。
+    scope: {source_type: linux, event_category: [authentication]}
+    match:
+      col: message
+      regex: 'incorrect password attempts?|user NOT in sudoers|is not allowed to run sudo|is not in the sudoers file'
+    group_by: [host_name]
+    evidence:
+      - {label: 内容, col: message, limit: 3, truncate: 120}
+
+  - id: linux_ssh_root_login
+    name: "[Linux] rootでのSSHログイン成功"
+    title: rootでのSSHログイン成功
+    severity: high
+    category: security
+    description: root で直接 SSH ログインに成功した。誰が操作したか追えなくなるため、通常は禁止し一般ユーザー＋sudo で運用する。
+    recommendation: 接続元と操作者を確認する。sshd_config に PermitRootLogin no を設定し、管理作業は一般ユーザーから sudo で行う。
+    scope: {source_type: linux, event_action: [login_success]}
+    match: {col: message, regex: '^Accepted \S+ for root from '}
+    group_by: [source_ip, host_name]
+    evidence:
+      - {label: 内容, col: message, limit: 2, truncate: 80}
+      - {label: ログイン先, col: host_name}
+
+  - id: linux_ssh_password_login
+    name: "[Linux] パスワード認証でのSSHログイン成功"
+    title: パスワード認証でのSSHログイン成功
+    severity: warning
+    category: security
+    description: >-
+      公開鍵ではなくパスワードで SSH ログインに成功した。パスワード認証が有効なままだと、総当たりで当てられたときに侵入される。
+    recommendation: 本人のログインか確認し、sshd_config で PasswordAuthentication no（公開鍵のみ）にする。
+    scope: {source_type: linux, event_action: [login_success]}
+    match: {col: message, regex: '^Accepted (password|keyboard-interactive)'}
+    group_by: [source_ip, host_name]
+    evidence:
+      - {label: ユーザー, col: actor_user}
+      - {label: ログイン先, col: host_name}
+
+  - id: linux_web_admin_login_failure
+    name: "[Linux] phpMyAdmin・Webminのログイン失敗の多発"
+    title: phpMyAdmin・Webminのログイン失敗の多発
+    severity: high
+    category: security
+    description: >-
+      phpMyAdmin（syslog 出力の「user denied」）や Webmin（「Invalid/Non-existent login as」）へのログイン失敗が続いている。
+      DB・サーバー管理画面への総当たりで、SSH 用の組み込みルールでは拾えない。
+    recommendation: >-
+      管理画面をインターネットへ公開しない（許可IPの限定・VPN経由・Basic認証の追加）。使っていなければ削除・停止する。
+      phpMyAdmin では root でのログインを禁止する（AllowRoot = false）。
+    scope: {source_type: linux}
+    match:
+      col: message
+      regex:
+        - '^user denied: .* from [0-9a-f:.]+'
+        - '^(Invalid|Non-existent|Failed) login as \S+ from '
+    group_by: [host_name]
+    threshold: {count: 5}
+    evidence:
+      - {label: 内容, col: message, limit: 3, truncate: 100}
+
+  # ================================================================ Web（source_type=web_access）
+  # 2026-11-20 追加。組み込みルール（payload_injection・web_scan・sensitive_path・webshell_probe）は
+  # 「攻撃の試み」を見る。ここでは試みが成功した（200 で応答した）ものと、攻撃ツールの利用を見る。
+
+  - id: web_webshell_access
+    name: "[Web] Webshellへのアクセス成功の疑い"
+    title: Webshellへのアクセス成功の疑い
+    severity: critical
+    category: security
+    description: >-
+      アップロード用フォルダ（wp-content/uploads 等）や mu-plugins の中の .php、既知の Webshell の名前（wp-conffg.php・alfa・wso・b374k 等）へのアクセスが 200 で応答した。
+      本来これらの場所に直接呼ばれる .php は無いため、Webshell が設置され、使われている可能性が高い。
+    recommendation: >-
+      該当ファイルを退避してから削除し、同じ所有者・同じ時期に作られたファイルを公開領域全体で探す（find -newer 等）。
+      アクセス元IPを遮断し、CMS・プラグインの脆弱性・管理者パスワードを確認する。アップロード用フォルダでは PHP の実行を禁止する。
+    scope: {source_type: web_access, http_status_code: ["200"]}
+    match:
+      col: url_path
+      regex:
+        - '/wp-content/uploads/.*\.(php[0-9]?|phtml|phar|pht)$'
+        - '/wp-content/mu-plugins/[^/]+\.php$'
+        - '/(uploads?|files|images|img|tmp|cache)/.*\.(php[0-9]?|phtml|phar)$'
+        - '/(wp-conffg|alfa|alfa-rex|alfashell|wso|wso[0-9.]+|b374k|c99|r57|indoxploit|marijuana|xleet|priv8|leafmailer)\.php$'
+    group_by: [source_ip, url_domain]
+    evidence:
+      - {label: パス, col: url_path, limit: 3, truncate: 100}
+      - {label: サイト, col: url_domain}
+
+  - id: web_sensitive_file_exposed
+    name: "[Web] 機密ファイルの取得成功"
+    title: 機密ファイルの取得成功
+    severity: critical
+    category: security
+    description: >-
+      .env・.git・wp-config.php のバックアップ・DBダンプ・phpinfo 等、外部に出てはいけないファイルへのアクセスが 200 で応答した（中身が渡った可能性がある）。
+      探索そのものは「危険パスへのアクセス」で出るが、こちらは成功したものだけを出す。
+    recommendation: >-
+      該当ファイルを公開領域から外す。中に含まれていたパスワード・APIキー・DBの認証情報は漏れた前提ですべて変更する。
+      .git が取れた場合はソースコード全体が復元されうる。Webサーバーの設定でドットファイル・バックアップ拡張子へのアクセスを拒否する。
+    scope: {source_type: web_access, http_status_code: ["200", "206"]}
+    match:
+      col: url_path
+      regex:
+        - '/\.env(\.[a-z0-9_-]+)?$'
+        - '/\.git/(config|HEAD|index|logs/HEAD)$'
+        - '/\.(aws|ssh|docker)/'
+        - '/\.(htpasswd|npmrc|pgpass|my\.cnf|bash_history)$'
+        - 'wp-config\.php(\.(bak|old|orig|save|txt|swp|1)|~)$'
+        - '\.(sql|sql\.gz|sql\.zip)$'
+        - '/(backup|backups|dump|db|database|site|www|html|wwwroot)\.(zip|tar|tar\.gz|tgz|rar|7z)$'
+        - '/(phpinfo|php_info)\.php$'
+    group_by: [source_ip, url_domain]
+    evidence:
+      - {label: パス, col: url_path, limit: 3, truncate: 100}
+      - {label: サイト, col: url_domain}
+
+  - id: web_wp_login_bruteforce
+    name: "[Web] WordPressログインの総当たり"
+    title: WordPressログインの総当たり
+    severity: high
+    category: security
+    description: >-
+      同じ送信元IPから wp-login.php・xmlrpc.php への POST が続いている。xmlrpc.php は1回の要求で数百のパスワードを試せる（system.multicall）。
+    recommendation: >-
+      該当IPを遮断。xmlrpc.php を使っていなければWebサーバーの設定で拒否する。wp-login.php は許可IPの限定・Basic認証・ログイン試行回数の制限プラグインで守り、管理者にMFAを導入する。
+    scope: {source_type: web_access}
+    match:
+      all:
+        - {col: url_path, regex: '/(wp-login|xmlrpc)\.php$'}
+        - {key: [method, httpmethod, request], regex: '^post'}
+    group_by: [source_ip]
+    threshold: {count: 20}
+    evidence:
+      - {label: パス, col: url_path, limit: 2}
+      - {label: サイト, col: url_domain}
+
+  - id: web_attack_tool_ua
+    name: "[Web] 攻撃・脆弱性診断ツールからのアクセス"
+    title: 攻撃ツールからのアクセス
+    severity: warning
+    category: security
+    description: >-
+      User-Agent が sqlmap・nikto・nuclei・wpscan・nmap 等の攻撃・脆弱性診断ツールのもの。依頼していない診断であれば攻撃の下見。
+      curl・python-requests 等の汎用クライアントは監視・連携でも使われるため対象にしない。
+    recommendation: 自社・委託先の診断でなければ該当IPを遮断する。同じIPの他のアクセス（攻撃ペイロード・危険パス）が成功していないか確認する。
+    scope: {source_type: web_access}
+    match:
+      key: useragent
+      regex: 'sqlmap|nikto|nuclei|masscan|zgrab|wpscan|dirbuster|gobuster|ffuf|feroxbuster|acunetix|netsparker|nessus|openvas|nmap|hydra|wfuzz|whatweb|commix|arachni|skipfish|w3af|xsstrike|jaeles|joomscan|droopescan'
+    group_by: [source_ip]
+    evidence:
+      - {label: ツール, key: useragent, limit: 2, truncate: 80}
+      - {label: サイト, col: url_domain}
