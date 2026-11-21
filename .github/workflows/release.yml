@@ -4,15 +4,15 @@ name: Auto Release
 # （push毎だと1リリースの中身が薄くなりすぎるため、タグpushという明示的な操作を
 #  トリガーにして、ある程度まとまった単位でリリースを切れるようにする）。
 #
-# 本文(release notes)は前回タグ以降のコミットを、件名(見出し)＋本文(何を・なぜ)で並べて作る
-# （このリポジトリはPRを使わず直接mainへpushする運用のため、PRタイトルを前提にした
-#  GitHubの generate_release_notes だと拾うものが無く内容が空になってしまう）。
-# 件名だけでは変更の理由や確認内容が伝わらないため、コミットの本文も載せる（Co-Authored-By 行は除く）。
-# 本文はアプリの「お知らせ」画面にもMarkdownとして表示される。
+# 本文(release notes)は backend/app/releases.json のそのタグの項目を使う。アプリの「お知らせ」画面も
+# 同じファイルを読む（GitHubには取りに行かない。リポジトリを非公開にしても各環境のお知らせが止まらないように）。
+# releases.json にタグが無い場合だけ、従来どおり前回タグ以降のコミットの件名＋本文で作る。
 #
 # リリースを切りたいとき:
-#   git tag v1.2.0
-#   git push <remote> v1.2.0
+#   python3 backend/tools/release_notes.py vYYYY.MM.DD-N   # releases.json に追記
+#   git add backend/app/releases.json && git commit -m "リリースノート vYYYY.MM.DD-N"
+#   git tag vYYYY.MM.DD-N
+#   git push <remote> main vYYYY.MM.DD-N
 
 on:
   push:
@@ -38,12 +38,17 @@ jobs:
           else
             RANGE="${GITHUB_REF_NAME}"
           fi
+          BODY=$(python3 -c 'import json,sys; print(next((r["body"] for r in json.load(open("backend/app/releases.json", encoding="utf-8")) if r.get("tag_name") == sys.argv[1]), ""))' "${GITHUB_REF_NAME}" 2>/dev/null || true)
           {
             echo "notes<<RELEASE_NOTES_EOF"
-            # コミットごとに「### 件名」＋本文。Co-Authored-By 行を除き、連続する空行は1行にまとめる
-            git log "$RANGE" --no-merges --pretty=format:'### %s%n%n%b%n' \
-              | grep -v -E '^Co-Authored-By:' | cat -s
-            echo ""
+            if [ -n "$BODY" ]; then
+              printf '%s\n\n' "$BODY"
+            else
+              # コミットごとに「### 件名」＋本文。Co-Authored-By 行を除き、連続する空行は1行にまとめる
+              git log "$RANGE" --no-merges --pretty=format:'### %s%n%n%b%n' \
+                | grep -v -E '^Co-Authored-By:' | cat -s
+              echo ""
+            fi
             # 本番でフロントエンドをビルドしない手順にする。ビルドは Node が約1GBのメモリを使い、
             # メモリの少ない本番サーバーでは実行中に応答不能になったことがある（2026-08-13）
             cat <<'DEPLOY'

@@ -5,8 +5,8 @@ import { api } from "../api";
 import type { ReleaseItem } from "../types";
 
 // お知らせ・更新履歴の一覧（常にアクセス可能。ダッシュボードの非表示設定の影響は受けない）。
-// GitHub Releasesの本文(Markdown)をHTMLに変換して表示する。取得元はGitHub側のリリースノートなので
-// 基本的には信頼できるが、リモートコンテンツである以上サニタイズ(DOMPurify)してから描画する。
+// 同梱のリリースノート（backend/app/releases.json）の本文(Markdown)をHTMLに変換して表示する。
+// 自前のファイルだが、innerHTMLに入れる以上はサニタイズ(DOMPurify)してから描画する。
 function renderBody(md: string): { __html: string } {
   const html = marked.parse(md || "", { breaks: true }) as string;
   return { __html: DOMPurify.sanitize(html) };
@@ -26,7 +26,7 @@ export function Changelog() {
     <div className="row row-cards">
       <div className="col-12">
         <div className="alert alert-info mb-0">
-          <strong>お知らせ・更新履歴</strong>：GitHubのリリースノートをそのまま表示しています。
+          <strong>お知らせ・更新履歴</strong>：このバージョンに含まれるリリースノートです。LogSeekerを更新すると、新しいお知らせが追加されます。
         </div>
       </div>
 
@@ -47,11 +47,6 @@ export function Changelog() {
                 {r.prerelease && <span className="badge bg-orange-lt ms-2">プレリリース</span>}
               </h3>
               <span className="card-subtitle ms-2 text-secondary">{ts(r.published_at)}</span>
-              <div className="card-actions">
-                <a className="btn btn-sm btn-outline-secondary" href={r.html_url} target="_blank" rel="noreferrer">
-                  GitHubで見る ↗
-                </a>
-              </div>
             </div>
             <div className="card-body">
               <div className="markdown-body" dangerouslySetInnerHTML={renderBody(r.body)} />

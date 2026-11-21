@@ -413,7 +413,7 @@ export interface ReleaseItem {
   name: string;
   body: string;
   published_at: string | null;
-  html_url: string;
+  html_url?: string;
   prerelease: boolean;
 }
 

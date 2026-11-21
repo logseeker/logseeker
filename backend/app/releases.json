@@ -1,0 +1,555 @@
+[
+ {
+  "tag_name": "v2026.11.20-1",
+  "name": "v2026.11.20-1",
+  "body": "### Linux・Web・Windows の検知ルールを20件追加する\n\nLinux（9件）: 不審なコマンドの cron 実行（base64 をシェルへ渡す等）、サービス用ユーザー\n（nobody・apache 等）の cron、crontab の変更、ユーザー作成、管理者グループへの追加、sudo の失敗、\nroot での SSH ログイン、パスワード認証での SSH ログイン、phpMyAdmin・Webmin のログイン失敗の多発。\nWeb（4件）: Webshell へのアクセス成功（200）、機密ファイルの取得成功（200）、WordPress ログインの\n総当たり、攻撃ツールの User-Agent。\nWindows（7件）: アカウント削除、パスワードリセット、組み込みアカウントの有効化、時刻同期以外の\n時刻変更、起動時の保護の無効化（4826）、Defender の検出・無効化。win_rdp_external に 1149 を追加。\n\nTaxonomy KEY は追加せず、KEY の無い値は message を正規表現で見る。ルールパックの版は 2026.11.20-1。",
+  "published_at": "2026-11-20T10:52:27+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.11.02-1",
+  "name": "v2026.11.02-1",
+  "body": "### イベント一覧の表を内部スクロール枠にし、ステータスコードを色分けする\n\n- 表を画面の高さに収まる枠内でスクロールさせ、見出しを固定した。\n  これまでは表がページ全体で縦に伸びるため、横スクロールバーが最終行の下に\n  隠れ、「対応策を表示」で右端に出る対応策列まで横に動かせなかった。\n- ステータスコード（statuscode等）を先頭桁で色分けしたバッジにした。\n  5xxは赤で「サーバー側エラー」と表示し、4xx（要求側エラー・探索/攻撃の可能性）と\n  見分けられるようにした。マウスを載せると意味（例: 503 Service Unavailable）を表示。\n  イベント詳細パネルにも同じ表示を付けた。",
+  "published_at": "2026-11-02T09:08:11+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.10.23-2",
+  "name": "v2026.10.23-2",
+  "body": "### リリースノートにコミットの本文を載せ、本番でビルドしない反映手順にする\n\nリリースノート（アプリの「お知らせ」にも表示される）がコミットの件名だけで、\n何をなぜ変えたか・何を確認したかが伝わらなかったため、件名を見出しにして\nコミットの本文も載せる（Co-Authored-By 行は除く）。\n\nあわせて、リリースノートに自動で付く本番の反映手順が本番サーバー上で\nnpm run build を実行する内容になっていた。ビルドは Node.js が約1GBのメモリを\n使い、2026-08-13 に本番が応答不能になった原因の操作のため、別のマシンで\nビルドして成果物（dist）だけを転送する手順に改めた。",
+  "published_at": "2026-10-23T00:25:40+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.10.23-1",
+  "name": "v2026.10.23-1",
+  "body": "- M365 の監査ログを既存のTaxonomy KEYで取り込むように改める（KEYの追加を取り消し）",
+  "published_at": "2026-10-23T00:17:18+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.10.22-1",
+  "name": "v2026.10.22-1",
+  "body": "- Microsoft 365 の監査ログを取り込み、検知ルールの対象にする",
+  "published_at": "2026-10-23T00:00:19+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.10.12-7",
+  "name": "v2026.10.12-7",
+  "body": "- 失敗のあとにログイン成功した送信元を検知する（侵入の可能性）",
+  "published_at": "2026-10-12T23:02:52+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.10.12-6",
+  "name": "v2026.10.12-6",
+  "body": "- 相関分析に攻撃の関係図を追加（攻撃元→サーバー、遮断状況つき）",
+  "published_at": "2026-10-12T18:31:07+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.10.12-5",
+  "name": "v2026.10.12-5",
+  "body": "- 管理者パスワードに要件（10文字以上・英大小数字記号すべて）を設け、満たさない場合は変更を強制する",
+  "published_at": "2026-10-12T18:14:37+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.10.12-4",
+  "name": "v2026.10.12-4",
+  "body": "- TCP受信で無通信2分の接続を切らないようにする",
+  "published_at": "2026-10-12T18:10:37+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.10.12-3",
+  "name": "v2026.10.12-3",
+  "body": "- HTTPS(443)の/ingestでTCP 516と同じ送り方ができるようにする",
+  "published_at": "2026-10-12T17:51:25+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.10.12-2",
+  "name": "v2026.10.12-2",
+  "body": "- ログソース等からイベント画面へ遷移すると前回の絞り込みが残る問題を修正",
+  "published_at": "2026-10-12T10:20:31+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.10.12-1",
+  "name": "v2026.10.12-1",
+  "body": "- 2段階認証のリカバリーコードが読めない問題を修正",
+  "published_at": "2026-10-12T10:11:46+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.10.06-1",
+  "name": "v2026.10.06-1",
+  "body": "- 通知メールを「1アラート1通」にし、同じアラートの再送をやめる",
+  "published_at": "2026-10-06T19:38:08+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.10.05-2",
+  "name": "v2026.10.05-2",
+  "body": "- 管理者に2段階認証（TOTP）を必須化し、パスワード認証を管理者専用にする",
+  "published_at": "2026-10-05T22:31:30+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.10.05-1",
+  "name": "v2026.10.05-1",
+  "body": "- SSOログイン（Google Workspace / Microsoft 365）を実装",
+  "published_at": "2026-10-05T14:40:41+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.10.04-1",
+  "name": "v2026.10.04-1",
+  "body": "- 時刻の表示とCSV出力をすべてJSTにそろえる",
+  "published_at": "2026-10-04T10:29:33+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.10.03-5",
+  "name": "v2026.10.03-5",
+  "body": "- 開発環境のサイト名・ファイル構成をソースから外す",
+  "published_at": "2026-10-03T23:36:44+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.10.03-4",
+  "name": "v2026.10.03-4",
+  "body": "- 公開ソースから実環境のホスト名・IP・サイト名を除く",
+  "published_at": "2026-10-03T23:30:26+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.10.03-3",
+  "name": "v2026.10.03-3",
+  "body": "- 監査ログに「何をしたか」を日本語で記録する",
+  "published_at": "2026-10-03T23:16:23+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.10.03-2",
+  "name": "v2026.10.03-2",
+  "body": "- イベント詳細の受信フィールドに値のコピーボタンを付ける",
+  "published_at": "2026-10-03T22:51:19+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.10.03-1",
+  "name": "v2026.10.03-1",
+  "body": "- GitLabのKEYをTaxonomyに追加し、送信元IP単位の検知ルールを6件追加する\n- GitLab用の検知ルールを3件追加する\n- イベント詳細の受信フィールド値をコピーできるようにする",
+  "published_at": "2026-10-03T22:48:03+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.10.02-1",
+  "name": "v2026.10.02-1",
+  "body": "- 検知ルールを宣言型のルールパックで書けるようにする",
+  "published_at": "2026-10-02T10:06:30+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.09.29-2",
+  "name": "v2026.09.29-2",
+  "body": "- Windowsセキュリティイベントの検知ルールを12件追加する",
+  "published_at": "2026-09-29T22:30:06+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.09.29-1",
+  "name": "v2026.09.29-1",
+  "body": "- WindowsセキュリティイベントのKEYをTaxonomyに追加する（43件）",
+  "published_at": "2026-09-29T22:17:43+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.21-1",
+  "name": "v2026.08.21-1",
+  "body": "- イベント一覧から「インシデント化」「対応済み」を無条件に出さないようにする",
+  "published_at": "2026-08-21T23:58:59+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.19-2",
+  "name": "v2026.08.19-2",
+  "body": "- Dashboardの表示を高速化する（本番で約51秒かかっていた）",
+  "published_at": "2026-08-19T21:03:43+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.19-1",
+  "name": "v2026.08.19-1",
+  "body": "- イベント詳細の「Taxonomy外KEYがN件あります」の注記を表示しない",
+  "published_at": "2026-08-19T06:45:24+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.17-2",
+  "name": "v2026.08.17-2",
+  "body": "- バックフィルツールが本番(ネイティブ構成)で動かない問題を修正する",
+  "published_at": "2026-08-17T07:03:15+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.17-1",
+  "name": "v2026.08.17-1",
+  "body": "- 時刻解決で発生時刻(EventTime)を受信時刻より優先する\n- サーバエラー(5xx)多発のしきい値を50から256へ引き上げる\n- 認証総当たり(IP単位)の二重カウントを解消する",
+  "published_at": "2026-08-17T07:00:58+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.13-9",
+  "name": "v2026.08.13-9",
+  "body": "- エンティティ・相関・資産の集計を既定で直近24時間に絞る",
+  "published_at": "2026-08-13T19:29:24+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.13-8",
+  "name": "v2026.08.13-8",
+  "body": "- 旧正規化マッピングを全廃し、検知・相関を含む全機能をTaxonomy KEYへ統一する",
+  "published_at": "2026-08-13T19:14:34+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.13-16",
+  "name": "v2026.08.13-16",
+  "body": "- sourcename と audit_exe をTaxonomy KEYとして追加する(taxonomy.md v1.12)",
+  "published_at": "2026-08-13T22:25:16+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.13-15",
+  "name": "v2026.08.13-15",
+  "body": "- 検知ルール「サーバエラー(5xx)の多発」を追加する",
+  "published_at": "2026-08-13T22:15:04+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.13-14",
+  "name": "v2026.08.13-14",
+  "body": "- CSV出力の見出しが重複して区別できない問題を修正する\n- 既定の表示列に本文(message)が入らず、内容が空の表になる問題を修正する",
+  "published_at": "2026-08-13T20:34:11+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.13-13",
+  "name": "v2026.08.13-13",
+  "body": "- キー一覧の表示を統一し、マッピング画面の説明に優先順であることを明示する",
+  "published_at": "2026-08-13T20:18:43+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.13-12",
+  "name": "v2026.08.13-12",
+  "body": "- 検知ルールの評価も既定で直近24時間に絞る",
+  "published_at": "2026-08-13T19:53:30+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.13-11",
+  "name": "v2026.08.13-11",
+  "body": "- Taxonomy KEYどおりに送ると時刻が解決されない不具合を修正する",
+  "published_at": "2026-08-13T19:48:58+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.13-10",
+  "name": "v2026.08.13-10",
+  "body": "- 資産一覧は既定を全期間に戻す",
+  "published_at": "2026-08-13T19:32:13+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.13-7",
+  "name": "v2026.08.13-7",
+  "body": "- マッピング画面を現行設計に更新し、送信側の設定サンプルを追加する",
+  "published_at": "2026-08-13T05:32:20+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.13-6",
+  "name": "v2026.08.13-6",
+  "body": "- ダッシュボード集計の未使用コードを除去し、ビルド成果物をgit管理外にする",
+  "published_at": "2026-08-13T05:17:01+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.13-5",
+  "name": "v2026.08.13-5",
+  "body": "- 列設定が再読み込みで元に戻る不具合を修正し、保存操作を不要にする",
+  "published_at": "2026-08-13T05:02:23+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.13-4",
+  "name": "v2026.08.13-4",
+  "body": "- 列ヘッダから値で絞り込めるようにする（旧画面のステータス等のドロップダウン相当）",
+  "published_at": "2026-08-13T04:52:21+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.13-3",
+  "name": "v2026.08.13-3",
+  "body": "- Dashboardの集計から KEY小文字化コピーの生成を排除する",
+  "published_at": "2026-08-13T04:37:47+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.13-2",
+  "name": "v2026.08.13-2",
+  "body": "- Dashboardの内訳集計を payload の1回展開に変更して大幅に高速化",
+  "published_at": "2026-08-13T04:33:38+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.13",
+  "name": "v2026.08.13",
+  "body": "- Taxonomy KEY追加(v1.11)の取り込みと、ログソース別のクリック遷移・Dashboard高速化",
+  "published_at": "2026-08-13T04:28:58+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.12-3",
+  "name": "v2026.08.12-3",
+  "body": "- message をTaxonomy KEYとして取り込む(taxonomy.md v1.10の再生成)",
+  "published_at": "2026-08-13T04:05:09+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.12-2",
+  "name": "v2026.08.12-2",
+  "body": "- Events画面の「対応策」「CSV/JSON」「攻撃・注意喚起」「脅威/注目フィルタ」を復活させる",
+  "published_at": "2026-08-13T01:11:35+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.12",
+  "name": "v2026.08.12",
+  "body": "- Events/Dashboardを基本設計v12(A案)に沿って作り直す",
+  "published_at": "2026-08-12T23:39:33+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.11-2",
+  "name": "v2026.08.11-2",
+  "body": "- rebase時に混入したEVENTS_DEFAULT_PERIOD_HOURS/_with_events_default_periodの重複定義を削除",
+  "published_at": "2026-08-11T19:36:46+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.11",
+  "name": "v2026.08.11",
+  "body": "- Events一覧にClass別の追加列(受信payload生キー)を設定できる機能を追加\n- web_error.levelインデックスを削除\n- ライセンス管理・データ保持期間機能まわりの修正\n- フェーズ2: events.payload部分インデックス追加(案C)",
+  "published_at": "2026-08-11T19:31:07+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.09-3",
+  "name": "v2026.08.09-3",
+  "body": "- auditログをlinuxから分離し専用source_typeに: SHA256指紋のIP誤検出によるイベント消失を修正",
+  "published_at": "2026-08-09T18:59:29+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.09-2",
+  "name": "v2026.08.09-2",
+  "body": "- event_result(成否判定)の正規化漏れを修正: web_error/systemd/node/webmin/certbotに対応",
+  "published_at": "2026-08-09T07:37:01+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.09",
+  "name": "v2026.08.09",
+  "body": "- インシデントの起因イベント削除時の挙動修正、マイグレーション失敗ログの誤分類を解消\n- PROJECT.md §7.5/7.6を最新スキーマに更新、テーブル棚卸しスクリプトを追加",
+  "published_at": "2026-08-09T00:48:47+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.08-3",
+  "name": "v2026.08.08-3",
+  "body": "- 本番investigate結果を受け、旧§9.5/9.6インシデント機能の後始末を安全化",
+  "published_at": "2026-08-08T22:29:16+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.08-2",
+  "name": "v2026.08.08-2",
+  "body": "- ケース/インシデント管理機能を実装（v4: アラート単位のインシデント分離アーキテクチャ）",
+  "published_at": "2026-08-08T21:40:44+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.08",
+  "name": "v2026.08.08",
+  "body": "- auditd(type=USER_LOGIN等)のログをlinux種別として正規化できるように対応",
+  "published_at": "2026-08-08T00:31:51+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.07-5",
+  "name": "v2026.08.07-5",
+  "body": "- アセットに表示名を追加し、エンティティ一覧から自社IPを除外",
+  "published_at": "2026-08-07T23:32:29+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.07-4",
+  "name": "v2026.08.07-4",
+  "body": "- DB接続プールのサイズを明示設定",
+  "published_at": "2026-08-07T22:33:00+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.07-3",
+  "name": "v2026.08.07-3",
+  "body": "- ダッシュボードのイベント件数推移も過去日・任意期間をカレンダーで選べるように変更",
+  "published_at": "2026-08-07T22:02:49+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.07-2",
+  "name": "v2026.08.07-2",
+  "body": "- 運用画面：転送量グラフをカレンダーで過去日・任意期間を選べるように変更",
+  "published_at": "2026-08-07T21:47:09+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.07",
+  "name": "v2026.08.07",
+  "body": "- Windows Event Log(NXLog)の正規化と時刻表示ズレを修正",
+  "published_at": "2026-08-07T21:25:05+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.06-6",
+  "name": "v2026.08.06-6",
+  "body": "- 設置日の初回記録を「最初に受信したイベントのreceived_at」基準に修正",
+  "published_at": "2026-08-06T12:30:02+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.06-5",
+  "name": "v2026.08.06-5",
+  "body": "- データ保持期間の起点をインストール日ではなくライセンス適用日に修正（適用済みの場合）",
+  "published_at": "2026-08-06T12:25:43+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.06-4",
+  "name": "v2026.08.06-4",
+  "body": "- データ保持期間にも起点日・残日数の目安を表示（ライセンス未適用でも90日の起点が分かるように）",
+  "published_at": "2026-08-06T12:03:58+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.06-3",
+  "name": "v2026.08.06-3",
+  "body": "- ライセンス画面に「残日数」列を独立させて表示",
+  "published_at": "2026-08-06T10:23:28+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.06-2",
+  "name": "v2026.08.06-2",
+  "body": "- ライセンス未適用時の有効期限表示を「無期限」から「-」に修正",
+  "published_at": "2026-08-06T08:31:32+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.06",
+  "name": "v2026.08.06",
+  "body": "- ライセンス画面に起点日を表示、残り日数の表示を月単位→30日以内は日単位に変更",
+  "published_at": "2026-08-06T08:26:06+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.05-5",
+  "name": "v2026.08.05-5",
+  "body": "- astro_buildログの正規化とビルド失敗検知ルール(build_failure)を追加",
+  "published_at": "2026-08-05T22:47:55+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.05-4",
+  "name": "v2026.08.05-4",
+  "body": "- payload_injectionのILIKE仕様(%未エスケープ)にコメントを追記",
+  "published_at": "2026-08-05T22:21:16+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.05-3",
+  "name": "v2026.08.05-3",
+  "body": "- Webshell探索・攻撃ペイロード検知の2ルールを追加",
+  "published_at": "2026-08-05T21:54:51+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.05-2",
+  "name": "v2026.08.05-2",
+  "body": "- リリースノートに本番反映コマンドを常に含めるように変更",
+  "published_at": "2026-08-05T20:06:43+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.05",
+  "name": "v2026.08.05",
+  "body": "- イベント一覧の期間フィルタにプリセットと検索実行ボタンを追加",
+  "published_at": "2026-08-05T20:01:11+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.08.02-1",
+  "name": "v2026.08.02-1",
+  "body": "- イベント一覧のデフォルト検索期間を「直近24時間」に変更",
+  "published_at": "2026-08-05T08:27:55+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.07.26-1",
+  "name": "v2026.07.26-1",
+  "body": "- Fix active-filter chips: invisible text and raw field-name display\n- IPアクセス制限を管理パネルのログインだけを守る単純なON/OFFに簡略化\n- 画面ごとのIPアクセス制限（アプリ層）と、管理者専用の別ログインパネルを追加\n- Simplify IP restriction to a single toggle on the admin panel login itself\n- Add app-layer IP allowlisting and a separate admin-only panel\n- Fix audit log / dead_letter recording the reverse proxy's IP instead of the real client IP\n- Add GeoIP ASN (AS number / organization) enrichment\n- Note that the SELinux-disabled chcon error in INSTALL-pgadmin.md §4 is harmless\n- 資産（Assets）画面を追加：Entitiesとは別に「自社が保有するIP」を扱う\n- Webスキャン疑いの検知パスを拡充、イベント画面にページ番号ページャーを追加\n- Fix login form autofill: add name/id/autoComplete to username & password fields\n- Fix: secure/messages source_type not recognized by normalize taxonomy\n- Fix INSTALL.md 5C nginx template: listen ... http2 is deprecated on EL10's nginx 1.26\n- Restructure nginx TLS section into explicit A/B/C paths (parity with INSTALL-pgadmin.md), add full Cloudflare Full-strict template\n- Restructure Apache TLS section into explicit A/B/C paths, document logseeker user has no password, Cloudflare TCP-ingest limitation, .env restart requirement\n- Fix INSTALL docs: git clone used a <YOUR_REPO_URL> placeholder instead of the actual repo URL\n- Fix native-install docs: mod_ssl default vhost conflict, cert-vs-config ordering, missing sudo, Cloudflare origin pattern\n- Document the logseeker-user ownership gotcha for frontend build + git pull\n- Fix INSTALL docs: firewalld may not be running before firewall-cmd\n- Sync package-lock.json with the dompurify/marked deps added earlier\n- Fix INSTALL docs: NodeSource setup script doesn't install nodejs itself\n- Revert Python 3.14 docs bump -- psycopg-binary==3.2.3 has no 3.14 wheel\n- Bump documented Python version from 3.12 to 3.14\n- Revert \"Ignore advisor/ and related SaaS-only files\"\n- Ignore advisor/ and related SaaS-only files\n- Rework Operations screen: line chart, hourly/daily drill-down, merge ingest status\n- Add ingest transfer-volume tracking and 運用 (Operations) screen",
+  "published_at": "2026-07-26T16:31:23+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.07.24-1",
+  "name": "v2026.07.24-1",
+  "body": "- Simplify IP restriction to a single toggle on the admin panel login itself\n- Add app-layer IP allowlisting and a separate admin-only panel\n- Fix audit log / dead_letter recording the reverse proxy's IP instead of the real client IP\n- Add GeoIP ASN (AS number / organization) enrichment\n- Note that the SELinux-disabled chcon error in INSTALL-pgadmin.md §4 is harmless\n- 資産（Assets）画面を追加：Entitiesとは別に「自社が保有するIP」を扱う\n- Webスキャン疑いの検知パスを拡充、イベント画面にページ番号ページャーを追加\n- Fix login form autofill: add name/id/autoComplete to username & password fields\n- Fix: secure/messages source_type not recognized by normalize taxonomy\n- Fix INSTALL.md 5C nginx template: listen ... http2 is deprecated on EL10's nginx 1.26\n- Restructure nginx TLS section into explicit A/B/C paths (parity with INSTALL-pgadmin.md), add full Cloudflare Full-strict template\n- Restructure Apache TLS section into explicit A/B/C paths, document logseeker user has no password, Cloudflare TCP-ingest limitation, .env restart requirement\n- Fix INSTALL docs: git clone used a <YOUR_REPO_URL> placeholder instead of the actual repo URL\n- Fix native-install docs: mod_ssl default vhost conflict, cert-vs-config ordering, missing sudo, Cloudflare origin pattern\n- Document the logseeker-user ownership gotcha for frontend build + git pull\n- Fix INSTALL docs: firewalld may not be running before firewall-cmd\n- Sync package-lock.json with the dompurify/marked deps added earlier\n- Fix INSTALL docs: NodeSource setup script doesn't install nodejs itself\n- Revert Python 3.14 docs bump -- psycopg-binary==3.2.3 has no 3.14 wheel\n- Bump documented Python version from 3.12 to 3.14\n- Revert \"Ignore advisor/ and related SaaS-only files\"\n- Ignore advisor/ and related SaaS-only files\n- Rework Operations screen: line chart, hourly/daily drill-down, merge ingest status\n- Add ingest transfer-volume tracking and 運用 (Operations) screen",
+  "published_at": "2026-07-24T17:13:48+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.07.12-4",
+  "name": "v2026.07.12-4",
+  "body": "- Build release notes from commit subjects instead of GitHub auto-notes",
+  "published_at": "2026-07-12T18:38:56+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.07.12-3",
+  "name": "v2026.07.12-3",
+  "body": "**Full Changelog**: https://github.com/logseeker/logseeker/compare/v2026.07.12-2...v2026.07.12-3",
+  "published_at": "2026-07-12T18:37:08+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v2026.07.12-2",
+  "name": "v2026.07.12-2",
+  "body": "**Full Changelog**: https://github.com/logseeker/logseeker/commits/v2026.07.12-2",
+  "published_at": "2026-07-12T18:30:45+09:00",
+  "prerelease": false
+ },
+ {
+  "tag_name": "v1.0.0",
+  "name": "v1.0.0",
+  "body": "- Trigger releases on version-tag push instead of every push to main",
+  "published_at": "2026-07-12T19:22:57+09:00",
+  "prerelease": false
+ }
+]

@@ -1654,7 +1654,7 @@ def mappings(db: Session = Depends(get_db)):
 # ============================ お知らせ・更新履歴 ============================
 @router.get("/changelog")
 def changelog(db: Session = Depends(get_db)):
-    """GitHub Releasesをキャッシュ経由で返す（お知らせ一覧・ダッシュボードバナー共通）。"""
+    """同梱のリリースノート(releases.json)を返す（お知らせ一覧・ダッシュボードバナー共通）。"""
     from .changelog import get_releases
     return get_releases(db)
 

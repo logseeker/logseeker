@@ -60,11 +60,6 @@ class Settings:
     # 既定 "*"（開発用。フロントはVite proxyで同一オリジンのためCORS不要なので絞っても通常動作に影響しない）
     CORS_ORIGINS: list[str] = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()]
 
-    # お知らせ・更新履歴（GitHub Releasesを一次情報源とする）
-    CHANGELOG_REPO: str = os.getenv("CHANGELOG_REPO", "logseeker/logseeker")
-    # private repoにする場合やレート制限緩和が必要な場合のみ設定（未設定なら未認証で取得）
-    CHANGELOG_GITHUB_TOKEN: str = os.getenv("CHANGELOG_GITHUB_TOKEN", "").strip()
-    CHANGELOG_CACHE_HOURS: int = int(os.getenv("CHANGELOG_CACHE_HOURS", "1"))
 
     # Microsoft 365 監査ログコネクタ（m365_connector.py）の接続先。既定は一般の商用クラウド。
     # GCC等の別クラウドを使うとき（GCC: https://manage-gcc.office.com）だけ変更する。
