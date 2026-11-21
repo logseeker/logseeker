@@ -94,6 +94,7 @@ export interface DashboardBreakdown { field: string; label: string | null; value
 export interface DashboardOverview {
   total: number;
   period: { start: string; end: string };
+  cached_at?: string;           // 長い期間で保存済みの結果を返したとき、集計した時刻
   by_source: Count[];
   source_count: number;
   host_domain_count: number;

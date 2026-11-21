@@ -45,6 +45,9 @@ export function Dashboard({ onPickRep, onPickField, onPickClass, onPickSource, c
   const [fields, setFields] = useState<TaxonomyField[]>([]);
   const [picker, setPicker] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  // 表示中の集計がどの期間のものか（集計中は前の期間の数字が残るので、ラベルは結果と一緒に切り替える）
+  const [ovLabel, setOvLabel] = useState("");
 
   // イベント件数の推移（時間別＝その日の24バケット / 日別＝その日までの30日）
   const [interval, setInterval] = useState<"hour" | "day">("hour");
@@ -65,11 +68,14 @@ export function Dashboard({ onPickRep, onPickField, onPickClass, onPickSource, c
   useEffect(() => {
     // 期間を切り替えたら前回のエラーを消す。長い期間が打ち切られる(503)まで数十秒かかるので、
     // その間に別の期間へ切り替えたときは古い応答で上書きしない
+    // 集計中は期間・Classの切り替えを止める（連打で重い集計がサーバーで何本も同時に走らないように）
     let stale = false;
     setErr(null);
+    setLoading(true);
     api.dashboardOverview(query(), axes ?? [], extra)
-      .then((v) => { if (!stale) setOv(v); })
-      .catch((e) => { if (!stale) { setOv(null); setErr((e as Error).message); } });
+      .then((v) => { if (!stale) { setOv(v); setOvLabel(period.label); } })
+      .catch((e) => { if (!stale) { setOv(null); setErr((e as Error).message); } })
+      .finally(() => { if (!stale) setLoading(false); });
     return () => { stale = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, axes?.join(","), extra.join(",")]);
@@ -123,28 +129,38 @@ export function Dashboard({ onPickRep, onPickField, onPickClass, onPickSource, c
         <div className="btn-group">
           {PERIODS.map((p) => (
             <button key={p.key} className={`btn btn-sm ${p.key === periodKey ? "btn-primary" : "btn-outline-secondary"}`}
-              onClick={() => setPeriodKey(p.key)}>{p.label}</button>
+              disabled={loading} onClick={() => setPeriodKey(p.key)}>{p.label}</button>
           ))}
         </div>
         <div>
           <label className="form-label mb-0 small">Class</label>
           <select className="form-select form-select-sm" style={{ width: 180 }} value={classValue ?? ""}
-            onChange={(e) => setClassValue(e.target.value || null)}>
+            disabled={loading} onChange={(e) => setClassValue(e.target.value || null)}>
             <option value="">すべて</option>
             {(ov?.by_class ?? []).map((c) => (
               <option key={String(c.value)} value={String(c.value)}>{c.value} ({c.count})</option>
             ))}
           </select>
         </div>
-        <button className="btn btn-sm btn-outline-primary ms-auto" onClick={() => setPicker(true)}>
+        <div className="small text-secondary pb-1">
+          {loading ? (
+            <span><span className="spinner-border spinner-border-sm me-1" role="status" />
+              {period.label}を集計中…{period.hours > 24 && "（長い期間は30秒ほどかかることがあります）"}</span>
+          ) : ov?.cached_at ? (
+            <span title="長い期間の集計結果は10分間保存して再利用します">
+              {new Date(ov.cached_at).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Tokyo" })} 時点の集計
+            </span>
+          ) : null}
+        </div>
+        <button className="btn btn-sm btn-outline-primary ms-auto" disabled={loading} onClick={() => setPicker(true)}>
           ⚙ 集計する項目を選ぶ
         </button>
       </div>
 
       {!ov ? (err ? null : <div className="text-secondary text-center py-4">読み込み中...</div>) : (
-        <>
+        <div style={loading ? { opacity: 0.45, pointerEvents: "none" } : undefined}>
           <div className="row row-cols-1 row-cols-sm-3 row-cols-lg-5 row-cards mb-3">
-            <Stat label={`総イベント（${period.label}）`} value={ov.total} />
+            <Stat label={`総イベント（${ovLabel || period.label}）`} value={ov.total} />
             <Stat label="ログソース数" value={ov.source_count} />
             <Stat label="ホスト/ドメイン数" value={ov.host_domain_count} />
             <Stat label="取り込み失敗" value={ov.ingest_failed} />
@@ -278,7 +294,7 @@ export function Dashboard({ onPickRep, onPickField, onPickClass, onPickSource, c
               選択中で受信値が無い項目（カード非表示）: {ov.empty_axes.join(", ")}
             </div>
           )}
-        </>
+        </div>
       )}
 
       {picker && (

@@ -17,6 +17,8 @@
 """
 import csv
 import re
+import threading
+import time
 from functools import lru_cache
 import io
 import json
@@ -658,10 +660,54 @@ def export_events(request: Request, qy: EventQuery = Depends(event_query), db: S
 
 # ================================================================ Dashboard
 
+# 長い期間（7日・30日）の overview は本番で数秒〜数十秒かかる（期間内の全行の payload を展開するため）。
+# 同じ条件の結果をこのプロセス内に10分間保存し、2回目以降はすぐ返す。同じ条件の集計が同時に来たら、
+# 後から来たほうは先の集計が終わるのを待ってその結果を使う（連打で同じ重い集計が何本も走らないように）。
+# 24時間以下は速く、最新であってほしいので保存しない。
+OVERVIEW_CACHE_SECONDS = 600
+OVERVIEW_CACHE_MIN_HOURS = 48
+OVERVIEW_CACHE_MAX_ENTRIES = 50
+_ov_cache: dict = {}          # key -> (計算した時点の end, time.monotonic(), 結果)
+_ov_locks: dict = {}
+_ov_guard = threading.Lock()
+
+
+def _overview_cache_key(qy, fields: str, extra_fields: str, priority: list[str]):
+    # 画面は「今から7日間」のように end=現在時刻で送ってくるので、時刻そのものではなく期間の長さで束ねる
+    span_min = round((qy.end - qy.start).total_seconds() / 60)
+    return (span_min, qy.class_value, qy.source, tuple(qy.filters), tuple(qy.cols), qy.rep_value, qy.q,
+            bool(qy.attention), qy.threat, fields, extra_fields, tuple(priority))
+
+
 @router.get("/dashboard/overview")
 def overview(qy: EventQuery = Depends(event_query), db: Session = Depends(get_db),
              fields: str = Query("", description="内訳カードにするTaxonomy KEY(カンマ区切り)"),
              extra_fields: str = Query("", description="代表値グループに追加表示するTaxonomy KEY")):
+    """Dashboard。長い期間は10分間の保存つき（OVERVIEW_CACHE_SECONDS）。保存した結果を返したときは
+    `cached_at`（集計した時刻）を付ける。"""
+    if (qy.end - qy.start) < timedelta(hours=OVERVIEW_CACHE_MIN_HOURS):
+        return _overview_compute(qy, db, fields, extra_fields)
+    key = _overview_cache_key(qy, fields, extra_fields, _priority(db))
+    with _ov_guard:
+        lock = _ov_locks.setdefault(key, threading.Lock())
+    with lock:
+        hit = _ov_cache.get(key)
+        if hit:
+            end, at, result = hit
+            if time.monotonic() - at <= OVERVIEW_CACHE_SECONDS and timedelta(0) <= qy.end - end <= timedelta(seconds=OVERVIEW_CACHE_SECONDS):
+                return result
+        result = _overview_compute(qy, db, fields, extra_fields)
+        result = dict(result, cached_at=datetime.now(timezone.utc).isoformat())
+        with _ov_guard:
+            _ov_cache[key] = (qy.end, time.monotonic(), result)
+            while len(_ov_cache) > OVERVIEW_CACHE_MAX_ENTRIES:     # 古いものから捨てる
+                old = min(_ov_cache, key=lambda k: _ov_cache[k][1])
+                _ov_cache.pop(old, None)
+                _ov_locks.pop(old, None)
+        return result
+
+
+def _overview_compute(qy: EventQuery, db: Session, fields: str, extra_fields: str):
     """Dashboard。集計軸はすべてTaxonomy KEY。
 
     **どのKEYを集計するかは固定しない。** `fields` でLogSeeker利用者が選んだTaxonomy KEYを
