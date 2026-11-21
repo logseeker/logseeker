@@ -63,7 +63,14 @@ export function Dashboard({ onPickRep, onPickField, onPickClass, onPickSource, c
   }, [periodKey, classValue]);
 
   useEffect(() => {
-    api.dashboardOverview(query(), axes ?? [], extra).then(setOv).catch((e) => setErr((e as Error).message));
+    // 期間を切り替えたら前回のエラーを消す。長い期間が打ち切られる(503)まで数十秒かかるので、
+    // その間に別の期間へ切り替えたときは古い応答で上書きしない
+    let stale = false;
+    setErr(null);
+    api.dashboardOverview(query(), axes ?? [], extra)
+      .then((v) => { if (!stale) setOv(v); })
+      .catch((e) => { if (!stale) { setOv(null); setErr((e as Error).message); } });
+    return () => { stale = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, axes?.join(","), extra.join(",")]);
   useEffect(() => {
@@ -134,7 +141,7 @@ export function Dashboard({ onPickRep, onPickField, onPickClass, onPickSource, c
         </button>
       </div>
 
-      {!ov ? <div className="text-secondary text-center py-4">読み込み中...</div> : (
+      {!ov ? (err ? null : <div className="text-secondary text-center py-4">読み込み中...</div>) : (
         <>
           <div className="row row-cols-1 row-cols-sm-3 row-cols-lg-5 row-cards mb-3">
             <Stat label={`総イベント（${period.label}）`} value={ov.total} />

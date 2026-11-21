@@ -175,6 +175,16 @@ K_PRIORITY = "dashboard_domain_host_priority"
 EXPORT_MAX_ROWS = 20000
 TOP_N = 12                 # 内訳カードに出す上位件数
 DEFAULT_PERIOD_HOURS = 24
+# Dashboard の1クエリあたりの上限。overview は期間内の全行の payload を展開するので、行数に比例して重くなる。
+# 本番（events 1,000万行・実メモリ2GB）で overview 7日間が400秒を超えてもう終わらず、メモリが枯渇して
+# ログ受信まで止まった（2026-10-02）。上限を超えたら打ち切って503を返す（main.py の例外ハンドラ）。
+# 24時間ぶんはキャッシュが冷えた状態で20〜26秒の実績があるため、それより長く、Apache の ProxyTimeout(60秒) より短くする。
+DASHBOARD_STATEMENT_TIMEOUT_MS = 45000
+
+
+def _limit_dashboard_query(db: Session) -> None:
+    # SET LOCAL なので、このリクエストのトランザクションが終われば元に戻る
+    db.execute(text(f"SET LOCAL statement_timeout = {int(DASHBOARD_STATEMENT_TIMEOUT_MS)}"))
 
 
 
@@ -657,6 +667,7 @@ def overview(qy: EventQuery = Depends(event_query), db: Session = Depends(get_db
     **どのKEYを集計するかは固定しない。** `fields` でLogSeeker利用者が選んだTaxonomy KEYを
     集計軸にする（未指定ならそのClassの既定表示列を使う）。特定KEYを実装側で決め打ちすると、
     送信元がどのTaxonomy KEYを使っているかによって画面が空になるため。"""
+    _limit_dashboard_query(db)
     priority = _priority(db)
     extras = _keep_taxonomy([x for x in extra_fields.split(",") if x.strip()])
     axes = _keep_taxonomy([x for x in fields.split(",") if x.strip()]) \
@@ -773,6 +784,7 @@ def dashboard_timeline(db: Session = Depends(get_db),
         start = end - timedelta(days=30)
         step, n = timedelta(days=1), 30
 
+    _limit_dashboard_query(db)
     local = Event.received_at.op("AT TIME ZONE")(text(f"'{DISPLAY_TZ}'"))
     bucket = func.date_trunc(interval, local)
     stmt = (select(bucket.label("b"), func.count()).select_from(Event)

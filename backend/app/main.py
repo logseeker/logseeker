@@ -22,6 +22,17 @@ log = logging.getLogger("app")
 
 app = FastAPI(title="LogSeeker", version="0.1.0")
 
+
+@app.exception_handler(OperationalError)
+async def _statement_timeout(request: Request, exc: OperationalError):
+    """statement_timeout で打ち切った問い合わせ（SQLSTATE 57014）は、500ではなく理由つきの503にする。
+    画面（api.ts の handle）は JSON の error をそのまま表示する。それ以外のDBエラーは従来どおり500。"""
+    if getattr(exc.orig, "sqlstate", None) != "57014":
+        raise exc
+    log.warning("statement timeout: %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=503, content={
+        "error": "集計に時間がかかりすぎたため打ち切りました。期間を短くするか、絞り込んでからもう一度お試しください。"})
+
 # CORS。既定 "*"（開発用）。本番は CORS_ORIGINS でフロントのオリジンに絞る。
 app.add_middleware(
     CORSMiddleware,
