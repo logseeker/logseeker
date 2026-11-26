@@ -69,6 +69,33 @@ export function Events({ onEntity, onNav, onOpenCase, onOpenIncident, auth, init
   }, [loggedIn, applied.start, applied.end]);
   useEffect(loadClasses, [loadClasses]);
   const visibleClasses = classes.filter((c) => !c.hidden);
+
+  // ---- ログソース・ドメイン/ホストの候補（期間と、選択中のClassで絞る）----
+  // ログソースは軽いので期間・Classが変わるたびに取る。ドメイン/ホストは payload を見るので重く、
+  // 入力欄を押したときに初めて取る（画面を開くたびに重い集計を走らせない）。
+  type Opt = { value: string; count: number };
+  const [sourceOpts, setSourceOpts] = useState<Opt[]>([]);
+  const [repOpts, setRepOpts] = useState<Opt[] | null>(null);   // null = まだ取っていない
+  const [repLoading, setRepLoading] = useState(false);
+  const optQuery: EventQuery = { start: applied.start, end: applied.end, class_value: draft.class_value };
+  const optKey = `${applied.start ?? ""}|${applied.end ?? ""}|${draft.class_value ?? ""}`;
+  useEffect(() => {
+    let stale = false;
+    setRepOpts(null);
+    api.eventsFilterValues("source", optQuery)
+      .then((r) => { if (!stale) setSourceOpts(r.values); })
+      .catch(() => { if (!stale) setSourceOpts([]); });
+    return () => { stale = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [optKey]);
+  const loadRepOpts = () => {
+    if (repOpts !== null || repLoading) return;
+    setRepLoading(true);
+    api.eventsFilterValues("rep", optQuery)
+      .then((r) => setRepOpts(r.values))
+      .catch(() => setRepOpts([]))
+      .finally(() => setRepLoading(false));
+  };
   const pinnedClasses = visibleClasses.filter((c) => c.pinned);
 
   // ---- 列（Taxonomy KEYのみ。実データでは決まらない）----
@@ -191,6 +218,34 @@ export function Events({ onEntity, onNav, onOpenCase, onOpenIncident, auth, init
                   </select>
                   <button className="btn btn-sm btn-ghost-secondary" onClick={() => setPanel("classes")}>設定</button>
                 </div>
+              </div>
+              <div>
+                <label className="form-label mb-0 small">ログソース</label>
+                <select className="form-select form-select-sm" style={{ width: 190 }}
+                  value={draft.source ?? ""}
+                  onChange={(e) => setDraft({ ...draft, source: e.target.value || undefined })}>
+                  <option value="">すべて</option>
+                  {draft.source && !sourceOpts.some((o) => o.value === draft.source) && (
+                    <option value={draft.source}>{draft.source}</option>
+                  )}
+                  {sourceOpts.map((o) => (
+                    <option key={o.value} value={o.value}>{o.value} ({o.count.toLocaleString()})</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="form-label mb-0 small">ドメイン/ホスト</label>
+                <input className="form-control form-control-sm" style={{ width: 220 }} list="rep-options"
+                  placeholder={repLoading ? "候補を読み込み中…" : "候補から選ぶか、完全一致で入力"}
+                  title="ダッシュボードの「ドメイン/ホスト」と同じ判定（代表値の優先順位）で絞り込みます"
+                  value={draft.rep_value ?? ""} onFocus={loadRepOpts}
+                  onChange={(e) => setDraft({ ...draft, rep_value: e.target.value || undefined })}
+                  onKeyDown={(e) => e.key === "Enter" && setApplied(draft)} />
+                <datalist id="rep-options">
+                  {(repOpts ?? []).map((o) => (
+                    <option key={o.value} value={o.value}>{o.count.toLocaleString()} 件</option>
+                  ))}
+                </datalist>
               </div>
               <div>
                 <label className="form-label mb-0 small">開始</label>

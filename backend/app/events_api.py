@@ -517,6 +517,24 @@ def get_classes(qy: EventQuery = Depends(event_query), db: Session = Depends(get
     return {"classes": items}
 
 
+@router.get("/events/filter-values")
+def filter_values(kind: str = Query(..., pattern="^(source|rep)$"),
+                  qy: EventQuery = Depends(event_query), db: Session = Depends(get_db),
+                  limit: int = Query(300, ge=1, le=1000)):
+    """検索欄の「ログソース」「ドメイン/ホスト」の候補（件数の多い順）。期間とClassだけで絞る。
+
+    source = LogSeeker管理メタデータのログソース（Dashboardの「ログソース別」と同じ）。
+    rep    = 代表値（ドメイン/ホスト）。Events の rep_value 絞り込み・Dashboardの代表値と同じ式。"""
+    _limit_dashboard_query(db)
+    ev = _ev(qy)
+    expr = ev.c.source if kind == "source" else qy.rep_expr(ev)
+    stmt = select(expr, func.count()).select_from(ev).where(expr.isnot(None))
+    if qy.class_value:
+        stmt = stmt.where(_cls(ev) == qy.class_value)
+    stmt = stmt.group_by(text("1")).order_by(func.count().desc(), text("1")).limit(limit)
+    return {"kind": kind, "values": [{"value": v, "count": n} for v, n in db.execute(stmt).all()]}
+
+
 @router.put("/events/classes")
 def set_classes(body: EventsClassesUpdate, user: User | None = Depends(get_current_user),
                 db: Session = Depends(get_db)):

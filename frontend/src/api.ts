@@ -126,6 +126,10 @@ export const api = {
     del<{ ok: boolean }>(`/api/events/column-sets/${ev(name)}${class_value ? `?class_value=${ev(class_value)}` : ""}`),
 
   eventsClasses: (qy: EventQuery = {}) => get<EventsClassesResponse>(`/api/events/classes${eq(qy)}`),
+  /** 検索欄の候補。source=ログソース / rep=ドメイン/ホスト（代表値）。期間とClassだけで絞る */
+  eventsFilterValues: (kind: "source" | "rep", qy: EventQuery) =>
+    get<{ kind: string; values: { value: string; count: number }[] }>(`/api/events/filter-values${eq(
+      { start: qy.start, end: qy.end, class_value: qy.class_value }, { kind })}`),
   setEventsClasses: (b: { hidden: string[]; order: string[]; pinned: string[] }) =>
     put<{ ok: boolean }>(`/api/events/classes`, b),
 
